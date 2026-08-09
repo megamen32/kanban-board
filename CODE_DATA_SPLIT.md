@@ -13,7 +13,9 @@ The deployment override mounts the work-only path
 `tasks/`, `private/`, `.trash/`, or runtime databases into this code repository.
 
 The public code repository is `megamen32/kanban-board`; the private data
-repository is `megamen32/todo-kanban-data`. `scripts/update-code.sh` accepts
+repository is `megamen32/todo-kanban-data`. Both production Compose projects
+build the same `local/kanban-board:latest` image from this checkout; only their
+mounted task directories differ. `scripts/update-code.sh` accepts
 only a clean fast-forward from `origin/main`, so a code refresh cannot overwrite
 local changes or the mounted task data.
 

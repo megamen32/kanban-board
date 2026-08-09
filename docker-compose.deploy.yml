@@ -1,5 +1,9 @@
 services:
   kanban:
+    image: local/kanban-board:latest
+    build:
+      context: /home/roomhacker/excode
+      dockerfile: Dockerfile
     ports: !override
       - "43328:3000"
     volumes: !override
