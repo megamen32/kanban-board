@@ -23,8 +23,8 @@ function filteredHeaders(headers, port) {
   return {
     ...headers,
     host: `127.0.0.1:${port}`,
-    'x-forwarded-host': headers.host || '',
-    'x-forwarded-proto': 'http',
+    'x-forwarded-host': headers['x-forwarded-host'] || headers.host || '',
+    'x-forwarded-proto': headers['x-forwarded-proto'] || 'http',
   };
 }
 

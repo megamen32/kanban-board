@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { oauthClientId } from '@/lib/auth/config';
+import { publicOrigin } from '@/lib/auth/origin';
 
 function metadata(request: NextRequest) {
-  const issuer = new URL(request.url).origin;
+  const issuer = publicOrigin(request);
   return {
     issuer,
     authorization_endpoint: new URL('/oauth/authorize', issuer).toString(),
