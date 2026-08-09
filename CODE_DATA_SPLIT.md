@@ -11,6 +11,11 @@ Runtime task data stays in the private data repository:
 The deployment override mounts that path and sets `TASKS_DIR`. Do not copy
 `tasks/`, `private/`, `.trash/`, or runtime databases into this code repository.
 
+The public code repository is `megamen32/kanban-board`; the private data
+repository is `megamen32/todo-kanban-data`. `scripts/update-code.sh` accepts
+only a clean fast-forward from `origin/main`, so a code refresh cannot overwrite
+local changes or the mounted task data.
+
 ## Code update contract
 
 The checkout is intended to track the public code remote on `main`. A future

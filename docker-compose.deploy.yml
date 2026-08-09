@@ -1,7 +1,7 @@
 services:
   kanban:
     ports: !override
-      - "43327:3000"
+      - "43328:3000"
     volumes: !override
       - /home/roomhacker/todo-kanban/tasks:/app/data/tasks
     environment:
