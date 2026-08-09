@@ -10,6 +10,8 @@ export interface KanbanCard {
   updated: string;
   fileName: string;
   version: number;
+  project: string;
+  assignees: string[];
 }
 
 export type KanbanColumn = 'inbox' | 'todo' | 'in-progress' | 'review' | 'done' | 'archived';

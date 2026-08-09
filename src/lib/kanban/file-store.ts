@@ -28,7 +28,16 @@ function slugify(title: string, id: string): string {
 
 export function getAllCards(): KanbanCard[] {
   ensureDir();
-  const files = fs.readdirSync(TASKS_DIR).filter(f => f.endsWith('.md'));
+  const files: string[] = [];
+  const visit = (dir: string, relative = '') => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      const entryRelative = path.join(relative, entry.name);
+      if (entry.isDirectory()) visit(path.join(dir, entry.name), entryRelative);
+      else if (entry.isFile() && entry.name.endsWith('.md')) files.push(entryRelative);
+    }
+  };
+  visit(TASKS_DIR);
   const cards: KanbanCard[] = [];
 
   for (const file of files) {
@@ -48,11 +57,14 @@ export function readCardFile(filePath: string): KanbanCard | null {
 
   const raw = fs.readFileSync(filePath, 'utf-8');
   const { data, content } = matter(raw);
-  const fileName = path.basename(filePath);
+  const fileName = path.relative(TASKS_DIR, filePath);
+  const legacyName = path.basename(filePath).replace(/\.md$/, '');
+  const relativeDirectory = path.dirname(fileName);
+  const legacyProject = relativeDirectory !== '.' ? relativeDirectory.split(path.sep)[0] : legacyName;
 
   return {
-    id: data.id || fileName.replace('.md', ''),
-    title: data.title || fileName.replace(/-[^-]+\.md$/, '').replace(/-/g, ' '),
+    id: data.id || legacyName,
+    title: data.title || legacyName.replace(/-[^-]+$/, '').replace(/-/g, ' '),
     description: content.trim(),
     column: (data.column as KanbanColumn) || 'inbox',
     priority: (data.priority as Priority) || 'medium',
@@ -62,10 +74,13 @@ export function readCardFile(filePath: string): KanbanCard | null {
     updated: data.updated || new Date(fs.statSync(/*turbopackIgnore: true*/ filePath).mtime).toISOString(),
     fileName,
     version: typeof data.version === 'number' ? data.version : 1,
+    project: typeof data.project === 'string' && data.project.trim() ? data.project.trim() : legacyProject,
+    assignees: Array.isArray(data.assignees) ? data.assignees.map(String) : [],
   };
 }
 
-export function createCard(title: string, description: string = '', column: KanbanColumn = 'inbox', priority: Priority = 'medium', tags: string[] = []): KanbanCard {
+export function createCard(title: string, description: string = '', column: KanbanColumn = 'inbox', priority: Priority = 'medium', tags: string[] = [], project?: string, assignees: string[] = []): KanbanCard {
+  if (!project?.trim()) throw new Error('project is required for new cards');
   ensureDir();
   const id = uuidv4();
   const now = new Date().toISOString();
@@ -84,15 +99,18 @@ export function createCard(title: string, description: string = '', column: Kanb
     updated: now,
     fileName: slugify(title, id),
     version: 1,
+    project: project.trim(),
+    assignees,
   };
 
   writeCard(card);
   return card;
 }
 
-export function updateCard(id: string, updates: Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'version'>>, expectedVersion?: number): KanbanCard | { conflict: true; serverCard: KanbanCard } {
+export function updateCard(id: string, updates: Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'version' | 'project' | 'assignees'>>, expectedVersion?: number): KanbanCard | { conflict: true; serverCard: KanbanCard } {
   const card = findCardById(id);
   if (!card) throw new Error(`Card ${id} not found`);
+  if (updates.project !== undefined && !updates.project.trim()) throw new Error('project is required');
 
   // Conflict detection
   if (expectedVersion !== undefined && card.version !== expectedVersion) {
@@ -147,12 +165,8 @@ export function reorderColumn(column: KanbanColumn, cardIds: string[]): KanbanCa
 
 export function findCardById(id: string): KanbanCard | null {
   ensureDir();
-  const files = fs.readdirSync(TASKS_DIR).filter(f => f.endsWith('.md'));
-  for (const file of files) {
-    const card = readCardFile(path.join(TASKS_DIR, file));
-    if (card && card.id === id) return card;
-  }
-  return null;
+  const files = getAllCards();
+  return files.find(card => card.id === id) ?? null;
 }
 
 export function importExistingFile(filePath: string): KanbanCard | null {
@@ -199,6 +213,8 @@ function buildFrontmatter(card: KanbanCard): string {
     created: card.created,
     updated: card.updated,
     version: card.version,
+    project: card.project,
+    assignees: card.assignees,
   };
 
   const lines = Object.entries(data).map(([key, value]) => {
@@ -213,6 +229,7 @@ function buildFrontmatter(card: KanbanCard): string {
 function writeCard(card: KanbanCard): void {
   ensureDir();
   const filePath = path.join(TASKS_DIR, card.fileName);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const frontmatter = buildFrontmatter(card);
   fs.writeFileSync(filePath, frontmatter + (card.description ? '\n' + card.description : ''));
 }

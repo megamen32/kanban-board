@@ -13,9 +13,10 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { title, description, column, priority, tags } = body;
+    const { title, description, column, priority, tags, project, assignees } = body;
     if (!title) return NextResponse.json({ error: 'title is required' }, { status: 400 });
-    const card = createCard(title, description, column, priority, tags);
+    if (!project?.trim()) return NextResponse.json({ error: 'project is required' }, { status: 400 });
+    const card = createCard(title, description, column, priority, tags, project, assignees);
     return NextResponse.json({ card }, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });

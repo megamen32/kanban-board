@@ -14,7 +14,7 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultColumn: string;
-  onCreate: (title: string, description: string, column: string, priority: string, tags: string[]) => Promise<KanbanCard | undefined>;
+  onCreate: (title: string, description: string, column: string, priority: string, tags: string[], project: string, assignees: string[]) => Promise<KanbanCard | undefined>;
 }
 
 export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: Props) {
@@ -23,16 +23,20 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
   const [column, setColumn] = useState(defaultColumn);
   const [priority, setPriority] = useState<Priority>('medium');
   const [tags, setTags] = useState<string[]>([]);
+  const [project, setProject] = useState('');
+  const [assignees, setAssignees] = useState('');
   const [tagInput, setTagInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
-    if (!title.trim()) return;
+    if (!title.trim() || !project.trim()) return;
     setSubmitting(true);
-    await onCreate(title.trim(), description.trim(), column, priority, tags);
+    await onCreate(title.trim(), description.trim(), column, priority, tags, project.trim(), assignees.split(',').map(value => value.trim()).filter(Boolean));
     setTitle('');
     setDescription('');
     setTags([]);
+    setProject('');
+    setAssignees('');
     setTagInput('');
     setSubmitting(false);
     onOpenChange(false);
@@ -66,6 +70,17 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
             onChange={e => setDescription(e.target.value)}
             rows={4}
           />
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Проект *</label>
+              <Input placeholder="Hermes, Xcode..." value={project} onChange={e => setProject(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Ответственные</label>
+              <Input placeholder="через запятую" value={assignees} onChange={e => setAssignees(e.target.value)} />
+            </div>
+          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -126,7 +141,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
-          <Button onClick={handleSubmit} disabled={!title.trim() || submitting}>Создать</Button>
+          <Button onClick={handleSubmit} disabled={!title.trim() || !project.trim() || submitting}>Создать</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

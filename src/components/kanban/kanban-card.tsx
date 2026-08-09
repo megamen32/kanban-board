@@ -87,11 +87,13 @@ export function KanbanCard({ card, columnId }: Props) {
             <div className="font-medium text-sm leading-tight truncate mb-1">{card.title}</div>
             <CardPreview title={card.title} description={card.description} />
             <div className="flex items-center gap-1.5 flex-wrap">
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{card.project || 'Без проекта'}</Badge>
               <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${PRIORITY_COLORS[card.priority]}`}>
                 <Flag className="h-2.5 w-2.5 mr-0.5" />{card.priority}
               </Badge>
               {card.tags.slice(0, 3).map(t => <Badge key={t} variant="secondary" className="text-[10px] px-1.5 py-0">{t}</Badge>)}
               {card.tags.length > 3 && <span className="text-[10px] text-muted-foreground">+{card.tags.length - 3}</span>}
+              {card.assignees.length > 0 && <span className="text-[10px] text-muted-foreground">↗ {card.assignees.join(', ')}</span>}
             </div>
             <div className="text-[10px] text-muted-foreground/50 mt-1.5">v{card.version} · {timeAgo(card.updated)}</div>
           </div>

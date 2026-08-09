@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { findCardById, updateCard, deleteCard, moveCard } from '@/lib/kanban/file-store';
-import type { KanbanColumn } from '@/lib/kanban/types';
+import { findCardById, updateCard, deleteCard } from '@/lib/kanban/file-store';
+import type { KanbanCard } from '@/lib/kanban/types';
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -13,15 +13,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params;
   try {
     const body = await req.json();
-    const { title, description, column, priority, tags, order, expectedVersion } = body;
-
-    if (column !== undefined && !body.title && !body.description) {
-      const result = moveCard(id, column as KanbanColumn, order);
-      if ('conflict' in result) return NextResponse.json({ conflict: true, serverCard: result.serverCard }, { status: 409 });
-      return NextResponse.json({ card: result });
+    const { title, description, column, priority, tags, order, project, assignees, expectedVersion } = body;
+    if (project !== undefined && (typeof project !== 'string' || !project.trim())) {
+      return NextResponse.json({ error: 'project is required' }, { status: 400 });
     }
-
-    const result = updateCard(id, { title, description, column, priority, tags, order }, expectedVersion);
+    const updates: Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'project' | 'assignees'>> = {};
+    for (const [key, value] of Object.entries({ title, description, column, priority, tags, order, project, assignees })) {
+      if (value !== undefined) updates[key] = value;
+    }
+    const result = updateCard(id, updates, expectedVersion);
     if ('conflict' in result) return NextResponse.json({ conflict: true, serverCard: result.serverCard }, { status: 409 });
     return NextResponse.json({ card: result });
   } catch (e) {

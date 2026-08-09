@@ -24,6 +24,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
   const [column, setColumn] = useState(card.column);
   const [priority, setPriority] = useState<Priority>(card.priority);
   const [tags, setTags] = useState<string[]>(card.tags);
+  const [project, setProject] = useState(card.project);
+  const [assignees, setAssignees] = useState(card.assignees.join(', '));
   const [tagInput, setTagInput] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -33,6 +35,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
     setColumn(card.column);
     setPriority(card.priority);
     setTags(card.tags);
+    setProject(card.project);
+    setAssignees(card.assignees.join(', '));
   }, [card]);
 
   const handleSave = async () => {
@@ -44,6 +48,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
       column: column as KanbanColumn,
       priority,
       tags,
+      project: project.trim(),
+      assignees: assignees.split(',').map(value => value.trim()).filter(Boolean),
     }, card.version);
     setSaving(false);
     onOpenChange(false);
@@ -77,6 +83,17 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Описание (markdown)</label>
             <Textarea value={description} onChange={e => setDescription(e.target.value)} rows={6} />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Проект *</label>
+              <Input value={project} onChange={e => setProject(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Ответственные</label>
+              <Input value={assignees} onChange={e => setAssignees(e.target.value)} placeholder="через запятую" />
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -147,7 +164,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
           )}
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
-            <Button onClick={handleSave} disabled={!title.trim() || saving}>Сохранить</Button>
+            <Button onClick={handleSave} disabled={!title.trim() || !project.trim() || saving}>Сохранить</Button>
           </div>
         </DialogFooter>
       </DialogContent>

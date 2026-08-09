@@ -54,11 +54,11 @@ export function useKanban() {
     };
   }, [fetchCards]);
 
-  const createCard = useCallback(async (title: string, description: string = '', column: string = 'inbox', priority: string = 'medium', tags: string[] = []) => {
+  const createCard = useCallback(async (title: string, description: string = '', column: string = 'inbox', priority: string = 'medium', tags: string[] = [], project: string = '', assignees: string[] = []) => {
     const res = await fetch('/api/kanban/cards', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description, column, priority, tags }),
+      body: JSON.stringify({ title, description, column, priority, tags, project, assignees }),
     });
     const data = await res.json();
     if (data.card) setCards(prev => [...prev, data.card]);
