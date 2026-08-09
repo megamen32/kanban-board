@@ -13,6 +13,8 @@ with:
 ```dotenv
 KANBAN_AUTH_SECRET=<random value of at least 32 characters>
 KANBAN_SETUP_TOKEN=<one-time setup token>
+KANBAN_OAUTH_CLIENT_ID=chatgpt-kanban
+KANBAN_OAUTH_CLIENT_SECRET=<random client secret>
 KANBAN_OAUTH_REDIRECT_URIS=<exact ChatGPT OAuth callback URI>
 ```
 
@@ -37,6 +39,12 @@ The owner then logs in with password plus a six-digit TOTP code. The browser
 login creates an HttpOnly session cookie.
 
 ## ChatGPT plugin OAuth
+
+For a GPT Action, import the OpenAPI schema from
+`https://excode.bezrabotnyi.com/openapi.json`. The Action editor supplies the
+OAuth callback URL; copy that exact URL into `KANBAN_OAUTH_REDIRECT_URIS` (do
+not invent or generalize it). Configure OAuth with the client ID and secret
+from `KANBAN_OAUTH_CLIENT_ID` and `KANBAN_OAUTH_CLIENT_SECRET`.
 
 Configure the plugin with:
 

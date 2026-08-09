@@ -1,0 +1,144 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Kanban Board",
+    "version": "1.0.0",
+    "description": "Scoped Kanban API. The OAuth token determines the board: kanban:work is the default integration scope; kanban:personal is never implied."
+  },
+  "servers": [
+    { "url": "https://excode.bezrabotnyi.com" }
+  ],
+  "security": [
+    { "kanbanOAuth": ["kanban:work"] }
+  ],
+  "paths": {
+    "/api/kanban/cards": {
+      "get": {
+        "operationId": "listCards",
+        "summary": "List cards in the authorized board",
+        "responses": {
+          "200": { "description": "Cards", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardList" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "operationId": "createCard",
+        "summary": "Create a card in the authorized board",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardInput" } } } },
+        "responses": {
+          "201": { "description": "Created card", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardResponse" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/kanban/cards/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/CardId" }],
+      "get": {
+        "operationId": "getCard",
+        "summary": "Get one card from the authorized board",
+        "responses": {
+          "200": { "description": "Card", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardResponse" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "patch": {
+        "operationId": "updateCard",
+        "summary": "Update a card in the authorized board",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardUpdate" } } } },
+        "responses": {
+          "200": { "description": "Updated card", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardResponse" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "description": "Version conflict" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCard",
+        "summary": "Delete a card from the authorized board",
+        "responses": {
+          "200": { "description": "Deleted" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/kanban/reorder": {
+      "post": {
+        "operationId": "reorderCards",
+        "summary": "Reorder cards in one column",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReorderInput" } } } },
+        "responses": {
+          "200": { "description": "Reordered cards", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardList" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "kanbanOAuth": {
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://excode.bezrabotnyi.com/oauth/authorize",
+            "tokenUrl": "https://excode.bezrabotnyi.com/oauth/token",
+            "scopes": {
+              "kanban:work": "Read and manage work tasks (default)",
+              "kanban:personal": "Read and manage personal tasks (explicit choice only)"
+            }
+          }
+        }
+      }
+    },
+    "parameters": {
+      "CardId": { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+    },
+    "schemas": {
+      "Column": { "type": "string", "enum": ["inbox", "todo", "in-progress", "review", "done", "archived"] },
+      "Priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+      "Card": {
+        "type": "object",
+        "required": ["id", "title", "description", "column", "priority", "tags", "order", "created", "updated", "fileName", "version", "project", "assignees"],
+        "properties": {
+          "id": { "type": "string" }, "title": { "type": "string" }, "description": { "type": "string" },
+          "column": { "$ref": "#/components/schemas/Column" }, "priority": { "$ref": "#/components/schemas/Priority" },
+          "tags": { "type": "array", "items": { "type": "string" } }, "order": { "type": "number" },
+          "created": { "type": "string", "format": "date-time" }, "updated": { "type": "string", "format": "date-time" },
+          "fileName": { "type": "string" }, "version": { "type": "integer" }, "project": { "type": "string" },
+          "assignees": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "CardInput": {
+        "type": "object", "required": ["title", "project"],
+        "properties": {
+          "title": { "type": "string" }, "description": { "type": "string" }, "column": { "$ref": "#/components/schemas/Column" },
+          "priority": { "$ref": "#/components/schemas/Priority" }, "tags": { "type": "array", "items": { "type": "string" } },
+          "project": { "type": "string" }, "assignees": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "CardUpdate": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" }, "description": { "type": "string" }, "column": { "$ref": "#/components/schemas/Column" },
+          "priority": { "$ref": "#/components/schemas/Priority" }, "tags": { "type": "array", "items": { "type": "string" } },
+          "order": { "type": "number" }, "project": { "type": "string" }, "assignees": { "type": "array", "items": { "type": "string" } },
+          "expectedVersion": { "type": "integer" }
+        }
+      },
+      "ReorderInput": {
+        "type": "object", "required": ["column", "cardIds"],
+        "properties": { "column": { "$ref": "#/components/schemas/Column" }, "cardIds": { "type": "array", "items": { "type": "string" } } }
+      },
+      "CardResponse": { "type": "object", "required": ["card"], "properties": { "card": { "$ref": "#/components/schemas/Card" } } },
+      "CardList": { "type": "object", "required": ["cards"], "properties": { "cards": { "type": "array", "items": { "$ref": "#/components/schemas/Card" } } } }
+    },
+    "responses": {
+      "BadRequest": { "description": "Invalid request" },
+      "Unauthorized": { "description": "Authentication required" },
+      "NotFound": { "description": "Card not found" }
+    }
+  }
+}
