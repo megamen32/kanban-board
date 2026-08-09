@@ -1,0 +1,12 @@
+{
+  "name": "kanban-ws",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "bun --hot index.ts"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.0",
+    "gray-matter": "^4.0.3",
+    "socket.io": "^4.8.0"
+  }
+}

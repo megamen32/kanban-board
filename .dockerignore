@@ -1,0 +1,8 @@
+node_modules
+.next
+data/tasks/*.md
+git
+.git
+*.log
+.env*
+.DS_Store

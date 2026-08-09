@@ -1,0 +1,11 @@
+services:
+  kanban:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data/tasks:/app/data/tasks
+    environment:
+      - TASKS_DIR=/app/data/tasks
+      - NODE_ENV=production
+    restart: unless-stopped

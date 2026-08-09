@@ -1,0 +1,9 @@
+node_modules/
+.next/
+.tmpbin/
+data/
+.selected-port
+.env
+.env.local
+*.log
+coverage/
