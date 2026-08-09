@@ -1,13 +1,19 @@
 services:
   kanban:
     image: local/kanban-board:latest
+    env_file:
+      - /home/roomhacker/todo-kanban/work-auth/runtime.env
     build:
       context: /home/roomhacker/excode
       dockerfile: Dockerfile
     ports: !override
       - "43328:3000"
     volumes: !override
-      - /home/roomhacker/todo-kanban/work-tasks:/app/data/tasks
+      - /home/roomhacker/todo-kanban/work-tasks:/app/data/scopes/work
+      - /home/roomhacker/todo-kanban/personal-tasks:/app/data/scopes/personal
+      - /home/roomhacker/todo-kanban/work-auth:/app/data/auth
     environment:
-      TASKS_DIR: /app/data/tasks
+      KANBAN_SCOPE_ROOT: /app/data/scopes
+      KANBAN_AUTH_DIR: /app/data/auth
+      KANBAN_UI_SCOPE: work
       NODE_ENV: production

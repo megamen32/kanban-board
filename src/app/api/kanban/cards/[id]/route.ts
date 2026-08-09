@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { findCardById, updateCard, deleteCard } from '@/lib/kanban/file-store';
 import type { KanbanCard } from '@/lib/kanban/types';
+import { identityFromRequest } from '@/lib/auth/request';
+import { tasksDirForScope } from '@/lib/auth/data-scope';
 
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const identity = identityFromRequest(req);
+  if (!identity) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
+  const tasksDir = tasksDirForScope(identity.scope);
   const { id } = await params;
-  const card = findCardById(id);
+  const card = findCardById(id, tasksDir);
   if (!card) return NextResponse.json({ error: 'not found' }, { status: 404 });
   return NextResponse.json({ card });
 }
@@ -12,6 +17,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
+    const identity = identityFromRequest(req);
+    if (!identity) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
+    const tasksDir = tasksDirForScope(identity.scope);
     const body = await req.json();
     const { title, description, column, priority, tags, order, project, assignees, expectedVersion } = body;
     if (project !== undefined && (typeof project !== 'string' || !project.trim())) {
@@ -21,7 +29,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     for (const [key, value] of Object.entries({ title, description, column, priority, tags, order, project, assignees })) {
       if (value !== undefined) updates[key] = value;
     }
-    const result = updateCard(id, updates, expectedVersion);
+    const result = updateCard(id, updates, expectedVersion, tasksDir);
     if ('conflict' in result) return NextResponse.json({ conflict: true, serverCard: result.serverCard }, { status: 409 });
     return NextResponse.json({ card: result });
   } catch (e) {
@@ -29,10 +37,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
-    const ok = deleteCard(id);
+    const identity = identityFromRequest(req);
+    if (!identity) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
+    const ok = deleteCard(id, tasksDirForScope(identity.scope));
     if (!ok) return NextResponse.json({ error: 'not found' }, { status: 404 });
     return NextResponse.json({ success: true });
   } catch (e) {

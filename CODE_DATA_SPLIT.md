@@ -8,14 +8,17 @@ Runtime task data stays in the private data repository:
 /home/roomhacker/todo-kanban/tasks -> /app/data/tasks
 ```
 
-The deployment override mounts the work-only path
-`/home/roomhacker/todo-kanban/work-tasks` and sets `TASKS_DIR`. Do not copy
-`tasks/`, `private/`, `.trash/`, or runtime databases into this code repository.
+The work deployment mounts `/home/roomhacker/todo-kanban/work-tasks` as the
+`work` scope and `/home/roomhacker/todo-kanban/personal-tasks` as the explicit
+`personal` scope, plus a separate auth-state directory. The personal
+deployment mounts only its personal scope and its own auth state. Do not copy
+`tasks/`, `private/`, `.trash/`, auth state, or runtime databases into this code
+repository.
 
 The public code repository is `megamen32/kanban-board`; the private data
 repository is `megamen32/todo-kanban-data`. Both production Compose projects
-build the same `local/kanban-board:latest` image from this checkout; only their
-mounted task directories differ. `scripts/update-code.sh` accepts
+build the same `local/kanban-board:latest` image from this checkout; scope
+mounts and auth state remain separate. `scripts/update-code.sh` accepts
 only a clean fast-forward from `origin/main`, so a code refresh cannot overwrite
 local changes or the mounted task data.
 
