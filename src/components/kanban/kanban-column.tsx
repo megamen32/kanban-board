@@ -20,7 +20,7 @@ export function KanbanColumnComponent(props: Props) {
   const { setNodeRef, isOver } = useDroppable({ id });
 
   return (
-    <div className="min-w-[300px] w-[300px] shrink-0 flex flex-col">
+    <div className="min-w-[min(300px,calc(100vw-1.5rem))] w-[min(300px,calc(100vw-1.5rem))] shrink-0 flex flex-col">
       <div className="flex items-center gap-2 mb-3 px-1">
         <div className={`w-3 h-3 rounded-full ${color}`} />
         <h3 className="font-semibold text-sm text-foreground">{title}</h3>

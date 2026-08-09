@@ -46,7 +46,7 @@ export function KanbanBoard() {
   return (
     <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete }}>
       <DndProvider cards={cards} onMoveCard={moveCard} onReorder={reorderColumn}>
-        <div className="flex items-center gap-3 px-6 pt-4 pb-2 border-b">
+        <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-6 pt-3 sm:pt-4 pb-2 border-b">
           <FolderSync className="h-5 w-5 text-muted-foreground" />
           <h1 className="font-bold text-lg">TODO Kanban</h1>
           <span className="text-xs text-muted-foreground">{cards.length} задач</span>
@@ -54,7 +54,7 @@ export function KanbanBoard() {
             <RotateCw className="h-3.5 w-3.5 mr-1" /> Обновить
           </Button>
         </div>
-        <div className="flex gap-4 p-6 overflow-x-auto flex-1">
+        <div className="flex gap-3 sm:gap-4 p-3 sm:p-6 overflow-x-auto overscroll-x-contain flex-1">
           {DEFAULT_COLUMNS.map(col => (
             <KanbanColumnComponent
               key={col.id}

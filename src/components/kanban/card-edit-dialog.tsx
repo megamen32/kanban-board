@@ -63,7 +63,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[520px] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="top-auto bottom-0 translate-y-0 w-[calc(100%-1rem)] max-h-[92vh] overflow-y-auto rounded-t-2xl sm:top-[50%] sm:bottom-auto sm:translate-y-[-50%] sm:w-full sm:max-w-[520px] sm:rounded-lg">
         <DialogHeader>
           <DialogTitle>Редактировать задачу</DialogTitle>
         </DialogHeader>

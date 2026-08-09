@@ -1,6 +1,7 @@
 'use client';
 
-import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
+import { DndContext, DragOverlay, closestCorners, PointerSensor, TouchSensor, KeyboardSensor, useSensor, useSensors, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
+import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { useState, useCallback } from 'react';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import type { KanbanCard as CardType, KanbanColumn as ColType } from '@/lib/kanban/types';
@@ -16,7 +17,11 @@ interface Props {
 
 export function DndProvider({ children, cards, onMoveCard, onReorder }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
   const activeCard = activeId ? cards.find(c => c.id === activeId) ?? null : null;
 
   const handleDragStart = useCallback((e: DragStartEvent) => setActiveId(String(e.active.id)), []);

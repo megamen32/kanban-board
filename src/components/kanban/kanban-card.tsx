@@ -5,10 +5,12 @@ import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, Flag } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { CardEditDialog } from './card-edit-dialog';
+import { CardPreview } from './card-preview';
+import { shouldOpenCardAfterPointer, type PointerCoordinates } from './card-interaction';
 import { PRIORITY_COLORS } from '@/lib/kanban/types';
 import type { KanbanCard as CardType } from '@/lib/kanban/types';
 import * as React from 'react';
-import { useState, createContext, useContext } from 'react';
+import { useState, createContext, useContext, useRef } from 'react';
 
 // Context for update/delete without prop drilling
 interface CardActionsCtx {
@@ -25,6 +27,8 @@ interface Props {
 
 export function KanbanCard({ card, columnId }: Props) {
   const [editing, setEditing] = useState(false);
+  const pointerStart = useRef<{ x: number; y: number } | null>(null);
+  const suppressClick = useRef(false);
   const { onUpdate, onDelete } = useCardActions();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
@@ -44,14 +48,44 @@ export function KanbanCard({ card, columnId }: Props) {
 
   return (
     <>
-      <div ref={setNodeRef} style={style} className="group bg-background rounded-md border border-border p-3 cursor-pointer hover:shadow-sm transition-all hover:border-border" onClick={() => setEditing(true)}>
-        <div className="flex items-start gap-1">
-          <button className="mt-0.5 text-muted-foreground/30 hover:text-muted-foreground cursor-grab active:cursor-grabbing shrink-0" {...attributes} {...listeners} onClick={e => e.stopPropagation()}>
+      <div
+        ref={setNodeRef}
+        style={style}
+        {...attributes}
+        {...listeners}
+        className="group relative bg-background rounded-md border border-border p-3 cursor-grab active:cursor-grabbing hover:shadow-sm transition-all hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary touch-pan-y"
+        onPointerDownCapture={event => {
+          pointerStart.current = { x: event.clientX, y: event.clientY };
+          suppressClick.current = false;
+        }}
+        onPointerUpCapture={event => {
+          if (!pointerStart.current) return;
+          suppressClick.current = !shouldOpenCardAfterPointer({
+            startX: pointerStart.current.x,
+            startY: pointerStart.current.y,
+            endX: event.clientX,
+            endY: event.clientY,
+          } satisfies PointerCoordinates);
+          pointerStart.current = null;
+        }}
+        onClick={event => {
+          if (suppressClick.current) {
+            event.preventDefault();
+            event.stopPropagation();
+            suppressClick.current = false;
+            return;
+          }
+          setEditing(true);
+        }}
+        aria-label={`Открыть задачу: ${card.title}`}
+      >
+        <div className="flex items-start gap-2">
+          <span aria-hidden className="mt-0.5 text-muted-foreground/30 shrink-0">
             <GripVertical className="h-4 w-4" />
-          </button>
+          </span>
           <div className="flex-1 min-w-0">
             <div className="font-medium text-sm leading-tight truncate mb-1">{card.title}</div>
-            {card.description && <p className="text-xs text-muted-foreground line-clamp-2 mb-2">{card.description}</p>}
+            <CardPreview title={card.title} description={card.description} />
             <div className="flex items-center gap-1.5 flex-wrap">
               <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${PRIORITY_COLORS[card.priority]}`}>
                 <Flag className="h-2.5 w-2.5 mr-0.5" />{card.priority}
