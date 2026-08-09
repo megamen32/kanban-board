@@ -8,7 +8,8 @@ Runtime task data stays in the private data repository:
 /home/roomhacker/todo-kanban/tasks -> /app/data/tasks
 ```
 
-The deployment override mounts that path and sets `TASKS_DIR`. Do not copy
+The deployment override mounts the work-only path
+`/home/roomhacker/todo-kanban/work-tasks` and sets `TASKS_DIR`. Do not copy
 `tasks/`, `private/`, `.trash/`, or runtime databases into this code repository.
 
 The public code repository is `megamen32/kanban-board`; the private data

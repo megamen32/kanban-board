@@ -3,7 +3,7 @@ services:
     ports: !override
       - "43328:3000"
     volumes: !override
-      - /home/roomhacker/todo-kanban/tasks:/app/data/tasks
+      - /home/roomhacker/todo-kanban/work-tasks:/app/data/tasks
     environment:
       TASKS_DIR: /app/data/tasks
       NODE_ENV: production
