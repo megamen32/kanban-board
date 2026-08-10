@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterCards, getProjectOptions, isSmartNotesInbox } from './view-model';
+import { filterCards, getAssigneeOptions, getProjectOptions, isSmartNotesInbox } from './view-model';
 import type { KanbanCard } from '@/lib/kanban/types';
 
 const card = (overrides: Partial<KanbanCard> = {}): KanbanCard => ({
@@ -29,6 +29,23 @@ describe('kanban view model', () => {
     const cards = [card(), card({ id: '2', project: 'Xcode' })];
     expect(filterCards(cards, 'Hermes').map(item => item.id)).toEqual(['1']);
     expect(filterCards(cards, 'all')).toHaveLength(2);
+  });
+
+  it('returns unique sorted roles from card assignees', () => {
+    expect(getAssigneeOptions([
+      card({ assignees: ['Секретарь', 'Алексей'] }),
+      card({ id: '2', assignees: ['Алексей', 'Марина'] }),
+    ])).toEqual(['Алексей', 'Марина', 'Секретарь']);
+  });
+
+  it('filters cards by the selected role while keeping unfiltered behavior', () => {
+    const cards = [
+      card({ assignees: ['Секретарь'] }),
+      card({ id: '2', assignees: ['Марина'] }),
+      card({ id: '3', assignees: [] }),
+    ];
+    expect(filterCards(cards, 'all', 'Секретарь').map(item => item.id)).toEqual(['1']);
+    expect(filterCards(cards, 'all', 'all')).toHaveLength(3);
   });
 
   it('keeps SmartNotes Inbox separate as a view over column inbox', () => {

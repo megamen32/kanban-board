@@ -3,7 +3,7 @@
 - What slowed or confused L? The first background HTTP canary returned no report and port 3311 was already occupied; a tty-managed server on 38173 produced clear evidence.
 - Which instruction should change? Lead.md: prefer a tty-managed local canary with a free-port probe when background process output is ambiguous.
 - Which skill, MCP, or tool is missing? none.
-- What operation or error repeated? 3 baseline verification blockers: 2 `origin.test.ts` Vitest helper errors, missing ESLint 9 flat config, and unavailable `bunx`; each was recorded as a separate todo.
+- What operation or error repeated? The same 2 `origin.test.ts` Vitest helper errors recurred in the next full `bun test`; the existing tooling todo remains the guard.
 - State: Proposed
 
 ## 2026-08-10 — live board release gate (Short)
@@ -20,4 +20,12 @@
 - Which instruction should change? web-container-deploy/SKILL.md: support a local-server preflight when the target is the current host and require vhost-to-container mapping before apply.
 - Which skill, MCP, or tool is missing? A local-target variant of the existing preflight script that does not require SSH.
 - What operation or error repeated? 1 SSH preflight failure (`localhost:22 connection refused`) and 1 unprivileged `nginx -t` failure; guard with explicit local checks and a root-capability note.
+- State: Proposed
+
+## 2026-08-11 — role card filter (Short)
+
+- What slowed or confused L? The worker lane needed multiple bounded waits before returning its isolated `view-model.ts` change; integration itself stayed disjoint.
+- Which instruction should change? feature-implementation/SKILL.md: include a short expected completion window for a Worker-owned bounded slice.
+- Which skill, MCP, or tool is missing? none.
+- What operation or error repeated? none; focused view-model tests passed 5/5, build and TypeScript passed, and BrowserOS verified role select/filter/reset.
 - State: Proposed

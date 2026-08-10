@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useKanban } from '@/hooks/use-kanban';
 import { DndProvider } from './dnd-provider';
 import { KanbanColumnComponent } from './kanban-column';
@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import type { KanbanCard } from '@/lib/kanban/types';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { TaskListView } from './task-list-view';
-import { filterCards, getProjectOptions } from './view-model';
+import { filterCards, getAssigneeOptions, getProjectOptions } from './view-model';
 import { CardEditDialog } from './card-edit-dialog';
 
 export function KanbanBoard() {
@@ -23,6 +23,7 @@ export function KanbanBoard() {
   const [defaultColumn, setDefaultColumn] = useState('inbox');
   const [view, setView] = useState<'kanban' | 'list'>('kanban');
   const [project, setProject] = useState('all');
+  const [assignee, setAssignee] = useState('all');
   const [inboxOnly, setInboxOnly] = useState(false);
   const [selectedCard, setSelectedCard] = useState<KanbanCard | null>(null);
   const isMobile = useIsMobile();
@@ -32,7 +33,12 @@ export function KanbanBoard() {
   }, [isMobile]);
 
   const projectOptions = getProjectOptions(cards);
-  const visibleCards = filterCards(cards, project).filter(card => !inboxOnly || card.column === 'inbox');
+  const assigneeOptions = useMemo(() => getAssigneeOptions(cards), [cards]);
+  const visibleCards = filterCards(cards, project, assignee).filter(card => !inboxOnly || card.column === 'inbox');
+
+  useEffect(() => {
+    if (assignee !== 'all' && !assigneeOptions.includes(assignee)) setAssignee('all');
+  }, [assignee, assigneeOptions]);
 
   const getColumnCards = useCallback((columnId: string) =>
     visibleCards.filter(c => c.column === columnId).sort((a, b) => a.order - b.order),
@@ -74,6 +80,13 @@ export function KanbanBoard() {
             <option value="all">Все проекты</option>
             {projectOptions.map(option => <option key={option} value={option}>{option}</option>)}
           </select>
+          <label className="flex items-center gap-1 text-xs text-muted-foreground whitespace-nowrap">
+            <span>Моя роль:</span>
+            <select aria-label="Фильтр по роли" title="Показывать карточки по роли" value={assignee} onChange={event => setAssignee(event.target.value)} className="h-8 max-w-[150px] rounded-md border bg-background px-2 text-xs text-foreground">
+              <option value="all">Все карточки</option>
+              {assigneeOptions.map(option => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </label>
           <Button variant={inboxOnly ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2 text-xs" onClick={() => setInboxOnly(value => !value)}>Inbox</Button>
           <Button variant="ghost" size="sm" className="ml-auto" onClick={refresh}>
             <RotateCw className="h-3.5 w-3.5 mr-1" /> Обновить
