@@ -1,7 +1,9 @@
 # Kanban auth and ChatGPT OAuth
 
-The Kanban API is fail-closed: without a session cookie or scoped bearer token,
-`/api/kanban/*` returns `401`. The work deployment is the primary ChatGPT
+The human-facing work board is currently public: the UI and its default work
+scope can be used without a password. A session cookie or scoped bearer token
+still selects an authenticated identity, and the ChatGPT OAuth authorization
+screen remains login-gated. The work deployment is the primary ChatGPT
 integration and mounts both data roots as named scopes. The personal deployment
 mounts only the personal root.
 

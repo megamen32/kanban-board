@@ -11,6 +11,8 @@ export interface RequestIdentity {
   accessToken?: OAuthAccess;
 }
 
+const ANONYMOUS_USERNAME = 'anonymous';
+
 export function authStore(): AuthStore {
   return new AuthStore();
 }
@@ -25,4 +27,12 @@ export function identityFromRequest(request: NextRequest): RequestIdentity | nul
   if (!session) return null;
   const username = authStore().validateSession(session);
   return username ? { username, scope: uiScope() } : null;
+}
+
+/**
+ * Resolve the identity used by the human-facing board. OAuth endpoints must
+ * continue using identityFromRequest so ChatGPT authorization remains gated.
+ */
+export function boardIdentityFromRequest(request: NextRequest): RequestIdentity {
+  return identityFromRequest(request) ?? { username: ANONYMOUS_USERNAME, scope: uiScope() };
 }

@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllCards, createCard } from '@/lib/kanban/file-store';
-import { identityFromRequest } from '@/lib/auth/request';
+import { boardIdentityFromRequest } from '@/lib/auth/request';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 
 export async function GET(req: NextRequest) {
   try {
-    const identity = identityFromRequest(req);
-    if (!identity) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
+    const identity = boardIdentityFromRequest(req);
     const cards = getAllCards(tasksDirForScope(identity.scope));
     return NextResponse.json({ cards });
   } catch (e) {
@@ -16,8 +15,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const identity = identityFromRequest(req);
-    if (!identity) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
+    const identity = boardIdentityFromRequest(req);
     const body = await req.json();
     const { title, description, column, priority, tags, project, assignees } = body;
     if (!title) return NextResponse.json({ error: 'title is required' }, { status: 400 });

@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { findCardById, updateCard, deleteCard } from '@/lib/kanban/file-store';
 import type { KanbanCard } from '@/lib/kanban/types';
-import { identityFromRequest } from '@/lib/auth/request';
+import { boardIdentityFromRequest } from '@/lib/auth/request';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const identity = identityFromRequest(req);
-  if (!identity) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
+  const identity = boardIdentityFromRequest(req);
   const tasksDir = tasksDirForScope(identity.scope);
   const { id } = await params;
   const card = findCardById(id, tasksDir);
@@ -17,8 +16,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
-    const identity = identityFromRequest(req);
-    if (!identity) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
+    const identity = boardIdentityFromRequest(req);
     const tasksDir = tasksDirForScope(identity.scope);
     const body = await req.json();
     const { title, description, column, priority, tags, order, project, assignees, expectedVersion } = body;
@@ -40,8 +38,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
-    const identity = identityFromRequest(req);
-    if (!identity) return NextResponse.json({ error: 'authentication required' }, { status: 401 });
+    const identity = boardIdentityFromRequest(req);
     const ok = deleteCard(id, tasksDirForScope(identity.scope));
     if (!ok) return NextResponse.json({ error: 'not found' }, { status: 404 });
     return NextResponse.json({ success: true });
