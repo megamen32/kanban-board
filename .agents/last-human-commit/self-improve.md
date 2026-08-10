@@ -37,3 +37,11 @@
 - Which skill, MCP, or tool is missing? none.
 - What operation or error repeated? none; Nginx-to-container mapping and local branch status were each checked once.
 - State: Proposed
+
+## 2026-08-11 — role filter post-redeploy publish (Short)
+
+- What slowed or confused L? none; the requested redeploy-before-upload order was explicit and the live canary completed before push.
+- Which instruction should change? none; the new user preference is recorded in memory.
+- Which skill, MCP, or tool is missing? none.
+- What operation or error repeated? none; one targeted Compose rebuild, one live BrowserOS filter canary, then publication.
+- State: fixed now
