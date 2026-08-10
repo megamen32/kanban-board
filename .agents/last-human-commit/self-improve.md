@@ -29,3 +29,11 @@
 - Which skill, MCP, or tool is missing? none.
 - What operation or error repeated? none; focused view-model tests passed 5/5, build and TypeScript passed, and BrowserOS verified role select/filter/reset.
 - State: Proposed
+
+## 2026-08-11 — role filter live diagnosis (Direct)
+
+- What slowed or confused L? Live HTTP stayed healthy (`200`) while serving the pre-role image, so health alone could not prove the feature was deployed; the local commit/source marker comparison resolved it.
+- Which instruction should change? bezrabotnyi-nginx-routing/SKILL.md: add a release-marker comparison between the running image and the intended local commit for UI rollout diagnosis.
+- Which skill, MCP, or tool is missing? none.
+- What operation or error repeated? none; Nginx-to-container mapping and local branch status were each checked once.
+- State: Proposed
