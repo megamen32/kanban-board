@@ -45,3 +45,11 @@
 - Which skill, MCP, or tool is missing? none.
 - What operation or error repeated? none; one targeted Compose rebuild, one live BrowserOS filter canary, then publication.
 - State: fixed now
+
+## 2026-08-11 — MCP board check and README delivery (Short)
+
+- What slowed or confused L? Codex listed one configured `kanban-mini-mcp`, but no callable tool namespace; direct initialize/tools/list/call all returned HTTP 500 and excode `/mcp` returned 404.
+- Which instruction should change? openai-docs/SKILL.md: add a concise local MCP verification recipe that reports configured names, redacted transport status, and one read-only tools/list canary.
+- Which skill, MCP, or tool is missing? A Codex MCP diagnostic/handshake tool for configured remote servers, with mandatory secret redaction and board-scope discovery.
+- What operation or error repeated? 3 MCP requests returned HTTP 500; the existing `bun test` Vitest-helper incompatibility also recurred, while `bun x vitest run` passed 28/28.
+- State: Proposed
