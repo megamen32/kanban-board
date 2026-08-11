@@ -17,6 +17,7 @@ interface CardPayload {
   order: number;
   created: string;
   updated: string;
+  dueAt?: string;
   fileName: string;
   version: number;
 }
@@ -45,6 +46,7 @@ function parseCard(filePath: string): CardPayload | null {
       order: data.order ?? 0,
       created: data.created || new Date(fs.statSync(filePath).birthtime).toISOString(),
       updated: data.updated || new Date(fs.statSync(filePath).mtime).toISOString(),
+      dueAt: typeof data.dueAt === 'string' ? data.dueAt : undefined,
       fileName,
       version: data.version || 1,
     };

@@ -16,4 +16,6 @@ services:
       KANBAN_SCOPE_ROOT: /app/data/scopes
       KANBAN_AUTH_DIR: /app/data/auth
       KANBAN_UI_SCOPE: work
+      PUSH_SUBSCRIPTIONS_FILE: /app/data/auth/push-subscriptions.json
+      PUSH_REMINDER_INTERVAL_MS: 60000
       NODE_ENV: production

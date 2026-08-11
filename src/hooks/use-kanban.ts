@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { KanbanCard, SyncEvent, ConflictInfo } from '@/lib/kanban/types';
+import type { KanbanCard, KanbanCardUpdates, SyncEvent, ConflictInfo } from '@/lib/kanban/types';
 
 const WS_URL = '/?XTransformPort=3003';
 
@@ -54,18 +54,18 @@ export function useKanban() {
     };
   }, [fetchCards]);
 
-  const createCard = useCallback(async (title: string, description: string = '', column: string = 'inbox', priority: string = 'medium', tags: string[] = [], project: string = '', assignees: string[] = []) => {
+  const createCard = useCallback(async (title: string, description: string = '', column: string = 'inbox', priority: string = 'medium', tags: string[] = [], project: string = '', assignees: string[] = [], dueAt?: string) => {
     const res = await fetch('/api/kanban/cards', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description, column, priority, tags, project, assignees }),
+      body: JSON.stringify({ title, description, column, priority, tags, project, assignees, dueAt }),
     });
     const data = await res.json();
     if (data.card) setCards(prev => [...prev, data.card]);
     return data.card;
   }, []);
 
-  const updateCard = useCallback(async (id: string, updates: Partial<KanbanCard>, expectedVersion?: number) => {
+  const updateCard = useCallback(async (id: string, updates: KanbanCardUpdates, expectedVersion?: number) => {
     const res = await fetch(`/api/kanban/cards/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

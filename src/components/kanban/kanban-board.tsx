@@ -11,11 +11,12 @@ import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import { Plus, FolderSync, RotateCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import type { KanbanCard } from '@/lib/kanban/types';
+import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { TaskListView } from './task-list-view';
 import { filterCards, getAssigneeOptions, getProjectOptions } from './view-model';
 import { CardEditDialog } from './card-edit-dialog';
+import { NotificationSettings } from '@/components/notifications/notification-settings';
 
 export function KanbanBoard() {
   const { cards, loading, conflict, createCard, updateCard, deleteCard, moveCard, reorderColumn, resolveConflict, refresh } = useKanban();
@@ -46,7 +47,7 @@ export function KanbanBoard() {
   );
 
   const handleAdd = (column: string) => { setDefaultColumn(column); setShowAdd(true); };
-  const handleUpdate = useCallback(async (id: string, updates: Partial<KanbanCard>, version?: number) => {
+  const handleUpdate = useCallback(async (id: string, updates: KanbanCardUpdates, version?: number) => {
     return updateCard(id, updates, version);
   }, [updateCard]);
 
@@ -68,29 +69,34 @@ export function KanbanBoard() {
   return (
     <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete }}>
       <DndProvider cards={visibleCards} onMoveCard={moveCard} onReorder={reorderColumn}>
-        <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-6 pt-3 sm:pt-4 pb-2 border-b">
-          <FolderSync className="h-5 w-5 text-muted-foreground" />
-          <h1 className="font-bold text-lg">TODO Kanban</h1>
-          <span className="text-xs text-muted-foreground">{visibleCards.length} задач</span>
-          <div className="ml-2 flex items-center gap-1 rounded-md border p-0.5">
-            <Button variant={view === 'kanban' ? 'secondary' : 'ghost'} size="sm" className="h-7 px-2 text-xs" onClick={() => setView('kanban')}>Kanban</Button>
-            <Button variant={view === 'list' ? 'secondary' : 'ghost'} size="sm" className="h-7 px-2 text-xs" onClick={() => setView('list')}>Список</Button>
+        <div className="px-3 sm:px-6 pt-3 sm:pt-4 pb-2 border-b">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <FolderSync className="h-5 w-5 shrink-0 text-muted-foreground" />
+            <h1 className="font-bold text-lg">My Kanban</h1>
+            <span className="text-xs text-muted-foreground">{visibleCards.length} задач</span>
+            <div className="ml-auto flex shrink-0 items-center gap-1 rounded-md border p-0.5">
+              <Button variant={view === 'kanban' ? 'secondary' : 'ghost'} size="sm" className="h-7 px-2 text-xs" onClick={() => setView('kanban')}>Kanban</Button>
+              <Button variant={view === 'list' ? 'secondary' : 'ghost'} size="sm" className="h-7 px-2 text-xs" onClick={() => setView('list')}>Список</Button>
+            </div>
           </div>
-          <select aria-label="Фильтр проекта" value={project} onChange={event => setProject(event.target.value)} className="h-8 max-w-[150px] rounded-md border bg-background px-2 text-xs">
-            <option value="all">Все проекты</option>
-            {projectOptions.map(option => <option key={option} value={option}>{option}</option>)}
-          </select>
-          <label className="flex items-center gap-1 text-xs text-muted-foreground whitespace-nowrap">
-            <span>Моя роль:</span>
-            <select aria-label="Фильтр по роли" title="Показывать карточки по роли" value={assignee} onChange={event => setAssignee(event.target.value)} className="h-8 max-w-[150px] rounded-md border bg-background px-2 text-xs text-foreground">
-              <option value="all">Все карточки</option>
-              {assigneeOptions.map(option => <option key={option} value={option}>{option}</option>)}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <select aria-label="Фильтр проекта" value={project} onChange={event => setProject(event.target.value)} className="h-8 min-w-0 max-w-[150px] rounded-md border bg-background px-2 text-xs">
+              <option value="all">Все проекты</option>
+              {projectOptions.map(option => <option key={option} value={option}>{option}</option>)}
             </select>
-          </label>
-          <Button variant={inboxOnly ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2 text-xs" onClick={() => setInboxOnly(value => !value)}>Inbox</Button>
-          <Button variant="ghost" size="sm" className="ml-auto" onClick={refresh}>
-            <RotateCw className="h-3.5 w-3.5 mr-1" /> Обновить
-          </Button>
+            <label className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+              <span className="whitespace-nowrap">Моя роль:</span>
+              <select aria-label="Фильтр по роли" title="Показывать карточки по роли" value={assignee} onChange={event => setAssignee(event.target.value)} className="h-8 min-w-0 max-w-[150px] rounded-md border bg-background px-2 text-xs text-foreground">
+                <option value="all">Все карточки</option>
+                {assigneeOptions.map(option => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+            <Button variant={inboxOnly ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2 text-xs" onClick={() => setInboxOnly(value => !value)}>Inbox</Button>
+            <NotificationSettings />
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs sm:ml-auto" onClick={refresh}>
+              <RotateCw className="h-3.5 w-3.5 sm:mr-1" /> <span className="hidden sm:inline">Обновить</span>
+            </Button>
+          </div>
         </div>
         {view === 'list' ? (
           <TaskListView cards={visibleCards} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />

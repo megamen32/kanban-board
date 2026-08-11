@@ -53,6 +53,23 @@
 - Which skill, MCP, or tool is missing? A Codex MCP diagnostic/handshake tool for configured remote servers, with mandatory secret redaction and board-scope discovery.
 - What operation or error repeated? 3 MCP requests returned HTTP 500; the existing `bun test` Vitest-helper incompatibility also recurred, while `bun x vitest run` passed 28/28.
 - State: Proposed
+
+## 2026-08-11 — PWA notifications checkpoint (Full)
+
+- What slowed or confused L? BrowserOS opt-in stayed at `Notification.permission=default` with no registration after click; Touchpoint transport was closed, and repeated continuations re-confirmed that production auth envs have no VAPID keys.
+- Which instruction should change? Lead.md: make the external secret gate explicit in the acceptance contract before a live push claim.
+- Which skill, MCP, or tool is missing? A safe VAPID provisioning flow and a real browser permission-surface canary that does not replace user consent with CDP.
+- What operation or error repeated? 1 initial build type-check failure was fixed; local notification lifecycle passed 8/8 plus 36/36 full tests and build; Reviewer wait timed out 3 times and live PWA routes remained 404 without deploy.
+- State: needs human decision
+
+## 2026-08-11 — system-synced dark theme (Direct)
+
+- What slowed or confused L? BrowserOS CDP media emulation changed `matchMedia` but did not immediately deliver the system-change listener; reload was needed for deterministic light/dark proof.
+- Which instruction should change? real-use-testing/SKILL.md: distinguish initial system-theme proof from live media-change proof when the browser harness cannot emit a native preference-change event.
+- Which skill, MCP, or tool is missing? A browser preference control that changes `prefers-color-scheme` and dispatches the real `MediaQueryList` change event.
+- What operation or error repeated? 2 stale-class checks after CDP media changes; guard with a fresh reload for initial-mode evidence and mark live-change evidence separately.
+- State: Proposed
+
 ## 2026-08-11 — versioned Kanban MCP transport (Short)
 
 - What slowed or confused L? The public 500 was nginx's zero-length rewrite, while the upstream was only a REST-like HTTP facade; source and production route lived outside the excode git worktree.
@@ -76,3 +93,11 @@
 - Which skill, MCP, or tool is missing? A topology-aware canary that compares each host's running image digest with the intended source image and shared-auth snippet.
 - What operation or error repeated? 1 wrong-host/image assumption; guard by checking nginx upstream, compose project, and image digest before launching a Tester.
 - State: needs human decision
+
+## 2026-08-11 — Android PWA acceptance fallback (Full)
+
+- What slowed or confused L? The connected S21 was on AOD (not PIN-locked); after wake, Chrome correctly blocked notification permission while Samsung Edge Panels/RustDesk supplied a system overlay.
+- Which instruction should change? real-use-testing/SKILL.md: distinguish Android layout acceptance from native Chrome Push acceptance and include a reversible-overlay procedure requiring explicit user approval and restoration proof.
+- Which skill, MCP, or tool is missing? A maintained, signed Chrome-capable Android test image with no user account or third-party APK dependency.
+- What operation or error repeated? 4 real-surface findings (S21 AOD twice, WebView Shell once, Edge overlay once); with approval, one temporary overlay suppression enabled the public Chrome notification and automatic-card canaries, then both settings were restored.
+- State: fixed now

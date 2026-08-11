@@ -2,19 +2,19 @@
 
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Flag } from 'lucide-react';
+import { CalendarClock, GripVertical, Flag } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { CardEditDialog } from './card-edit-dialog';
 import { CardPreview } from './card-preview';
 import { shouldOpenCardAfterPointer, type PointerCoordinates } from './card-interaction';
 import { PRIORITY_COLORS } from '@/lib/kanban/types';
-import type { KanbanCard as CardType } from '@/lib/kanban/types';
+import type { KanbanCard as CardType, KanbanCardUpdates } from '@/lib/kanban/types';
 import * as React from 'react';
 import { useState, createContext, useContext, useRef } from 'react';
 
 // Context for update/delete without prop drilling
 interface CardActionsCtx {
-  onUpdate: (id: string, updates: Partial<CardType>, version?: number) => Promise<CardType | null>;
+  onUpdate: (id: string, updates: KanbanCardUpdates, version?: number) => Promise<CardType | null>;
   onDelete: (id: string) => void;
 }
 export const CardActionsContext: React.Context<CardActionsCtx> = createContext<CardActionsCtx>(null!);
@@ -45,6 +45,7 @@ export function KanbanCard({ card, columnId }: Props) {
     if (h < 24) return `${h}ч`;
     return `${Math.floor(h / 24)}д`;
   };
+  const dueLabel = card.dueAt ? new Date(card.dueAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : null;
 
   return (
     <>
@@ -94,6 +95,7 @@ export function KanbanCard({ card, columnId }: Props) {
               {card.tags.slice(0, 3).map(t => <Badge key={t} variant="secondary" className="text-[10px] px-1.5 py-0">{t}</Badge>)}
               {card.tags.length > 3 && <span className="text-[10px] text-muted-foreground">+{card.tags.length - 3}</span>}
               {card.assignees.length > 0 && <span className="text-[10px] text-muted-foreground">↗ {card.assignees.join(', ')}</span>}
+              {dueLabel && <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground"><CalendarClock className="h-2.5 w-2.5" />{dueLabel}</span>}
             </div>
             <div className="text-[10px] text-muted-foreground/50 mt-1.5">v{card.version} · {timeAgo(card.updated)}</div>
           </div>

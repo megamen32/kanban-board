@@ -8,11 +8,16 @@ export interface KanbanCard {
   order: number;
   created: string;
   updated: string;
+  dueAt?: string;
   fileName: string;
   version: number;
   project: string;
   assignees: string[];
 }
+
+export type KanbanCardUpdates = Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'project' | 'assignees'>> & {
+  dueAt?: string | null;
+};
 
 export type KanbanColumn = 'inbox' | 'todo' | 'in-progress' | 'review' | 'done' | 'archived';
 export type Priority = 'low' | 'medium' | 'high' | 'critical';

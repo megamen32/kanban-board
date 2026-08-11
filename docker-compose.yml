@@ -7,5 +7,6 @@ services:
       - ./data/tasks:/app/data/tasks
     environment:
       - TASKS_DIR=/app/data/tasks
+      - PUSH_SUBSCRIPTIONS_FILE=/app/data/tasks/.kanban/push-subscriptions.json
       - NODE_ENV=production
     restart: unless-stopped

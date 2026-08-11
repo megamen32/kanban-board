@@ -72,6 +72,7 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     order: typeof data.order === 'number' ? data.order : 0,
     created: data.created || new Date(fs.statSync(/*turbopackIgnore: true*/ filePath).birthtime).toISOString(),
     updated: data.updated || new Date(fs.statSync(/*turbopackIgnore: true*/ filePath).mtime).toISOString(),
+    dueAt: typeof data.dueAt === 'string' ? data.dueAt : undefined,
     fileName,
     version: typeof data.version === 'number' ? data.version : 1,
     project: typeof data.project === 'string' && data.project.trim() ? data.project.trim() : legacyProject,
@@ -79,7 +80,7 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
   };
 }
 
-export function createCard(title: string, description: string = '', column: KanbanColumn = 'inbox', priority: Priority = 'medium', tags: string[] = [], project?: string, assignees: string[] = [], tasksDir = TASKS_DIR): KanbanCard {
+export function createCard(title: string, description: string = '', column: KanbanColumn = 'inbox', priority: Priority = 'medium', tags: string[] = [], project?: string, assignees: string[] = [], tasksDir = TASKS_DIR, dueAt?: string): KanbanCard {
   if (!project?.trim()) throw new Error('project is required for new cards');
   ensureDir(tasksDir);
   const id = uuidv4();
@@ -97,6 +98,7 @@ export function createCard(title: string, description: string = '', column: Kanb
     order: maxOrder,
     created: now,
     updated: now,
+    ...(dueAt ? { dueAt } : {}),
     fileName: slugify(title, id),
     version: 1,
     project: project.trim(),
@@ -107,7 +109,9 @@ export function createCard(title: string, description: string = '', column: Kanb
   return card;
 }
 
-export function updateCard(id: string, updates: Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'version' | 'project' | 'assignees'>>, expectedVersion?: number, tasksDir = TASKS_DIR): KanbanCard | { conflict: true; serverCard: KanbanCard } {
+export type KanbanCardUpdates = Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'version' | 'project' | 'assignees'>> & { dueAt?: string | null };
+
+export function updateCard(id: string, updates: KanbanCardUpdates, expectedVersion?: number, tasksDir = TASKS_DIR): KanbanCard | { conflict: true; serverCard: KanbanCard } {
   const card = findCardById(id, tasksDir);
   if (!card) throw new Error(`Card ${id} not found`);
   if (updates.project !== undefined && !updates.project.trim()) throw new Error('project is required');
@@ -117,12 +121,15 @@ export function updateCard(id: string, updates: Partial<Pick<KanbanCard, 'title'
     return { conflict: true, serverCard: card };
   }
 
+  const { dueAt: dueAtUpdate, ...otherUpdates } = updates;
   const updated: KanbanCard = {
     ...card,
-    ...updates,
+    ...otherUpdates,
+    ...(dueAtUpdate !== undefined && dueAtUpdate !== null ? { dueAt: dueAtUpdate } : {}),
     updated: new Date().toISOString(),
     version: card.version + 1,
   };
+  if (dueAtUpdate === null) delete updated.dueAt;
 
   // If title changed, rename file
   if (updates.title && updates.title !== card.title) {
@@ -216,6 +223,7 @@ function buildFrontmatter(card: KanbanCard): string {
     project: card.project,
     assignees: card.assignees,
   };
+  if (card.dueAt) data.dueAt = card.dueAt;
 
   const lines = Object.entries(data).map(([key, value]) => {
     if (Array.isArray(value)) return `${key}: [${value.map(v => yamlString(String(v))).join(', ')}]`;

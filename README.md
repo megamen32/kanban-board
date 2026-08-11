@@ -17,9 +17,22 @@ screen, and backed by Markdown files you can inspect or edit directly.
 
 ![My Kanban on desktop](docs/screenshots/kanban-board.png)
 
-The product direction is mobile-first and agent-first. A PWA that can send its
-own notifications is the next milestone; it is intentionally not claimed as
-implemented yet.
+The product direction is mobile-first and agent-first. With Web Push configured,
+the PWA can send subscribed devices automatic card and deadline notifications.
+
+## Web Push configuration
+
+The notification opt-in is explicit. A running deployment needs these
+server-only environment variables; never commit the private key:
+
+```dotenv
+VAPID_PUBLIC_KEY=<public key>
+VAPID_PRIVATE_KEY=<private key>
+VAPID_SUBJECT=mailto:owner@example.com
+```
+
+Subscriptions are stored outside card Markdown in the configured
+`PUSH_SUBSCRIPTIONS_FILE` path.
 
 ## Quick start
 
@@ -46,6 +59,7 @@ updated: '2026-08-06T20:00:00Z'
 version: 1
 project: 'My board'
 assignees: ['Me']
+dueAt: '2026-08-07T12:00:00Z'
 ---
 
 Описание в markdown.

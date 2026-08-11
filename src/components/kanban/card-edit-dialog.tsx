@@ -8,14 +8,15 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { X, Plus, Trash2 } from 'lucide-react';
 import { DEFAULT_COLUMNS, PRIORITY_COLORS } from '@/lib/kanban/types';
-import type { KanbanCard, Priority, KanbanColumn } from '@/lib/kanban/types';
+import type { KanbanCard, KanbanCardUpdates, Priority, KanbanColumn } from '@/lib/kanban/types';
+import { fromDateTimeLocalValue, toDateTimeLocalValue } from '@/lib/kanban/date-input';
 
 interface Props {
   card: KanbanCard;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDelete?: (id: string) => void;
-  onUpdate?: (id: string, updates: Partial<KanbanCard>, version?: number) => Promise<KanbanCard | null>;
+  onUpdate?: (id: string, updates: KanbanCardUpdates, version?: number) => Promise<KanbanCard | null>;
 }
 
 export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }: Props) {
@@ -26,6 +27,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
   const [tags, setTags] = useState<string[]>(card.tags);
   const [project, setProject] = useState(card.project);
   const [assignees, setAssignees] = useState(card.assignees.join(', '));
+  const [dueAt, setDueAt] = useState(toDateTimeLocalValue(card.dueAt));
   const [tagInput, setTagInput] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -37,6 +39,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
     setTags(card.tags);
     setProject(card.project);
     setAssignees(card.assignees.join(', '));
+    setDueAt(toDateTimeLocalValue(card.dueAt));
   }, [card]);
 
   const handleSave = async () => {
@@ -50,6 +53,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
       tags,
       project: project.trim(),
       assignees: assignees.split(',').map(value => value.trim()).filter(Boolean),
+      dueAt: fromDateTimeLocalValue(dueAt) || null,
     }, card.version);
     setSaving(false);
     onOpenChange(false);
@@ -94,6 +98,11 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
               <label className="text-xs text-muted-foreground mb-1 block">Ответственные</label>
               <Input value={assignees} onChange={e => setAssignees(e.target.value)} placeholder="через запятую" />
             </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Срок</label>
+            <Input type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">

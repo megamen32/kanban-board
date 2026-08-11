@@ -9,12 +9,13 @@ import { Badge } from '@/components/ui/badge';
 import { X, Plus } from 'lucide-react';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import type { KanbanCard, Priority } from '@/lib/kanban/types';
+import { fromDateTimeLocalValue } from '@/lib/kanban/date-input';
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultColumn: string;
-  onCreate: (title: string, description: string, column: string, priority: string, tags: string[], project: string, assignees: string[]) => Promise<KanbanCard | undefined>;
+  onCreate: (title: string, description: string, column: string, priority: string, tags: string[], project: string, assignees: string[], dueAt?: string) => Promise<KanbanCard | undefined>;
 }
 
 export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: Props) {
@@ -25,18 +26,20 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
   const [tags, setTags] = useState<string[]>([]);
   const [project, setProject] = useState('');
   const [assignees, setAssignees] = useState('');
+  const [dueAt, setDueAt] = useState('');
   const [tagInput, setTagInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
     if (!title.trim() || !project.trim()) return;
     setSubmitting(true);
-    await onCreate(title.trim(), description.trim(), column, priority, tags, project.trim(), assignees.split(',').map(value => value.trim()).filter(Boolean));
+    await onCreate(title.trim(), description.trim(), column, priority, tags, project.trim(), assignees.split(',').map(value => value.trim()).filter(Boolean), fromDateTimeLocalValue(dueAt));
     setTitle('');
     setDescription('');
     setTags([]);
     setProject('');
     setAssignees('');
+    setDueAt('');
     setTagInput('');
     setSubmitting(false);
     onOpenChange(false);
@@ -80,6 +83,11 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
               <label className="text-xs text-muted-foreground mb-1 block">Ответственные</label>
               <Input placeholder="через запятую" value={assignees} onChange={e => setAssignees(e.target.value)} />
             </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Срок</label>
+            <Input type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
