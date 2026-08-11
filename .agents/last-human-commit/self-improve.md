@@ -53,3 +53,18 @@
 - Which skill, MCP, or tool is missing? A Codex MCP diagnostic/handshake tool for configured remote servers, with mandatory secret redaction and board-scope discovery.
 - What operation or error repeated? 3 MCP requests returned HTTP 500; the existing `bun test` Vitest-helper incompatibility also recurred, while `bun x vitest run` passed 28/28.
 - State: Proposed
+## 2026-08-11 — versioned Kanban MCP transport (Short)
+
+- What slowed or confused L? The public 500 was nginx's zero-length rewrite, while the upstream was only a REST-like HTTP facade; source and production route lived outside the excode git worktree.
+- Which instruction should change? bezrabotnyi-nginx-routing/SKILL.md: add a standard MCP route check that distinguishes proxy rewrite failure from an actual JSON-RPC transport.
+- Which skill, MCP, or tool is missing? A safe deploy preview that maps an unversioned local upstream to its owning repository before restart.
+- What operation or error repeated? 2 local canary attempts failed before the final scoped JSON-RPC canary; guard with a versioned local server test before any restart.
+- State: needs human decision
+
+## 2026-08-11 — post-restart Tester gates (Short)
+
+- What slowed or confused L? Live acceptance could not cross auth: `KANBAN_MINI_MCP_BEARER` is unset, `KANBAN_OAUTH_REDIRECT_URIS` is empty, and the personal site presents username/password/2FA.
+- Which instruction should change? Lead.md: require a secure authorized test credential or explicit auth blocker before dispatching an authenticated MCP/site Tester.
+- Which skill, MCP, or tool is missing? Secret-safe Tester credential injection plus a real browser session bootstrap for the protected personal board.
+- What operation or error repeated? 2 malformed first attempts (missing curl URL; invalid BrowserOS relative URL) required screenshot/diagnostic retry; guard with absolute-URL validation in canary templates.
+- State: needs human decision
