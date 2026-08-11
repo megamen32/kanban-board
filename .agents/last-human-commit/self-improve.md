@@ -68,3 +68,11 @@
 - Which skill, MCP, or tool is missing? Secret-safe Tester credential injection plus a real browser session bootstrap for the protected personal board.
 - What operation or error repeated? 2 malformed first attempts (missing curl URL; invalid BrowserOS relative URL) required screenshot/diagnostic retry; guard with absolute-URL validation in canary templates.
 - State: needs human decision
+
+## 2026-08-11 — restore shared Kanban auth (Short)
+
+- What slowed or confused L? The personal hostname was tested on stale image `2042f0...`, so shared auth succeeded only to expose the old local Kanban password/2FA form.
+- Which instruction should change? web-container-deploy/SKILL.md: require image-age/tag parity checks for every sibling hostname before browser acceptance.
+- Which skill, MCP, or tool is missing? A topology-aware canary that compares each host's running image digest with the intended source image and shared-auth snippet.
+- What operation or error repeated? 1 wrong-host/image assumption; guard by checking nginx upstream, compose project, and image digest before launching a Tester.
+- State: needs human decision
