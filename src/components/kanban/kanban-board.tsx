@@ -17,9 +17,13 @@ import { TaskListView } from './task-list-view';
 import { filterCards, getAssigneeOptions, getProjectOptions } from './view-model';
 import { CardEditDialog } from './card-edit-dialog';
 import { NotificationSettings } from '@/components/notifications/notification-settings';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { getPlanningRoleBalance, getPlanningTabCards, type PlanningTab } from './view-model';
+import { PlanningCardList, RoleBalanceView, WeeklyPlanView } from './planning-views';
+import { getExecutionColumnCards } from './planning-views';
 
 export function KanbanBoard() {
-  const { cards, loading, conflict, createCard, updateCard, deleteCard, moveCard, reorderColumn, resolveConflict, refresh } = useKanban();
+  const { cards, loading, conflict, createCard, updateCard, deleteCard, moveCard, reorderColumn, resolveConflict, refresh, weeklyDraft, weeklyLoading, weeklyError, fetchWeeklyDraft, acceptWeeklyPlan } = useKanban();
   const [showAdd, setShowAdd] = useState(false);
   const [defaultColumn, setDefaultColumn] = useState('inbox');
   const [view, setView] = useState<'kanban' | 'list'>('kanban');
@@ -27,11 +31,17 @@ export function KanbanBoard() {
   const [assignee, setAssignee] = useState('all');
   const [inboxOnly, setInboxOnly] = useState(false);
   const [selectedCard, setSelectedCard] = useState<KanbanCard | null>(null);
+  const [planningTab, setPlanningTab] = useState<PlanningTab>('execution');
+  const [username, setUsername] = useState<string | null>(null);
   const isMobile = useIsMobile();
 
   useEffect(() => {
     if (isMobile) setView('list');
   }, [isMobile]);
+
+  useEffect(() => {
+    fetch('/api/auth/session').then(response => response.ok ? response.json() : null).then(data => setUsername(data?.username ?? null)).catch(() => setUsername(null));
+  }, []);
 
   const projectOptions = getProjectOptions(cards);
   const assigneeOptions = useMemo(() => getAssigneeOptions(cards), [cards]);
@@ -42,7 +52,7 @@ export function KanbanBoard() {
   }, [assignee, assigneeOptions]);
 
   const getColumnCards = useCallback((columnId: string) =>
-    visibleCards.filter(c => c.column === columnId).sort((a, b) => a.order - b.order),
+    getExecutionColumnCards(visibleCards, columnId as KanbanCard['column']).sort((a, b) => a.order - b.order),
     [visibleCards]
   );
 
@@ -52,6 +62,15 @@ export function KanbanBoard() {
   }, [updateCard]);
 
   const handleDelete = useCallback(async (id: string) => { await deleteCard(id); }, [deleteCard]);
+  const now = new Date();
+  const derivedCards = useMemo(() => getPlanningTabCards(visibleCards, planningTab, now), [planningTab, visibleCards]);
+  const roleBalance = useMemo(() => getPlanningRoleBalance(visibleCards, now), [visibleCards]);
+
+  const handlePlanningTabChange = (value: string) => {
+    const next = value as PlanningTab;
+    setPlanningTab(next);
+    if (next === 'week' && !weeklyDraft) void fetchWeeklyDraft();
+  };
 
   if (loading) {
     return (
@@ -98,11 +117,22 @@ export function KanbanBoard() {
             </Button>
           </div>
         </div>
-        {view === 'list' ? (
-          <TaskListView cards={visibleCards} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
-        ) : (
+        <Tabs value={planningTab} onValueChange={handlePlanningTabChange} className="flex min-h-0 flex-1">
+          <div className="overflow-x-auto border-b px-3 py-2 sm:px-6">
+            <TabsList className="h-10 w-full min-w-max justify-start bg-transparent p-0">
+              <TabsTrigger value="execution">Execution</TabsTrigger>
+              <TabsTrigger value="inbox">Inbox</TabsTrigger>
+              <TabsTrigger value="week">Week</TabsTrigger>
+              <TabsTrigger value="today">Today</TabsTrigger>
+              <TabsTrigger value="balance">Role balance</TabsTrigger>
+            </TabsList>
+          </div>
+          <TabsContent value="execution" className="min-h-0">
+            {view === 'list' ? (
+          <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
+            ) : (
           <div className="flex gap-3 sm:gap-4 p-3 sm:p-6 overflow-x-auto overscroll-x-contain flex-1">
-            {DEFAULT_COLUMNS.map(col => (
+            {DEFAULT_COLUMNS.filter(col => col.id !== 'archived').map(col => (
               <KanbanColumnComponent
                 key={col.id}
                 id={col.id}
@@ -113,7 +143,13 @@ export function KanbanBoard() {
               />
             ))}
           </div>
-        )}
+            )}
+          </TabsContent>
+          <TabsContent value="inbox" className="min-h-0 overflow-y-auto p-3 sm:p-6"><PlanningCardList cards={derivedCards} onOpen={setSelectedCard} empty="Inbox пока пуст" /></TabsContent>
+          <TabsContent value="week" className="min-h-0 overflow-y-auto p-3 sm:p-6"><WeeklyPlanView cards={visibleCards} draft={weeklyDraft} loading={weeklyLoading} error={weeklyError} canAccept={username === 'nikita'} onLoad={() => void fetchWeeklyDraft()} onAccept={ids => acceptWeeklyPlan(ids)} onOpen={setSelectedCard} /></TabsContent>
+          <TabsContent value="today" className="min-h-0 overflow-y-auto p-3 sm:p-6"><PlanningCardList cards={derivedCards} onOpen={setSelectedCard} empty="На сегодня задач нет" /></TabsContent>
+          <TabsContent value="balance" className="min-h-0 overflow-y-auto p-3 sm:p-6"><RoleBalanceView balance={roleBalance} /></TabsContent>
+        </Tabs>
         <Button className="fixed bottom-6 right-6 h-12 w-12 rounded-full shadow-lg z-50" onClick={() => { setDefaultColumn('todo'); setShowAdd(true); }}>
           <Plus className="h-5 w-5" />
         </Button>

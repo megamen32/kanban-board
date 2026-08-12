@@ -3,13 +3,30 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { KanbanCard, KanbanCardUpdates, SyncEvent, ConflictInfo } from '@/lib/kanban/types';
+import type { WeeklyDraft } from '@/lib/kanban/weekly-plan';
 
 const WS_URL = '/?XTransformPort=3003';
+
+export type KanbanUpdateRequest = KanbanCardUpdates & {
+  reassignmentIntent?: 'direct-owner-command';
+  reassignmentEvidence?: Record<string, unknown>;
+};
+
+export function buildUpdateRequestBody(updates: KanbanUpdateRequest, expectedVersion?: number) {
+  return { ...updates, expectedVersion };
+}
+
+export interface WeeklyPlanResult extends WeeklyDraft {
+  error?: string;
+}
 
 export function useKanban() {
   const [cards, setCards] = useState<KanbanCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
+  const [weeklyDraft, setWeeklyDraft] = useState<WeeklyDraft | null>(null);
+  const [weeklyLoading, setWeeklyLoading] = useState(false);
+  const [weeklyError, setWeeklyError] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
 
   const fetchCards = useCallback(async () => {
@@ -54,22 +71,22 @@ export function useKanban() {
     };
   }, [fetchCards]);
 
-  const createCard = useCallback(async (title: string, description: string = '', column: string = 'inbox', priority: string = 'medium', tags: string[] = [], project: string = '', assignees: string[] = [], dueAt?: string) => {
+  const createCard = useCallback(async (title: string, description: string = '', column: string = 'inbox', priority: string = 'medium', tags: string[] = [], project: string = '', assignees: string[] = [], dueAt?: string, planning?: KanbanCardUpdates) => {
     const res = await fetch('/api/kanban/cards', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description, column, priority, tags, project, assignees, dueAt }),
+      body: JSON.stringify({ title, description, column, priority, tags, project, assignees, dueAt, ...planning }),
     });
     const data = await res.json();
     if (data.card) setCards(prev => [...prev, data.card]);
     return data.card;
   }, []);
 
-  const updateCard = useCallback(async (id: string, updates: KanbanCardUpdates, expectedVersion?: number) => {
+  const updateCard = useCallback(async (id: string, updates: KanbanUpdateRequest, expectedVersion?: number) => {
     const res = await fetch(`/api/kanban/cards/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...updates, expectedVersion }),
+      body: JSON.stringify(buildUpdateRequestBody(updates, expectedVersion)),
     });
     const data = await res.json();
     if (res.status === 409) {
@@ -129,6 +146,47 @@ export function useKanban() {
     setConflict(null);
   }, [conflict]);
 
+  const fetchWeeklyDraft = useCallback(async () => {
+    setWeeklyLoading(true);
+    setWeeklyError(null);
+    try {
+      const res = await fetch('/api/kanban/weekly-plan');
+      const data = await res.json() as WeeklyPlanResult;
+      if (!res.ok) throw new Error(data.error || 'Не удалось загрузить план недели');
+      setWeeklyDraft(data);
+      return data;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось загрузить план недели';
+      setWeeklyError(message);
+      return null;
+    } finally {
+      setWeeklyLoading(false);
+    }
+  }, []);
+
+  const acceptWeeklyPlan = useCallback(async (cardIds: string[], now?: string) => {
+    setWeeklyLoading(true);
+    setWeeklyError(null);
+    try {
+      const res = await fetch('/api/kanban/weekly-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cardIds, ...(now ? { now } : {}) }),
+      });
+      const data = await res.json() as WeeklyPlanResult & { cards?: KanbanCard[] };
+      if (!res.ok) throw new Error(data.error || 'Не удалось принять план недели');
+      if (data.cards) setCards(previous => previous.map(card => data.cards!.find(updated => updated.id === card.id) ?? card));
+      setWeeklyDraft(previous => previous ? { ...previous, cards: previous.cards.map(card => data.cards?.find(updated => updated.id === card.id) ?? card), cardIds } : previous);
+      return data.cards ?? [];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось принять план недели';
+      setWeeklyError(message);
+      return null;
+    } finally {
+      setWeeklyLoading(false);
+    }
+  }, []);
+
   return {
     cards,
     loading,
@@ -140,5 +198,10 @@ export function useKanban() {
     reorderColumn,
     resolveConflict,
     refresh: fetchCards,
+    weeklyDraft,
+    weeklyLoading,
+    weeklyError,
+    fetchWeeklyDraft,
+    acceptWeeklyPlan,
   };
 }

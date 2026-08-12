@@ -8,14 +8,48 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { X, Plus } from 'lucide-react';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
-import type { KanbanCard, Priority } from '@/lib/kanban/types';
+import type { KanbanCard, Priority, PlanningType, RoleId } from '@/lib/kanban/types';
 import { fromDateTimeLocalValue } from '@/lib/kanban/date-input';
+import { ROLE_IDS } from '@/lib/kanban/types';
+
+export interface PlanningMetadataForm {
+  type: PlanningType;
+  role: RoleId | '';
+  important: boolean;
+  urgent: boolean;
+  scheduledAt: string;
+  todayRank: string;
+  waitingFor: string;
+  requiresApprovalFrom: string;
+  suggestedAssignee: string;
+  parent: string;
+}
+
+/** Converts the editable planning controls into the server-facing card fields. */
+export function buildPlanningMetadataCreate(form: PlanningMetadataForm) {
+  return {
+    type: form.type,
+    ...(form.role ? { role: form.role } : {}),
+    important: form.important,
+    urgent: form.urgent,
+    ...(form.scheduledAt ? { scheduledAt: fromDateTimeLocalValue(form.scheduledAt) } : {}),
+    ...(form.todayRank ? { todayRank: Number(form.todayRank) as 1 | 2 | 3 } : {}),
+    waitingFor: splitPeople(form.waitingFor),
+    requiresApprovalFrom: splitPeople(form.requiresApprovalFrom),
+    ...(form.suggestedAssignee.trim() ? { suggestedAssignee: form.suggestedAssignee.trim() } : {}),
+    ...(form.parent.trim() ? { parent: form.parent.trim() } : {}),
+  };
+}
+
+function splitPeople(value: string) {
+  return value.split(',').map(item => item.trim()).filter(Boolean);
+}
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultColumn: string;
-  onCreate: (title: string, description: string, column: string, priority: string, tags: string[], project: string, assignees: string[], dueAt?: string) => Promise<KanbanCard | undefined>;
+  onCreate: (title: string, description: string, column: string, priority: string, tags: string[], project: string, assignees: string[], dueAt?: string, planning?: ReturnType<typeof buildPlanningMetadataCreate>) => Promise<KanbanCard | undefined>;
 }
 
 export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: Props) {
@@ -27,13 +61,14 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
   const [project, setProject] = useState('');
   const [assignees, setAssignees] = useState('');
   const [dueAt, setDueAt] = useState('');
+  const [planning, setPlanning] = useState<PlanningMetadataForm>({ type: 'action', role: '', important: false, urgent: false, scheduledAt: '', todayRank: '', waitingFor: '', requiresApprovalFrom: '', suggestedAssignee: '', parent: '' });
   const [tagInput, setTagInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
     if (!title.trim() || !project.trim()) return;
     setSubmitting(true);
-    await onCreate(title.trim(), description.trim(), column, priority, tags, project.trim(), assignees.split(',').map(value => value.trim()).filter(Boolean), fromDateTimeLocalValue(dueAt));
+    await onCreate(title.trim(), description.trim(), column, priority, tags, project.trim(), assignees.split(',').map(value => value.trim()).filter(Boolean), fromDateTimeLocalValue(dueAt), buildPlanningMetadataCreate(planning));
     setTitle('');
     setDescription('');
     setTags([]);
@@ -41,6 +76,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
     setAssignees('');
     setDueAt('');
     setTagInput('');
+    setPlanning({ type: 'action', role: '', important: false, urgent: false, scheduledAt: '', todayRank: '', waitingFor: '', requiresApprovalFrom: '', suggestedAssignee: '', parent: '' });
     setSubmitting(false);
     onOpenChange(false);
   };
@@ -88,6 +124,19 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Срок</label>
             <Input type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} />
+          </div>
+
+          <div className="space-y-3 rounded-md border p-3">
+            <label className="text-sm font-medium">Планирование</label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-muted-foreground">Тип<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.type} onChange={e => setPlanning({ ...planning, type: e.target.value as PlanningMetadataForm['type'] })}><option value="action">Действие</option><option value="outcome">Результат</option></select></label>
+              <label className="text-xs text-muted-foreground">Роль<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.role} onChange={e => setPlanning({ ...planning, role: e.target.value as RoleId | '' })}><option value="">Не выбрана</option>{ROLE_IDS.map(role => <option key={role} value={role}>{role}</option>)}</select></label>
+            </div>
+            <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><input type="checkbox" checked={planning.important} onChange={e => setPlanning({ ...planning, important: e.target.checked })} /> Важно</label><label className="flex items-center gap-2"><input type="checkbox" checked={planning.urgent} onChange={e => setPlanning({ ...planning, urgent: e.target.checked })} /> Срочно</label></div>
+            <div className="grid grid-cols-2 gap-3"><label className="text-xs text-muted-foreground">Планировать на дату<Input className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
+            <Input placeholder="Ждём от (ID через запятую)" value={planning.waitingFor} onChange={e => setPlanning({ ...planning, waitingFor: e.target.value })} />
+            <Input placeholder="Требует согласования от (ID через запятую)" value={planning.requiresApprovalFrom} onChange={e => setPlanning({ ...planning, requiresApprovalFrom: e.target.value })} />
+            <div className="grid grid-cols-2 gap-3"><Input placeholder="Предложенный исполнитель" value={planning.suggestedAssignee} onChange={e => setPlanning({ ...planning, suggestedAssignee: e.target.value })} /><Input placeholder="Родительская карточка" value={planning.parent} onChange={e => setPlanning({ ...planning, parent: e.target.value })} /></div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">

@@ -7,16 +7,58 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { X, Plus, Trash2 } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
 import { DEFAULT_COLUMNS, PRIORITY_COLORS } from '@/lib/kanban/types';
-import type { KanbanCard, KanbanCardUpdates, Priority, KanbanColumn } from '@/lib/kanban/types';
+import type { KanbanCard, Priority, KanbanColumn, PlanningType, RoleId } from '@/lib/kanban/types';
+import { ROLE_IDS } from '@/lib/kanban/types';
 import { fromDateTimeLocalValue, toDateTimeLocalValue } from '@/lib/kanban/date-input';
+import type { KanbanUpdateRequest } from '@/hooks/use-kanban';
 
 interface Props {
   card: KanbanCard;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDelete?: (id: string) => void;
-  onUpdate?: (id: string, updates: KanbanCardUpdates, version?: number) => Promise<KanbanCard | null>;
+  onUpdate?: (id: string, updates: KanbanUpdateRequest, version?: number) => Promise<KanbanCard | null>;
+}
+
+export interface PlanningMetadataForm {
+  type: PlanningType | '';
+  role: RoleId | '';
+  important: boolean;
+  urgent: boolean;
+  scheduledAt: string;
+  todayRank: string;
+  waitingFor: string;
+  requiresApprovalFrom: string;
+  suggestedAssignee: string;
+  parent: string;
+}
+
+function splitPeople(value: string) {
+  return value.split(',').map(item => item.trim()).filter(Boolean);
+}
+
+/** Builds editable planning fields and keeps reassignment evidence separate from audit evidence. */
+export function buildPlanningMetadataUpdates(card: KanbanCard, form: PlanningMetadataForm, nextAssignees: string[]) {
+  const updates: Record<string, unknown> = {
+    type: form.type || null,
+    role: form.role || null,
+    important: form.important,
+    urgent: form.urgent,
+    scheduledAt: form.scheduledAt ? fromDateTimeLocalValue(form.scheduledAt) : null,
+    todayRank: form.todayRank ? Number(form.todayRank) as 1 | 2 | 3 : null,
+    waitingFor: splitPeople(form.waitingFor),
+    requiresApprovalFrom: splitPeople(form.requiresApprovalFrom),
+    suggestedAssignee: form.suggestedAssignee.trim() || null,
+    parent: form.parent.trim() || null,
+    assignees: nextAssignees,
+  };
+  if (JSON.stringify(nextAssignees) !== JSON.stringify(card.assignees)) {
+    updates.reassignmentIntent = 'direct-owner-command';
+    updates.reassignmentEvidence = { source: 'owner-confirmation' };
+  }
+  return updates as KanbanUpdateRequest;
 }
 
 export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }: Props) {
@@ -27,7 +69,13 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
   const [tags, setTags] = useState<string[]>(card.tags);
   const [project, setProject] = useState(card.project);
   const [assignees, setAssignees] = useState(card.assignees.join(', '));
+  const [reassignmentConfirmed, setReassignmentConfirmed] = useState(false);
   const [dueAt, setDueAt] = useState(toDateTimeLocalValue(card.dueAt));
+  const [planning, setPlanning] = useState<PlanningMetadataForm>({
+    type: card.type ?? 'action', role: card.role ?? '', important: card.important ?? false, urgent: card.urgent ?? false,
+    scheduledAt: card.scheduledAt ?? '', todayRank: card.todayRank?.toString() ?? '', waitingFor: card.waitingFor?.join(', ') ?? '',
+    requiresApprovalFrom: card.requiresApprovalFrom?.join(', ') ?? '', suggestedAssignee: card.suggestedAssignee ?? '', parent: card.parent ?? '',
+  });
   const [tagInput, setTagInput] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -39,22 +87,33 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
     setTags(card.tags);
     setProject(card.project);
     setAssignees(card.assignees.join(', '));
+    setReassignmentConfirmed(false);
     setDueAt(toDateTimeLocalValue(card.dueAt));
+    setPlanning({
+      type: card.type ?? 'action', role: card.role ?? '', important: card.important ?? false, urgent: card.urgent ?? false,
+      scheduledAt: card.scheduledAt ?? '', todayRank: card.todayRank?.toString() ?? '', waitingFor: card.waitingFor?.join(', ') ?? '',
+      requiresApprovalFrom: card.requiresApprovalFrom?.join(', ') ?? '', suggestedAssignee: card.suggestedAssignee ?? '', parent: card.parent ?? '',
+    });
   }, [card]);
 
   const handleSave = async () => {
     if (!title.trim() || !onUpdate) return;
+    const nextAssignees = assignees.split(',').map(value => value.trim()).filter(Boolean);
+    const assigneesChanged = JSON.stringify(nextAssignees) !== JSON.stringify(card.assignees);
+    if (assigneesChanged && !reassignmentConfirmed) return;
     setSaving(true);
-    await onUpdate(card.id, {
+    const updates: KanbanUpdateRequest = {
       title: title.trim(),
       description: description.trim(),
       column: column as KanbanColumn,
       priority,
       tags,
       project: project.trim(),
-      assignees: assignees.split(',').map(value => value.trim()).filter(Boolean),
+      assignees: nextAssignees,
       dueAt: fromDateTimeLocalValue(dueAt) || null,
-    }, card.version);
+      ...buildPlanningMetadataUpdates(card, planning, nextAssignees),
+    };
+    await onUpdate(card.id, updates, card.version);
     setSaving(false);
     onOpenChange(false);
   };
@@ -97,12 +156,31 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Ответственные</label>
               <Input value={assignees} onChange={e => setAssignees(e.target.value)} placeholder="через запятую" />
+              {JSON.stringify(assignees.split(',').map(value => value.trim()).filter(Boolean)) !== JSON.stringify(card.assignees) && (
+                <label className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
+                  <Checkbox checked={reassignmentConfirmed} onCheckedChange={value => setReassignmentConfirmed(value === true)} />
+                  <span>Подтверждаю явное переназначение ответственных</span>
+                </label>
+              )}
             </div>
           </div>
 
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Срок</label>
             <Input type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} />
+          </div>
+
+          <div className="space-y-3 rounded-md border p-3">
+            <label className="text-sm font-medium">Планирование</label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-muted-foreground">Тип<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.type} onChange={e => setPlanning({ ...planning, type: e.target.value as PlanningType | '' })}><option value="">Не выбран</option><option value="action">Действие</option><option value="outcome">Результат</option></select></label>
+              <label className="text-xs text-muted-foreground">Роль<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.role} onChange={e => setPlanning({ ...planning, role: e.target.value as RoleId | '' })}><option value="">Не выбрана</option>{ROLE_IDS.map(role => <option key={role} value={role}>{role}</option>)}</select></label>
+            </div>
+            <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><Checkbox checked={planning.important} onCheckedChange={value => setPlanning({ ...planning, important: value === true })} /> Важно</label><label className="flex items-center gap-2"><Checkbox checked={planning.urgent} onCheckedChange={value => setPlanning({ ...planning, urgent: value === true })} /> Срочно</label></div>
+            <div className="grid grid-cols-2 gap-3"><label className="text-xs text-muted-foreground">Планировать на дату<Input className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
+            <Input placeholder="Ждём от (ID через запятую)" value={planning.waitingFor} onChange={e => setPlanning({ ...planning, waitingFor: e.target.value })} />
+            <Input placeholder="Требует согласования от (ID через запятую)" value={planning.requiresApprovalFrom} onChange={e => setPlanning({ ...planning, requiresApprovalFrom: e.target.value })} />
+            <div className="grid grid-cols-2 gap-3"><Input placeholder="Предложенный исполнитель" value={planning.suggestedAssignee} onChange={e => setPlanning({ ...planning, suggestedAssignee: e.target.value })} /><Input placeholder="Родительская карточка" value={planning.parent} onChange={e => setPlanning({ ...planning, parent: e.target.value })} /></div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
