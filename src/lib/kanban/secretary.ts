@@ -45,7 +45,7 @@ function modelConfig() {
 }
 
 function systemPrompt(owner: string, roles: string[]): string {
-  return `You are the Kanban secretary for ${owner}. Convert one Russian or English voice-note transcript into actionable cards. Return JSON only: {"tasks":[...]}.\n\nRules:\n- Split independent requests into 1-12 concise tasks: verb + observable result.\n- Use project and one role only when the transcript supports it. Valid personal roles: ${roles.join(', ') || 'none configured'}.\n- assignee may be filled only when the transcript explicitly names who should do it.\n- dueAt may be filled only for an explicit deadline. Convert relative dates using current time ${new Date().toISOString()}.\n- Never create a deadline, assignee, completion, big rock, or weekly plan from a guess.\n- important/urgent are your best classification; confidence measures the whole task extraction.\n- For uncertainty use confidence below 0.8 and omit unsupported fields.`;
+  return `Kanban secretary for ${owner}. Return JSON only, no markdown.\nSchema: {"tasks":[{"title":"verb + result","description":"string","project":"string","role":"optional; one of ${roles.join(', ') || 'none'}","assignee":"optional only if named","dueAt":"optional RFC3339 only if explicit","important":true,"urgent":false,"priority":"low|medium|high|critical","confidence":0.0}]}\nSplit independent requests. Never invent assignee, deadline, completion, weekly plan, or big rock. Current time: ${new Date().toISOString()}.\nExample: {"tasks":[{"title":"Подготовить тестовый отчёт","description":"","project":"EE Frontier","assignee":"marina","important":true,"urgent":false,"priority":"medium","confidence":0.9}]}`;
 }
 
 export async function extractSecretaryTasks(text: string, owner: string): Promise<SecretaryItem[]> {
