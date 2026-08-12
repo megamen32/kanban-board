@@ -25,6 +25,15 @@ type SecretaryItem = z.infer<typeof itemSchema>;
 
 export class SecretaryUnavailableError extends Error {}
 
+function jsonObjectFromModel(content: string): unknown {
+  const trimmed = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start < 0 || end < start) throw new Error('Kanban secretary returned an invalid task list');
+  try { return JSON.parse(trimmed.slice(start, end + 1)); }
+  catch { throw new Error('Kanban secretary returned an invalid task list'); }
+}
+
 function modelConfig() {
   const apiKey = process.env.KANBAN_LITELLM_API_KEY?.trim();
   if (!apiKey) throw new SecretaryUnavailableError('Kanban secretary is waiting for its LiteLLM key');
@@ -48,7 +57,6 @@ export async function extractSecretaryTasks(text: string, owner: string): Promis
     body: JSON.stringify({
       model: config.model,
       temperature: 0.1,
-      response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemPrompt(owner, roles) },
         { role: 'user', content: text },
@@ -59,7 +67,7 @@ export async function extractSecretaryTasks(text: string, owner: string): Promis
   const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
   const content = payload.choices?.[0]?.message?.content;
   if (typeof content !== 'string') throw new Error('Kanban secretary returned no structured answer');
-  const parsed = responseSchema.safeParse(JSON.parse(content));
+  const parsed = responseSchema.safeParse(jsonObjectFromModel(content));
   if (!parsed.success) throw new Error('Kanban secretary returned an invalid task list');
   return parsed.data.tasks;
 }

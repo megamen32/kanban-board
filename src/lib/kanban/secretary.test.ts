@@ -14,6 +14,11 @@ describe('Kanban secretary', () => {
     await expect(extractSecretaryTasks('Марине отправить бриф', 'nikita')).resolves.toMatchObject([{ assignee: 'marina', confidence: 0.95 }]);
   });
 
+  test('accepts JSON wrapped in a local-model code block', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '```json\n{"tasks":[]}\n```' } }] }), { status: 200 })));
+    await expect(extractSecretaryTasks('Разобрать заметку', 'nikita')).resolves.toEqual([]);
+  });
+
   test('is explicitly unavailable until the runtime key exists', async () => {
     delete process.env.KANBAN_LITELLM_API_KEY;
     await expect(extractSecretaryTasks('Разобрать заметку', 'nikita')).rejects.toBeInstanceOf(SecretaryUnavailableError);
