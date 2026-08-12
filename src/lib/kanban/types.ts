@@ -13,6 +13,10 @@ export interface KanbanCard {
   version: number;
   project: string;
   assignees: string[];
+  /** Person whose personal planning space owns this card. Old cards belong to Nikita. */
+  owner?: string;
+  /** Shared cards appear in the common-projects view for every selected person. */
+  shared?: boolean;
   /** Planning metadata is optional in the TypeScript surface for legacy callers. */
   planningVersion?: 1;
   type?: PlanningType;
@@ -48,11 +52,17 @@ export const ROLE_IDS = [
   'personal-relationships',
   'sharpening-the-saw',
 ] as const;
-export type RoleId = typeof ROLE_IDS[number];
+/** A role is personal data, not a globally fixed project category. */
+export type RoleId = string;
+export interface RoleDefinition {
+  id: string;
+  label: string;
+  order: number;
+}
 export type PlanningEvidence = Record<string, unknown>;
 export const PLANNING_VERSION = 1 as const;
 
-export type KanbanCardUpdates = Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'project' | 'assignees' | 'planningVersion' | 'type' | 'role' | 'accountable' | 'assignee' | 'important' | 'urgent' | 'week' | 'bigRock' | 'parent' | 'scheduledAt' | 'todayRank' | 'source' | 'needsReview' | 'suggestedAssignee' | 'waitingFor' | 'requiresApprovalFrom' | 'completedBy' | 'completedAt' | 'completionEvidence' | 'approvalEvidence'>> & {
+export type KanbanCardUpdates = Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'project' | 'assignees' | 'owner' | 'shared' | 'planningVersion' | 'type' | 'role' | 'accountable' | 'assignee' | 'important' | 'urgent' | 'week' | 'bigRock' | 'parent' | 'scheduledAt' | 'todayRank' | 'source' | 'needsReview' | 'suggestedAssignee' | 'waitingFor' | 'requiresApprovalFrom' | 'completedBy' | 'completedAt' | 'completionEvidence' | 'approvalEvidence'>> & {
   dueAt?: string | null;
 };
 

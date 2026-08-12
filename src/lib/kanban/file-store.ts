@@ -2,13 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
-import { DEFAULT_COLUMNS, PLANNING_VERSION, ROLE_IDS } from './types';
-import type { KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, RoleId } from './types';
+import { DEFAULT_COLUMNS, PLANNING_VERSION } from './types';
+import type { KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
   'id', 'title', 'column', 'priority', 'tags', 'order', 'created', 'updated', 'dueAt',
-  'version', 'project', 'assignees', 'planning_version', 'type', 'role', 'accountable',
+  'version', 'project', 'assignees', 'owner', 'shared', 'planning_version', 'type', 'role', 'accountable',
   'assignee', 'important', 'urgent', 'week', 'big_rock', 'parent', 'scheduled_at',
   'today_rank', 'source', 'needs_review', 'suggested_assignee', 'waiting_for',
   'requires_approval_from', 'completed_by', 'completed_at', 'completion_evidence',
@@ -27,7 +27,7 @@ type RawFrontmatter = Record<string, unknown> & {
   [RAW_UNKNOWN_FRONTMATTER]?: string;
 };
 const PLANNING_UPDATE_KEYS = new Set([
-  'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
+  'owner', 'shared', 'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
   'week', 'bigRock', 'parent', 'scheduledAt', 'todayRank', 'source', 'needsReview',
   'suggestedAssignee', 'waitingFor', 'requiresApprovalFrom', 'completedBy', 'completedAt',
   'completionEvidence', 'approvalEvidence',
@@ -104,7 +104,8 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
   });
 
   const column = enumField(data.column, 'column', DEFAULT_COLUMNS.map(item => item.id), 'inbox');
-  const priority = enumField(data.priority, 'priority', ['low', 'medium', 'high', 'critical'] as const, 'medium');
+  // Older personal notes used free-form priority labels; keep them visible.
+  const priority = enumField(data.priority, 'priority', ['low', 'medium', 'high', 'critical'] as const, 'medium', true);
 
   return {
     id: data.id || legacyName,
@@ -121,6 +122,8 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     version: typeof data.version === 'number' ? data.version : 1,
     project: typeof data.project === 'string' && data.project.trim() ? data.project.trim() : legacyProject,
     assignees: Array.isArray(data.assignees) ? data.assignees.map(String) : [],
+    owner: optionalString(data, 'owner') ?? 'nikita',
+    shared: booleanField(data, 'shared', false),
     ...planning,
     rawFrontmatter,
   };
@@ -149,6 +152,8 @@ export function createCard(title: string, description: string = '', column: Kanb
     version: 1,
     project: project.trim(),
     assignees,
+    owner: 'nikita',
+    shared: false,
     ...defaultPlanningMetadata(),
   };
 
@@ -278,6 +283,8 @@ function buildFrontmatter(card: KanbanCard): string {
     version: card.version,
     project: card.project,
     assignees: card.assignees,
+    owner: card.owner ?? 'nikita',
+    shared: card.shared ?? false,
   };
   if (!legacyMarker(card.rawFrontmatter)) {
     Object.assign(data, {
@@ -326,7 +333,7 @@ function writeCard(card: KanbanCard, tasksDir = TASKS_DIR): void {
 interface PlanningMetadata {
   planningVersion: 1;
   type: PlanningType;
-  role?: RoleId;
+  role?: string;
   accountable?: string;
   assignee?: string;
   important: boolean;
@@ -463,9 +470,10 @@ function booleanField(data: Record<string, unknown>, field: string, fallback: bo
   return value;
 }
 
-function enumField<T extends string>(value: unknown, field: string, values: readonly T[], fallback: T): T {
+function enumField<T extends string>(value: unknown, field: string, values: readonly T[], fallback: T, tolerateUnknown = false): T {
   if (value === undefined) return fallback;
   if (typeof value !== 'string' || !values.includes(value as T)) {
+    if (tolerateUnknown) return fallback;
     throw invalidPlanningField(field, `expected one of ${values.join(', ')}`);
   }
   return value as T;
@@ -523,7 +531,7 @@ function parsePlanningMetadata(data: Record<string, unknown>): PlanningMetadata 
   return {
     ...defaultPlanningMetadata(),
     type: (type as PlanningType | undefined) ?? 'action',
-    role: optionalEnumField(data.role, 'role', ROLE_IDS),
+    role: optionalString(data, 'role'),
     accountable: optionalString(data, 'accountable'),
     assignee: optionalString(data, 'assignee'),
     important: booleanField(data, 'important', false),

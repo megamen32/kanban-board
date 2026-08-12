@@ -49,4 +49,9 @@ describe('filesystem kanban contract', () => {
     expect(card?.project).toBe('legacy');
     expect(card?.assignees).toEqual([]);
   });
+
+  test('keeps legacy cards visible when their old priority label is no longer supported', async () => {
+    fs.writeFileSync(path.join(root, 'legacy-priority.md'), `---\nid: legacy-priority\ntitle: Legacy priority\nproject: personal\npriority: someday\n---\nBody`);
+    expect(store.readCardFile(path.join(root, 'legacy-priority.md'))?.priority).toBe('medium');
+  });
 });

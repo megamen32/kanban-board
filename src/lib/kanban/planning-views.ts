@@ -157,8 +157,8 @@ export function getRoleBalance(cards: KanbanCard[], now: string | Date = new Dat
   if (!week) return result;
 
   for (const card of cards) {
-    if (!card.role || !ROLE_IDS.includes(card.role)) continue;
-    const balance = result[card.role];
+    if (!card.role || !ROLE_IDS.includes(card.role as typeof ROLE_IDS[number])) continue;
+    const balance = result[card.role as RoleId];
     if (card.week === week && card.bigRock === true && card.needsReview !== true) balance.acceptedBigRocks.push(card.id);
     if (card.type === 'action' && ACTIVE_COLUMNS.has(card.column)) balance.activeActions.push(card.id);
   }

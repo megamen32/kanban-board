@@ -43,6 +43,8 @@ export async function POST(req: NextRequest) {
     const requested: KanbanCardUpdates = {};
     for (const [key, value] of Object.entries({
       title, description, column, priority, tags, project, assignees, dueAt,
+      owner: body.owner,
+      shared: body.shared,
       planningVersion: body.planningVersion,
       type: body.type,
       role: body.role,
@@ -97,7 +99,7 @@ export async function POST(req: NextRequest) {
       patch.dueAt || undefined,
     );
     const policyFields = [
-      'column', 'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
+      'column', 'owner', 'shared', 'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
       'week', 'bigRock', 'parent', 'scheduledAt', 'todayRank', 'source', 'needsReview',
       'suggestedAssignee', 'waitingFor', 'requiresApprovalFrom', 'completedBy', 'completedAt',
       'completionEvidence', 'approvalEvidence',
@@ -138,13 +140,11 @@ function validatePlanningFields(body: Record<string, unknown>): void {
   if (body.type !== undefined && body.type !== 'outcome' && body.type !== 'action') {
     throw new Error('Invalid planning field "type": expected outcome or action');
   }
-  const roleIds = [
-    'product-builder', 'client-integrator', 'team-lead', 'author-public',
-    'personal-relationships', 'sharpening-the-saw',
-  ] as const;
-  if (body.role !== undefined && (typeof body.role !== 'string' || !roleIds.includes(body.role as typeof roleIds[number]))) {
-    throw new Error(`Invalid planning field "role": expected one of ${roleIds.join(', ')}`);
+  if (body.role !== undefined && (typeof body.role !== 'string' || !body.role.trim())) {
+    throw new Error('Invalid planning field "role": expected a non-empty role ID');
   }
+  if (body.owner !== undefined && (typeof body.owner !== 'string' || !body.owner.trim())) throw new Error('Invalid owner');
+  if (body.shared !== undefined && typeof body.shared !== 'boolean') throw new Error('Invalid shared flag');
   for (const field of ['important', 'urgent', 'bigRock', 'needsReview']) {
     if (body[field] !== undefined && typeof body[field] !== 'boolean') {
       throw new Error(`Invalid planning field "${field}": expected a boolean`);

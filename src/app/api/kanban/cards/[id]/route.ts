@@ -44,6 +44,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const updates: KanbanCardUpdates = {};
     for (const [key, value] of Object.entries({
       title, description, column, priority, tags, order, project, assignees, dueAt,
+      owner: body.owner,
+      shared: body.shared,
       planningVersion: body.planningVersion,
       type: body.type,
       role: body.role,

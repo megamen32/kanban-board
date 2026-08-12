@@ -2,6 +2,23 @@ import type { KanbanCard } from '@/lib/kanban/types';
 import { getExecutionView, getInboxView, getRoleBalance, getTodayView, getWeekView, type RoleBalanceView } from '../../lib/kanban/planning-views';
 
 export type PlanningTab = 'execution' | 'inbox' | 'week' | 'today' | 'balance';
+export type WorkspaceView = 'mine' | 'shared' | 'all';
+
+/** Limits the shared Markdown store to the selected person's useful work. */
+export function filterWorkspaceCards(cards: KanbanCard[], person: string, view: WorkspaceView): KanbanCard[] {
+  if (view === 'all') return cards;
+  if (view === 'shared') return cards.filter(card => card.shared === true);
+  return cards.filter(card => card.owner === person
+    || card.assignees.includes(person)
+    || card.waitingFor?.includes(person)
+    || card.requiresApprovalFrom?.includes(person));
+}
+
+/** Discovers people already represented by card owners or assignments. */
+export function getPeople(cards: KanbanCard[]): string[] {
+  return [...new Set(cards.flatMap(card => [card.owner, ...card.assignees, ...(card.waitingFor ?? []), ...(card.requiresApprovalFrom ?? [])]).filter((value): value is string => Boolean(value?.trim())))]
+    .sort((left, right) => left.localeCompare(right, 'ru'));
+}
 
 /** Returns the cards shown by one planning tab, using the shared deterministic predicates. */
 export function getPlanningTabCards(cards: KanbanCard[], tab: PlanningTab, now: string | Date = new Date()): KanbanCard[] {

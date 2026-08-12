@@ -14,13 +14,15 @@ import { Skeleton } from '@/components/ui/skeleton';
 import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { TaskListView } from './task-list-view';
-import { filterCards, getAssigneeOptions, getProjectOptions } from './view-model';
+import { filterCards, filterWorkspaceCards, getAssigneeOptions, getPeople, getProjectOptions, type WorkspaceView } from './view-model';
 import { CardEditDialog } from './card-edit-dialog';
 import { NotificationSettings } from '@/components/notifications/notification-settings';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { getPlanningRoleBalance, getPlanningTabCards, type PlanningTab } from './view-model';
 import { PlanningCardList, RoleBalanceView, WeeklyPlanView } from './planning-views';
 import { getExecutionColumnCards } from './planning-views';
+import { RolesDialog } from './roles-dialog';
 
 export function KanbanBoard() {
   const { cards, loading, conflict, createCard, updateCard, deleteCard, moveCard, reorderColumn, resolveConflict, refresh, weeklyDraft, weeklyLoading, weeklyError, fetchWeeklyDraft, acceptWeeklyPlan } = useKanban();
@@ -33,6 +35,10 @@ export function KanbanBoard() {
   const [selectedCard, setSelectedCard] = useState<KanbanCard | null>(null);
   const [planningTab, setPlanningTab] = useState<PlanningTab>('execution');
   const [username, setUsername] = useState<string | null>(null);
+  const [person, setPerson] = useState('nikita');
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('mine');
+  const [showWelcome, setShowWelcome] = useState(false);
+  const [showRoles, setShowRoles] = useState(false);
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -43,9 +49,18 @@ export function KanbanBoard() {
     fetch('/api/auth/session').then(response => response.ok ? response.json() : null).then(data => setUsername(data?.username ?? null)).catch(() => setUsername(null));
   }, []);
 
+  useEffect(() => {
+    const savedPerson = window.localStorage.getItem('kanban-person');
+    const welcomed = window.localStorage.getItem('kanban-welcomed');
+    if (savedPerson) setPerson(savedPerson);
+    else setShowWelcome(true);
+    if (!welcomed) setShowWelcome(true);
+  }, []);
+
   const projectOptions = getProjectOptions(cards);
   const assigneeOptions = useMemo(() => getAssigneeOptions(cards), [cards]);
-  const visibleCards = filterCards(cards, project, assignee).filter(card => !inboxOnly || card.column === 'inbox');
+  const people = useMemo(() => getPeople(cards), [cards]);
+  const visibleCards = filterWorkspaceCards(filterCards(cards, project, assignee), person, workspaceView).filter(card => !inboxOnly || card.column === 'inbox');
 
   useEffect(() => {
     if (assignee !== 'all' && !assigneeOptions.includes(assignee)) setAssignee('all');
@@ -99,6 +114,14 @@ export function KanbanBoard() {
             </div>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
+            <select aria-label="Кто вы" value={person} onChange={event => { setPerson(event.target.value); window.localStorage.setItem('kanban-person', event.target.value); }} className="h-8 max-w-[130px] rounded-md border bg-background px-2 text-xs">
+              {people.length === 0 && <option value="nikita">nikita</option>}
+              {people.map(item => <option key={item} value={item}>{item}</option>)}
+            </select>
+            <div className="flex rounded-md border p-0.5">
+              {([['mine', 'Моё'], ['shared', 'Общее'], ['all', 'Всё']] as const).map(([value, label]) => <Button key={value} variant={workspaceView === value ? 'secondary' : 'ghost'} size="sm" className="h-7 px-2 text-xs" onClick={() => setWorkspaceView(value)}>{label}</Button>)}
+            </div>
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => setShowRoles(true)}>Роли</Button>
             <select aria-label="Фильтр проекта" value={project} onChange={event => setProject(event.target.value)} className="h-8 min-w-0 max-w-[150px] rounded-md border bg-background px-2 text-xs">
               <option value="all">Все проекты</option>
               {projectOptions.map(option => <option key={option} value={option}>{option}</option>)}
@@ -156,6 +179,18 @@ export function KanbanBoard() {
         <AddCardDialog open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={createCard} />
         {selectedCard && <CardEditDialog card={selectedCard} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} />}
         {conflict && <ConflictDialog conflict={conflict} onResolve={resolveConflict} />}
+        <Dialog open={showWelcome} onOpenChange={setShowWelcome}>
+          <DialogContent className="sm:max-w-md" showCloseButton={false}>
+            <DialogHeader><DialogTitle>Ты кто?</DialogTitle></DialogHeader>
+            <p className="text-sm text-muted-foreground">Списки дел быстро становятся свалкой. Выбирай до трёх действий на сегодня; остальное — Inbox, неделя или Someday.</p>
+            <select aria-label="Выберите себя" value={person} onChange={event => setPerson(event.target.value)} className="h-10 rounded-md border bg-background px-3">
+              {people.length === 0 && <option value="nikita">nikita</option>}
+              {people.map(item => <option key={item} value={item}>{item}</option>)}
+            </select>
+            <DialogFooter><Button onClick={() => { window.localStorage.setItem('kanban-person', person); window.localStorage.setItem('kanban-welcomed', '1'); setWorkspaceView('mine'); setShowWelcome(false); }}>Показать мои задачи</Button></DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <RolesDialog owner={person} open={showRoles} onOpenChange={setShowRoles} />
       </DndProvider>
     </CardActionsContext.Provider>
   );

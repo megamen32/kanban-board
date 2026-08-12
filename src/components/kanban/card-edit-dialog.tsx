@@ -9,8 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { X, Plus, Trash2 } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DEFAULT_COLUMNS, PRIORITY_COLORS } from '@/lib/kanban/types';
-import type { KanbanCard, Priority, KanbanColumn, PlanningType, RoleId } from '@/lib/kanban/types';
-import { ROLE_IDS } from '@/lib/kanban/types';
+import type { KanbanCard, Priority, KanbanColumn, PlanningType } from '@/lib/kanban/types';
 import { fromDateTimeLocalValue, toDateTimeLocalValue } from '@/lib/kanban/date-input';
 import type { KanbanUpdateRequest } from '@/hooks/use-kanban';
 
@@ -24,7 +23,7 @@ interface Props {
 
 export interface PlanningMetadataForm {
   type: PlanningType | '';
-  role: RoleId | '';
+  role: string;
   important: boolean;
   urgent: boolean;
   scheduledAt: string;
@@ -174,7 +173,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
             <label className="text-sm font-medium">Планирование</label>
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-muted-foreground">Тип<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.type} onChange={e => setPlanning({ ...planning, type: e.target.value as PlanningType | '' })}><option value="">Не выбран</option><option value="action">Действие</option><option value="outcome">Результат</option></select></label>
-              <label className="text-xs text-muted-foreground">Роль<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.role} onChange={e => setPlanning({ ...planning, role: e.target.value as RoleId | '' })}><option value="">Не выбрана</option>{ROLE_IDS.map(role => <option key={role} value={role}>{role}</option>)}</select></label>
+              <label className="text-xs text-muted-foreground">Роль<Input className="mt-1" placeholder="Из «Роли»" value={planning.role} onChange={e => setPlanning({ ...planning, role: e.target.value })} /></label>
             </div>
             <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><Checkbox checked={planning.important} onCheckedChange={value => setPlanning({ ...planning, important: value === true })} /> Важно</label><label className="flex items-center gap-2"><Checkbox checked={planning.urgent} onCheckedChange={value => setPlanning({ ...planning, urgent: value === true })} /> Срочно</label></div>
             <div className="grid grid-cols-2 gap-3"><label className="text-xs text-muted-foreground">Планировать на дату<Input className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
