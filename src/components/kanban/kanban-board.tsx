@@ -23,6 +23,7 @@ import { getPlanningRoleBalance, getPlanningTabCards, type PlanningTab } from '.
 import { PlanningCardList, RoleBalanceView, WeeklyPlanView } from './planning-views';
 import { getExecutionColumnCards } from './planning-views';
 import { RolesDialog } from './roles-dialog';
+import { InboxCapture } from './inbox-capture';
 
 export function KanbanBoard() {
   const { cards, loading, conflict, createCard, updateCard, deleteCard, moveCard, reorderColumn, resolveConflict, refresh, weeklyDraft, weeklyLoading, weeklyError, fetchWeeklyDraft, acceptWeeklyPlan } = useKanban();
@@ -168,7 +169,7 @@ export function KanbanBoard() {
           </div>
             )}
           </TabsContent>
-          <TabsContent value="inbox" className="min-h-0 overflow-y-auto p-3 sm:p-6"><PlanningCardList cards={derivedCards} onOpen={setSelectedCard} empty="Inbox пока пуст" /></TabsContent>
+          <TabsContent value="inbox" className="min-h-0 overflow-y-auto space-y-3 p-3 sm:p-6"><InboxCapture owner={person} onCaptured={refresh} /><PlanningCardList cards={derivedCards} onOpen={setSelectedCard} empty="Inbox пока пуст" /></TabsContent>
           <TabsContent value="week" className="min-h-0 overflow-y-auto p-3 sm:p-6"><WeeklyPlanView cards={visibleCards} draft={weeklyDraft} loading={weeklyLoading} error={weeklyError} canAccept={username === 'nikita'} onLoad={() => void fetchWeeklyDraft()} onAccept={ids => acceptWeeklyPlan(ids)} onOpen={setSelectedCard} /></TabsContent>
           <TabsContent value="today" className="min-h-0 overflow-y-auto p-3 sm:p-6"><PlanningCardList cards={derivedCards} onOpen={setSelectedCard} empty="На сегодня задач нет" /></TabsContent>
           <TabsContent value="balance" className="min-h-0 overflow-y-auto p-3 sm:p-6"><RoleBalanceView balance={roleBalance} /></TabsContent>

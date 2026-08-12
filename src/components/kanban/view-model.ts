@@ -16,8 +16,15 @@ export function filterWorkspaceCards(cards: KanbanCard[], person: string, view: 
 
 /** Discovers people already represented by card owners or assignments. */
 export function getPeople(cards: KanbanCard[]): string[] {
-  return [...new Set(cards.flatMap(card => [card.owner, ...card.assignees, ...(card.waitingFor ?? []), ...(card.requiresApprovalFrom ?? [])]).filter((value): value is string => Boolean(value?.trim())))]
+  return [...new Set(cards.flatMap(card => [card.owner, ...card.assignees, ...(card.waitingFor ?? []), ...(card.requiresApprovalFrom ?? [])])
+    .filter((value): value is string => Boolean(value?.trim()))
+    .map(normalizePerson))]
     .sort((left, right) => left.localeCompare(right, 'ru'));
+}
+
+/** Keeps the historic Cyrillic spelling of the board owner on the same person. */
+function normalizePerson(value: string): string {
+  return value.trim() === 'Никита' ? 'nikita' : value.trim();
 }
 
 /** Returns the cards shown by one planning tab, using the shared deterministic predicates. */

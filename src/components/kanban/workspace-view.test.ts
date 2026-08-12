@@ -24,6 +24,6 @@ describe('personal and shared workspace views', () => {
   });
 
   it('discovers people from owners and assignments for the first-entry picker', () => {
-    expect(getPeople(cards)).toEqual(['marina', 'nikita']);
+    expect(getPeople([...cards, card('cyrillic-nikita', { assignees: ['Никита'] })])).toEqual(['marina', 'nikita']);
   });
 });

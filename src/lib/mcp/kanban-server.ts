@@ -207,6 +207,21 @@ export function createKanbanMcpServer(scope: BoardScope): McpServer {
     return textResult({ card, scope });
   });
 
+  server.registerTool('kanban.capture_inbox', {
+    title: 'Capture raw transcript to Inbox',
+    description: 'Store one raw voice transcription or note in Inbox. Do not classify it, assign a role, invent a deadline, or move any existing card.',
+    inputSchema: { transcript: z.string().min(1), owner: z.string().min(1).optional() },
+    annotations: { openWorldHint: false },
+  }, async ({ transcript, owner }) => {
+    const clean = transcript.trim();
+    const basic = createCard(clean.replace(/\s+/g, ' ').slice(0, 96), clean, 'inbox', 'medium', ['inbox-capture'], 'Inbox', [], tasksDir);
+    const result = updateCard(basic.id, {
+      owner: owner ?? 'nikita', source: 'hermes:transcript', needsReview: true,
+    }, undefined, tasksDir);
+    if ('conflict' in result) throw new Error(`Version conflict for ${basic.id}`);
+    return textResult({ card: result, scope, transition: 'captured_to_inbox' });
+  });
+
   server.registerTool('kanban.change', {
     title: 'Create or update a Kanban card',
     description: 'Create a card or update an existing card in the authorized board.',

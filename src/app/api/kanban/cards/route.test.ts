@@ -193,16 +193,14 @@ describe('POST /api/kanban/cards', () => {
     );
   });
 
-  it('rejects invalid planning fields before createCard can write a file', async () => {
+  it('accepts a personal role label rather than a global hardcoded role', async () => {
     const response = await POST(new NextRequest('http://localhost/api/kanban/cards', {
       method: 'POST',
-      body: JSON.stringify({ title: 'Invalid role', project: 'Work', role: 'not-a-role' }),
+      body: JSON.stringify({ title: 'Personal role', project: 'Work', role: 'Client success' }),
       headers: { 'content-type': 'application/json' },
     }));
 
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: expect.stringContaining('role') });
-    expect(createCard).not.toHaveBeenCalled();
-    expect(updateCard).not.toHaveBeenCalled();
+    expect(response.status).toBe(201);
+    expect(createCard).toHaveBeenCalled();
   });
 });
