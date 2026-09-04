@@ -1,6 +1,6 @@
 # Менеджер: общая память человека и управление Kanban
 
-Status: work
+Status: done
 Started at 2026-09-05T00:16:39+03:00 (manual clock)
 Original estimate: minimum 45 / maximum 90 active minutes
 Active-time source: не контролировал непрерывно
@@ -36,4 +36,7 @@ Active-time source: не контролировал непрерывно
 - Person-memory regression: red before fix; focused manager suite 10/10 green after fix.
 - Excode manager-credential route tests: red 3/18 before implementation; green 18/18 after implementation.
 - Excode build and lint pass. Full suite is 136/139 with three pre-existing contract-test failures in MCP tool inventory, data-scope caching, and legacy role validation; none touch this slice.
-- Deployment and real canary pending.
+- Implementation commit: `2104603`.
+- Deployed `excode-kanban-1`; live manager-created card appeared under «Никита Розанов» on `https://excode.bezrabotnyi.com` in a visible Chrome session.
+- Browser evidence: `.agents/artifacts/2026-09-05-manager-kanban-final.png`.
+- Canary card was deleted after proof; live API confirmed `remains=false` and zero `CANARY` cards.
