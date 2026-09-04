@@ -18,7 +18,13 @@ KANBAN_SETUP_TOKEN=<one-time setup token>
 KANBAN_OAUTH_CLIENT_ID=chatgpt-kanban
 KANBAN_OAUTH_CLIENT_SECRET=<random client secret>
 KANBAN_OAUTH_REDIRECT_URIS=<exact ChatGPT OAuth callback URI>
+# Dedicated work-board capability used only by the Exmanager service.
+KANBAN_MANAGER_TOKEN=<random service secret>
 ```
+
+`KANBAN_MANAGER_TOKEN` authorizes assignment changes only on the configured
+work board. It does not create a human session or weaken ChatGPT OAuth; deadline,
+weekly-plan, and completion transition policies still apply.
 
 Use a separate `KANBAN_AUTH_SECRET` and setup token in
 `/home/roomhacker/todo-kanban/personal-auth/runtime.env`. Never commit these

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { findCardById, updateCard, deleteCard } from '@/lib/kanban/file-store';
 import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
-import { boardIdentityFromRequest, identityFromRequest } from '@/lib/auth/request';
+import { boardIdentityFromRequest, identityFromRequest, managerRequestAuthorized } from '@/lib/auth/request';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { normalizeDueAt } from '@/lib/kanban/due-at';
 import { dispatchCardEvent } from '@/lib/notifications/push';
@@ -24,6 +24,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     startDueReminderScheduler();
     const identity = boardIdentityFromRequest(req);
     const authenticatedIdentity = identityFromRequest(req);
+    const managerAuthorized = identity.scope === 'work' && managerRequestAuthorized(req);
     const tasksDir = tasksDirForScope(identity.scope);
     const body = await req.json();
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -68,8 +69,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
     const decision = validateTransition(existing, updates, {
       origin: authenticatedIdentity ? 'human-ui' : 'automation',
-      actor: authenticatedIdentity?.username ?? identity.username,
-      ...(authenticatedIdentity?.username === 'nikita'
+      actor: managerAuthorized ? 'manager' : authenticatedIdentity?.username ?? identity.username,
+      ...(managerAuthorized
+        ? {
+            ownerAuthorization: {
+              actor: 'nikita',
+              evidence: { type: 'direct-owner-command', origin: 'manager-service', actor: 'nikita' },
+            },
+          }
+        : authenticatedIdentity?.username === 'nikita'
         && body.reassignmentIntent === 'direct-owner-command'
         && body.reassignmentEvidence
         && typeof body.reassignmentEvidence === 'object'

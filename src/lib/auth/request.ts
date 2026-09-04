@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { AuthStore, type OAuthAccess } from './store';
 import { uiScope } from './config';
 import type { BoardScope } from './scopes';
@@ -35,4 +36,14 @@ export function identityFromRequest(request: NextRequest): RequestIdentity | nul
  */
 export function boardIdentityFromRequest(request: NextRequest): RequestIdentity {
   return identityFromRequest(request) ?? { username: ANONYMOUS_USERNAME, scope: uiScope() };
+}
+
+/** Authenticate the narrow service-to-service manager capability. */
+export function managerRequestAuthorized(request: NextRequest): boolean {
+  const expected = process.env.KANBAN_MANAGER_TOKEN?.trim();
+  const provided = request.headers.get('x-kanban-manager-token')?.trim();
+  if (!expected || !provided) return false;
+  const expectedHash = createHash('sha256').update(expected).digest();
+  const providedHash = createHash('sha256').update(provided).digest();
+  return timingSafeEqual(expectedHash, providedHash);
 }

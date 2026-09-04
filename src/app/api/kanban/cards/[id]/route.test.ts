@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KanbanCard } from '@/lib/kanban/types';
 
-const { findCardById, updateCard, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated } = vi.hoisted(() => ({
+const { findCardById, updateCard, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated, managerAuthorized } = vi.hoisted(() => ({
   findCardById: vi.fn(),
   updateCard: vi.fn(),
   validateTransition: vi.fn(),
@@ -11,6 +11,7 @@ const { findCardById, updateCard, validateTransition, dispatchCardEvent, startDu
   tasksDirForScope: vi.fn(),
   identity: { current: { username: 'nikita', scope: 'work' as const } },
   authenticated: { current: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' } | null },
+  managerAuthorized: { current: false },
 }));
 
 vi.mock('@/lib/kanban/file-store', () => ({ findCardById, updateCard, deleteCard: vi.fn() }));
@@ -19,6 +20,7 @@ vi.mock('@/lib/kanban/transition-policy', () => ({ validateTransition, NIKITA_AC
 vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => identity.current,
   identityFromRequest: () => authenticated.current,
+  managerRequestAuthorized: () => managerAuthorized.current,
 }));
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope }));
 vi.mock('@/lib/notifications/push', () => ({ dispatchCardEvent }));
@@ -47,6 +49,7 @@ describe('PATCH /api/kanban/cards/[id]', () => {
     vi.clearAllMocks();
     identity.current = { username: 'nikita', scope: 'work' };
     authenticated.current = { username: 'nikita', scope: 'work' };
+    managerAuthorized.current = false;
     tasksDirForScope.mockReturnValue('/scoped/work');
     findCardById.mockReturnValue(existingCard);
     updateCard.mockReturnValue({ ...existingCard, version: 3 });
@@ -130,6 +133,29 @@ describe('PATCH /api/kanban/cards/[id]', () => {
       { origin: 'automation', actor: 'anonymous' },
     );
     expect(updateCard).not.toHaveBeenCalled();
+  });
+
+  it('authorizes manager-service reassignment with server-owned evidence', async () => {
+    identity.current = { username: 'anonymous', scope: 'work' };
+    authenticated.current = null;
+    managerAuthorized.current = true;
+    validateTransition.mockReturnValue({ kind: 'accepted', patch: { assignees: ['nikita'] } });
+
+    const response = await PATCH(new NextRequest('http://localhost/api/kanban/cards/card-1', {
+      method: 'PATCH',
+      body: JSON.stringify({ assignees: ['nikita'] }),
+      headers: { 'content-type': 'application/json', 'x-kanban-manager-token': 'opaque' },
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+
+    expect(response.status).toBe(200);
+    expect(validateTransition).toHaveBeenCalledWith(existingCard, expect.objectContaining({ assignees: ['nikita'] }), expect.objectContaining({
+      origin: 'automation',
+      actor: 'manager',
+      ownerAuthorization: {
+        actor: 'nikita',
+        evidence: expect.objectContaining({ type: 'direct-owner-command', origin: 'manager-service' }),
+      },
+    }));
   });
 
   it('returns 400 and does not persist an inferred deadline', async () => {

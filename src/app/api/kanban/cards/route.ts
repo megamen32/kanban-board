@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllCards, createCard, updateCard } from '@/lib/kanban/file-store';
 import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
-import { boardIdentityFromRequest, identityFromRequest } from '@/lib/auth/request';
+import { boardIdentityFromRequest, identityFromRequest, managerRequestAuthorized } from '@/lib/auth/request';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { normalizeDueAt } from '@/lib/kanban/due-at';
 import { dispatchCardEvent } from '@/lib/notifications/push';
@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
     startDueReminderScheduler();
     const identity = boardIdentityFromRequest(req);
     const authenticatedIdentity = identityFromRequest(req);
+    const managerAuthorized = identity.scope === 'work' && managerRequestAuthorized(req);
     const body = await req.json();
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return NextResponse.json({ error: 'request body must be an object' }, { status: 400 });
@@ -72,9 +73,16 @@ export async function POST(req: NextRequest) {
     } as KanbanCard;
     const decision = validateTransition(candidate, requested, {
       origin: authenticatedIdentity ? 'human-ui' : 'automation',
-      actor: authenticatedIdentity?.username ?? identity.username,
+      actor: managerAuthorized ? 'manager' : authenticatedIdentity?.username ?? identity.username,
       isCreation: true,
-      ...(authenticatedIdentity?.username === NIKITA_ACTOR && hasRequestedAssignee(body)
+      ...(managerAuthorized && hasRequestedAssignee(body)
+        ? {
+            ownerAuthorization: {
+              actor: NIKITA_ACTOR,
+              evidence: { type: 'direct-owner-command', origin: 'manager-service', actor: NIKITA_ACTOR },
+            },
+          }
+        : authenticatedIdentity?.username === NIKITA_ACTOR && hasRequestedAssignee(body)
         ? {
             ownerAuthorization: {
               actor: NIKITA_ACTOR,

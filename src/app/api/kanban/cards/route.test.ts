@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KanbanCard } from '@/lib/kanban/types';
 
-const { createCard, updateCard, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated } = vi.hoisted(() => ({
+const { createCard, updateCard, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated, managerAuthorized } = vi.hoisted(() => ({
   createCard: vi.fn(),
   updateCard: vi.fn(),
   validateTransition: vi.fn(),
@@ -11,6 +11,7 @@ const { createCard, updateCard, validateTransition, dispatchCardEvent, startDueR
   tasksDirForScope: vi.fn(),
   identity: { current: { username: 'nikita', scope: 'work' as const } },
   authenticated: { current: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' } | null },
+  managerAuthorized: { current: false },
 }));
 
 vi.mock('@/lib/kanban/file-store', () => ({ createCard, updateCard, getAllCards: vi.fn() }));
@@ -19,6 +20,7 @@ vi.mock('@/lib/kanban/transition-policy', () => ({ validateTransition, NIKITA_AC
 vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => identity.current,
   identityFromRequest: () => authenticated.current,
+  managerRequestAuthorized: () => managerAuthorized.current,
 }));
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope }));
 vi.mock('@/lib/notifications/push', () => ({ dispatchCardEvent }));
@@ -47,6 +49,7 @@ describe('POST /api/kanban/cards', () => {
     vi.clearAllMocks();
     identity.current = { username: 'nikita', scope: 'work' };
     authenticated.current = { username: 'nikita', scope: 'work' };
+    managerAuthorized.current = false;
     tasksDirForScope.mockReturnValue('/scoped/work');
     createCard.mockReturnValue(createdCard);
     updateCard.mockReturnValue(createdCard);
@@ -122,6 +125,30 @@ describe('POST /api/kanban/cards', () => {
       isCreation: true,
     });
     expect(createCard).not.toHaveBeenCalled();
+  });
+
+  it('authorizes manager-service assignment while retaining automation transition rules', async () => {
+    identity.current = { username: 'anonymous', scope: 'work' };
+    authenticated.current = null;
+    managerAuthorized.current = true;
+    validateTransition.mockReturnValue({ kind: 'accepted', patch: { assignees: ['marina'] } });
+
+    const response = await POST(new NextRequest('http://localhost/api/kanban/cards', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'Delegated by manager', project: 'Work', assignees: ['marina'] }),
+      headers: { 'content-type': 'application/json', 'x-kanban-manager-token': 'opaque' },
+    }));
+
+    expect(response.status).toBe(201);
+    expect(validateTransition.mock.calls[0][2]).toEqual(expect.objectContaining({
+      origin: 'automation',
+      actor: 'manager',
+      isCreation: true,
+      ownerAuthorization: {
+        actor: 'nikita',
+        evidence: expect.objectContaining({ type: 'direct-owner-command', origin: 'manager-service' }),
+      },
+    }));
   });
 
   it('does not pass client completion or approval evidence to policy', async () => {
