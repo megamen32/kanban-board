@@ -1,5 +1,6 @@
 services:
   kanban:
+    restart: unless-stopped
     image: local/kanban-board:latest
     env_file:
       - /home/roomhacker/todo-kanban/work-auth/runtime.env
