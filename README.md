@@ -11,14 +11,20 @@ screen, and backed by Markdown files you can inspect or edit directly.
 
 - Mobile list view and desktop Kanban with drag-and-drop.
 - Project and role filters, including “show only my cards”.
-- Two-way Markdown sync, stable card IDs, tags, priorities, and six columns.
+- Two-way Markdown sync, stable card IDs, tags, priorities, and eight columns.
 - Conflict-aware edits when the UI and a file change at the same time.
-- Agent-ready scoped OAuth/OpenAPI access for explicit work and personal data.
+- Agent access through authenticated Streamable HTTP MCP and OAuth/OpenAPI.
 
 ![My Kanban on desktop](docs/screenshots/kanban-board.png)
 
 The product direction is mobile-first and agent-first. With Web Push configured,
 the PWA can send subscribed devices automatic card and deadline notifications.
+
+For the existing server-100 Todo deployment, read [AGENTS.md](AGENTS.md),
+[DEPLOYMENT.md](DEPLOYMENT.md), [AUTH.md](AUTH.md), and
+[CODE_DATA_SPLIT.md](CODE_DATA_SPLIT.md). The live Compose project builds this
+checkout from `/home/roomhacker/services/kanban-board`; the current configured
+board uses one shared work store.
 
 ## Web Push configuration
 

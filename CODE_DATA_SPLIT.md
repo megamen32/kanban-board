@@ -1,29 +1,28 @@
-# Code/data split
+# Code and task-data ownership
 
-This checkout contains the Kanban application code only.
+`/home/roomhacker/excode` contains application code for the Todo board. Its
+public remote is `megamen32/kanban-board`. Runtime Markdown data belongs to the
+private `megamen32/todo-kanban-data` repository at `/home/roomhacker/todo-kanban`.
+Do not copy `tasks/`, `work-tasks/`, `personal-tasks/`, `private/`, `.trash/`,
+auth state, runtime databases, or tokens into this public code checkout.
 
-Runtime task data stays in the private data repository:
+The active Todo deployment is the Compose project
+`/home/roomhacker/services/kanban-board`, building this checkout. It mounts
+`work-tasks` as `/app/data/scopes/work` and `work-auth` as `/app/data/auth`.
+The live container additionally retains a legacy `/app/data/tasks` mount;
+see `DEPLOYMENT.md`. A second hostname or Compose file is not evidence of an
+active independent personal board.
 
-```text
-/home/roomhacker/todo-kanban/tasks -> /app/data/tasks
-```
-
-The work deployment mounts `/home/roomhacker/todo-kanban/work-tasks` as the
-`work` scope and `/home/roomhacker/todo-kanban/personal-tasks` as the explicit
-`personal` scope, plus a separate auth-state directory. The personal
-deployment mounts only its personal scope and its own auth state. Do not copy
-`tasks/`, `private/`, `.trash/`, auth state, or runtime databases into this code
-repository.
-
-The public code repository is `megamen32/kanban-board`; the private data
-repository is `megamen32/todo-kanban-data`. Both production Compose projects
-build the same `local/kanban-board:latest` image from this checkout; scope
-mounts and auth state remain separate. `scripts/update-code.sh` accepts
-only a clean fast-forward from `origin/main`, so a code refresh cannot overwrite
-local changes or the mounted task data.
+With `KANBAN_SCOPE_ROOT` configured, the current `tasksDirForScope` maps both
+scope labels to the shared work directory. Employee selection filters that
+shared board. Do not document or depend on work/personal filesystem isolation
+until the implementation and a real cross-scope denial check prove it.
 
 ## Code update contract
 
-The checkout is intended to track the public code remote on `main`. A future
-deployment hook may run a guarded fast-forward update of this checkout; it must
-never overwrite the private data path.
+Track the public remote on `main`. `scripts/update-code.sh` accepts only a clean
+fast-forward from `origin/main`; a code refresh must not overwrite local work
+or mounted task data. Keep source updates separate from data backup/recovery.
+Never use an old deployment copy or an image tag alone to identify the running
+source revision. Verify the live Compose build context and image before a
+release claim.

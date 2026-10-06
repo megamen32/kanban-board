@@ -1,69 +1,68 @@
-# Kanban auth and ChatGPT OAuth
+# Todo authentication and MCP
 
-The human-facing work board is currently public: the UI and its default work
-scope can be used without a password. A session cookie or scoped bearer token
-still selects an authenticated identity, and the ChatGPT OAuth authorization
-screen remains login-gated. The work deployment is the primary ChatGPT
-integration and mounts both data roots as named scopes. The personal deployment
-mounts only the personal root.
+The existing task panel is `https://todo.bezrabotnyi.com/`. Its public UI is
+protected by the outer `auth.bezrabotnyi.com` cookie gateway. Inside the app,
+the shared work-board UI can render without a Kanban password; that fallback
+does **not** authorize MCP. `/mcp` uses authenticated identity only.
 
-## Runtime secrets
+## The current MCP contract
 
-Create an untracked file at `/home/roomhacker/todo-kanban/work-auth/runtime.env`
-with:
+`POST /mcp` is the Next application's stateless Streamable HTTP MCP endpoint.
+It accepts JSON-RPC with an authenticated Kanban session cookie or an AuthStore
+Bearer token. Missing credentials return 401; authenticated GET/DELETE return
+405 because this endpoint uses POST. Verify initialize and tools/list rather
+than treating a healthy web page or a REST `/health` as MCP proof.
 
-```dotenv
-KANBAN_AUTH_SECRET=<random value of at least 32 characters>
-KANBAN_SETUP_TOKEN=<one-time setup token>
-KANBAN_OAUTH_CLIENT_ID=chatgpt-kanban
-KANBAN_OAUTH_CLIENT_SECRET=<random client secret>
-KANBAN_OAUTH_REDIRECT_URIS=<exact ChatGPT OAuth callback URI>
-# Dedicated work-board capability used only by the Exmanager service.
-KANBAN_MANAGER_TOKEN=<random service secret>
-```
+The public routing contract is `https://todo.bezrabotnyi.com/mcp` → the current
+app on host port 43327. The corrected route was verified on 2026-10-06 to return application JSON 401
+without credentials; authorized Airlock acceptance remains pending. The former
+route targeted the separate legacy REST
+listener on 8767, which does not implement this transport. That service remains
+available for audited legacy callers; it is not the Airlock connector.
 
-`KANBAN_MANAGER_TOKEN` authorizes assignment changes only on the configured
-work board. It does not create a human session or weaken ChatGPT OAuth; deadline,
-weekly-plan, and completion transition policies still apply.
+Current source exposes `kanban.list`, `kanban.read`, `kanban.capture_inbox`,
+`kanban.change`, and `kanban.delete`. Check the deployed tools/list after a
+release. Read before editing and preserve `expectedVersion`, assignment,
+approval, deadline, weekly-plan, and completion transition policies.
 
-Use a separate `KANBAN_AUTH_SECRET` and setup token in
-`/home/roomhacker/todo-kanban/personal-auth/runtime.env`. Never commit these
-files or put secrets in the public code repository.
+## X-manager service connection
 
-## First setup
+X-manager declares the board with native Airlock `RegisterMCP`. The connector
+is callback-bound: employees use X-manager's authorized tools, rather than
+receiving the shared service token or unrestricted board MCP access. X-manager
+checks the caller, team membership, allowed projects, and authorized writes.
+Airlock core and the board UI remain unchanged.
 
-Call the setup endpoint once over the protected HTTPS host, supplying the setup
-token in `X-Kanban-Setup-Token` and a password of at least 12 characters. If no
-`totpSecret` is supplied, the response returns a one-time secret and `otpauth`
-URI to add to an authenticator app. The setup endpoint refuses a second owner.
+The work service Bearer is issued by the existing `AuthStore` API, with its
+existing 30-day access-token lifetime. Kanban persists only its hash in
+`/home/roomhacker/todo-kanban/work-auth/state.json`; Airlock stores the actual
+token encrypted in the bound MCP resource. It is not a new human login,
+password, setup owner, or TOTP account. Do not paste the token into chat, source,
+a task archive, or command output. The rotation procedure is documented in
+`/home/roomhacker/agents-projects/exmanager/docs/todo-mcp.md`.
 
-```text
-POST /api/auth/setup
-X-Kanban-Setup-Token: <setup token>
-{"username":"<owner>","password":"<password>"}
-```
+`KANBAN_MANAGER_TOKEN` is a separate REST assignment capability: it does not
+create a human session and is not an MCP Bearer token. Do not use it as a
+substitute for AuthStore identity.
 
-The owner then logs in with password plus a six-digit TOTP code. The browser
-login creates an HttpOnly session cookie.
+## Scope and employee selection
 
-## ChatGPT plugin OAuth
+The current `tasksDirForScope` maps scope labels to the shared work store when
+`KANBAN_SCOPE_ROOT` is set. Work/personal labels are not proof of filesystem
+isolation in this deployment. X-manager must use work scope and enforce its
+own employee/project boundaries. The board's person selector and Mine/Shared/
+All are presentation filters over that shared store, not per-person server ACLs.
 
-For a GPT Action, import the OpenAPI schema from
-`https://excode.bezrabotnyi.com/openapi.json`. The Action editor supplies the
-OAuth callback URL; copy that exact URL into `KANBAN_OAUTH_REDIRECT_URIS` (do
-not invent or generalize it). Configure OAuth with the client ID and secret
-from `KANBAN_OAUTH_CLIENT_ID` and `KANBAN_OAUTH_CLIENT_SECRET`.
+## Protected runtime configuration
 
-Configure the plugin with:
+The active environment file is
+`/home/roomhacker/todo-kanban/work-auth/runtime.env`. It may contain
+`KANBAN_AUTH_SECRET`, `KANBAN_SETUP_TOKEN`, `KANBAN_MANAGER_TOKEN`, and OAuth
+client settings. Auth state and private task data stay outside the public code
+repository. Never print resolved environment or auth state.
 
-```text
-authorize: /oauth/authorize
-token:     /oauth/token
-scopes:    kanban:work kanban:personal
-revoke:    /oauth/revoke
-```
-
-The authorize screen defaults to `kanban:work` and requires explicit consent
-for `kanban:personal`. Authorization codes are one-time, bearer tokens are
-stored only as hashes, and each token resolves exactly one data root. A work
-token cannot read personal cards, and query parameters cannot change its scope.
+The existing OAuth routes are `/oauth/authorize`, `/oauth/token`, and
+`/oauth/revoke`; OpenAPI is `/openapi.json` on the current host. OAuth redirect
+URIs must exactly match the actual client callback. Existing one-time setup and
+password/TOTP login are for human OAuth consent, not prerequisites to recreate
+for the service connection. Never reset a configured owner to attach Airlock.

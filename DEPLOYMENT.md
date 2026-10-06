@@ -1,11 +1,53 @@
-# Runtime layout
+# Todo runtime and deployment
 
-The app is exposed through one external port (`43327` in the deployment override). Inside the container:
+Verified on server-100 on 2026-10-06. Infrastructure discovery starts in
+`/home/roomhacker/ServersAdministartion`; its service card is
+`docs/inventory/sites/todo.md`.
 
-- gateway: `3000` (published externally);
-- Next standalone app: `3001`;
-- Socket.IO watcher: `3003`.
+| Responsibility | Location |
+| --- | --- |
+| Public task board | `https://todo.bezrabotnyi.com/` |
+| Application source | `/home/roomhacker/excode`, `megamen32/kanban-board` |
+| Live Compose project | `/home/roomhacker/services/kanban-board` |
+| Compose files | `docker-compose.yml` + `docker-compose.deploy.yml` in that project |
+| Runtime | `kanban-board-kanban-1`, image `local/kanban-board:latest` |
+| Upstream | Host `43327` → container gateway `3000` |
+| Active tasks | `/home/roomhacker/todo-kanban/work-tasks` → `/app/data/scopes/work` |
+| Auth state | `/home/roomhacker/todo-kanban/work-auth` → `/app/data/auth` |
+| Protected environment | `/home/roomhacker/todo-kanban/work-auth/runtime.env` |
 
-The gateway accepts `?XTransformPort=3003` only for the Socket.IO service; all other HTTP requests go to Next. This keeps the browser's same-origin relative URLs working while exposing only one host port.
+The deployment project's old source tree is not authoritative: its override
+sets `build.context: /home/roomhacker/excode`. This checkout's own deployment
+override on port `43328` belongs to an old, separate deployment; do not use it
+as a Todo restart command. Docker labels alone cannot prove the source path.
 
-The deployment override mounts `/home/roomhacker/todo-kanban/tasks` into `/app/data/tasks`.
+## Start and inspect the existing deployment
+
+Only after reviewing the source, foreign changes, project budget, and intended
+runtime change, use the explicit live project:
+
+```bash
+cd /home/roomhacker/services/kanban-board
+docker compose -f docker-compose.yml -f docker-compose.deploy.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.deploy.yml up -d --build kanban
+docker compose -f docker-compose.yml -f docker-compose.deploy.yml ps
+curl -fsS -o /dev/null http://127.0.0.1:43327/
+```
+
+Do not dump `docker compose config` without `--quiet`: it can resolve secrets.
+The existing runtime restart policy is `unless-stopped`. A rebuild is not needed
+for an ingress-only MCP correction or Airlock credential binding.
+
+## Why there is one external port
+
+`docker-entrypoint.sh` starts a gateway on `3000`, the Next standalone app on
+`3001`, and a Socket.IO watcher on `3003`, and exits if one child fails.
+The gateway forwards normal HTTP, including Next's `/mcp`, to the app. It
+accepts `?XTransformPort=3003` for Socket.IO. This keeps browser relative URLs
+and live updates on the same origin without publishing three host ports.
+
+The live runtime also retains an old personal-data mount at `/app/data/tasks`.
+It is not the active shared work path while `KANBAN_SCOPE_ROOT=/app/data/scopes`.
+Do not remove legacy mounts without auditing their callers. See `AUTH.md` for
+authentication and the current scope behavior, and `CODE_DATA_SPLIT.md` for
+code/data ownership.
