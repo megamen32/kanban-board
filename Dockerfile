@@ -1,6 +1,6 @@
 FROM node:22-slim AS deps
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
-RUN npm install -g bun
+RUN npm install -g bun@1.3.14
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
@@ -15,14 +15,14 @@ COPY postcss.config.mjs .
 RUN bun run build
 
 FROM node:22-slim AS ws
-RUN npm install -g bun
+RUN npm install -g bun@1.3.14
 WORKDIR /ws
 COPY mini-services/kanban-ws/package.json mini-services/kanban-ws/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY mini-services/kanban-ws/ ./
 
 FROM node:22-slim AS runner
-RUN npm install -g bun
+RUN npm install -g bun@1.3.14
 WORKDIR /app
 
 COPY --from=builder /app/.next/standalone ./

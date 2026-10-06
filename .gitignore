@@ -10,3 +10,8 @@ data/
 coverage/
 *.tsbuildinfo
 graphify-out/
+package-lock.json
+.agents/artifacts/
+.agents/shared-session/
+.agents/tasks/
+.serena/
