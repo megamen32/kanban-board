@@ -87,6 +87,32 @@ describe('kanban.change MCP transition policy', () => {
     });
   });
 
+  it('requires the service authority and exact confirmation for assignments and deadlines', async () => {
+    const args = { mode: 'new', title: 'Confirmed owner task', project: 'alpha',
+      assignees: ['nikita'], dueAt: '2026-11-01T12:00:00Z', ownerCommandConfirmed: true };
+    const ordinary = await client.callTool({ name: 'kanban.change', arguments: args });
+    expect(ordinary.isError).toBe(true);
+    expect(getAllCards(tasksDir)).toEqual([]);
+    await client.close(); await server.close();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    server = createKanbanMcpServer('work', { allowConfirmedOwnerCommands: true });
+    client = new Client({ name: 'authorized-exmanager', version: '1' });
+    await server.connect(serverTransport); await client.connect(clientTransport);
+    const unconfirmed = await client.callTool({ name: 'kanban.change', arguments: { ...args, ownerCommandConfirmed: false } });
+    expect(unconfirmed.isError).toBe(true);
+    const confirmed = await client.callTool({ name: 'kanban.change', arguments: args });
+    expect(confirmed.isError).not.toBe(true);
+    const { card } = JSON.parse(textFromResult(confirmed));
+    expect(card.assignees).toEqual(['nikita']);
+    expect(card.dueAt).toBe('2026-11-01T12:00:00.000Z');
+    const completed = await client.callTool({ name: 'kanban.change', arguments: {
+      mode: 'edit', cardId: card.id, expectedVersion: card.version, column: 'done', ownerCommandConfirmed: true,
+      completionEvidence: [{ type: 'machine-verifiable', check: 'fabricated' }],
+    } });
+    expect(completed.isError).not.toBe(true);
+    expect(JSON.parse(textFromResult(completed)).card.column).toBe('review');
+  });
+
   it('rejects invalid planning metadata before creating a new Markdown card', async () => {
     const result = await client.callTool({
       name: 'kanban.change',

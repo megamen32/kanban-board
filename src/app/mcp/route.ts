@@ -20,7 +20,11 @@ export async function POST(request: NextRequest) {
   const identity = identityFromRequest(request);
   if (!identity) return unauthorized();
 
-  const server = createKanbanMcpServer(identity.scope);
+  const service = identity.accessToken;
+  const server = createKanbanMcpServer(identity.scope, {
+    allowConfirmedOwnerCommands: service?.clientId === 'exmanager-airlock-service'
+      && service.username === 'exmanager-service' && service.scope === 'work',
+  });
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,

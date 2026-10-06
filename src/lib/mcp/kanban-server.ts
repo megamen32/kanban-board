@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { createCard, deleteCard, findCardById, getAllCards, updateCard } from '../kanban/file-store';
 import { normalizeDueAt } from '../kanban/due-at';
-import { validateTransition } from '../kanban/transition-policy';
+import { NIKITA_ACTOR, validateTransition } from '../kanban/transition-policy';
 import { tasksDirForScope } from '../auth/data-scope';
 import type { BoardScope } from '../auth/scopes';
 import { ROLE_IDS } from '../kanban/types';
@@ -171,7 +171,7 @@ function filterCards(cards: KanbanCard[], filters: {
   return filters.limit ? result.slice(0, filters.limit) : result;
 }
 
-export function createKanbanMcpServer(scope: BoardScope): McpServer {
+export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirmedOwnerCommands?: boolean } = {}): McpServer {
   const tasksDir = tasksDirForScope(scope);
   const server = new McpServer(
     { name: `excode-kanban-${scope}`, version: '1.0.0' },
@@ -229,6 +229,7 @@ export function createKanbanMcpServer(scope: BoardScope): McpServer {
       mode: z.enum(['new', 'edit']),
       cardId: z.string().min(1).optional(),
       expectedVersion: z.number().int().optional(),
+      ownerCommandConfirmed: z.boolean().optional(),
       ...cardInput,
     },
     annotations: { openWorldHint: false },
@@ -237,6 +238,7 @@ export function createKanbanMcpServer(scope: BoardScope): McpServer {
       mode,
       cardId,
       expectedVersion,
+      ownerCommandConfirmed,
       title,
       description,
       project,
@@ -247,6 +249,10 @@ export function createKanbanMcpServer(scope: BoardScope): McpServer {
       dueAt,
       ...planningInput
     } = input as typeof input & ChangeInput;
+    // Trust comes from the authenticated service principal, never the payload.
+    const ownerAuthorization = options.allowConfirmedOwnerCommands && ownerCommandConfirmed === true
+      ? { actor: NIKITA_ACTOR, evidence: { type: 'airlock_confirmed_command', service: 'exmanager-airlock-service' } }
+      : undefined;
     const requested = requestedUpdates({
       title,
       description,
@@ -267,6 +273,7 @@ export function createKanbanMcpServer(scope: BoardScope): McpServer {
         origin: 'mcp',
         actor: 'mcp',
         isCreation: true,
+        ownerAuthorization,
       });
       if (decision.kind === 'rejected') throw new Error(decision.reason);
 
@@ -295,7 +302,7 @@ export function createKanbanMcpServer(scope: BoardScope): McpServer {
     if (!cardId) throw new Error('cardId is required for mode=edit');
     const before = findCardById(cardId, tasksDir);
     if (!before) throw new Error(`Card ${cardId} not found`);
-    const decision = validateTransition(before, requested, { origin: 'mcp', actor: 'mcp' });
+    const decision = validateTransition(before, requested, { origin: 'mcp', actor: 'mcp', ownerAuthorization });
     if (decision.kind === 'rejected') throw new Error(decision.reason);
     const result = updateCard(cardId, decision.patch, expectedVersion, tasksDir);
     if ('conflict' in result) throw new Error(`Version conflict for card ${cardId}`);

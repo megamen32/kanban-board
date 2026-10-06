@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
   reactStrictMode: false,
+  // Shared server: keep static generation inside the reviewed build budget.
+  experimental: { cpus: 2 },
   // The kanban app reads/writes files under TASKS_DIR at runtime. The
   // dynamic filesystem access in src/lib/kanban/file-store.ts triggers
   // Next's static-tracing warning, which is informational here because

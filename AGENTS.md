@@ -39,3 +39,15 @@ Use one bounded workload at a time. Follow the guarded code refresh contract in
 `CODE_DATA_SPLIT.md`; never reset, stash, or overwrite foreign work to deploy.
 A real MCP initialize, tools/list, and current-card read through Airlock are
 required before claiming the integration works.
+
+## Bounded Next build for confirmed MCP changes (2026-10-06)
+
+Baseline live Todo was142.3MiB RAM; server-100 had31GiB available memory.
+Use one heavy workload: MemoryHigh2GiB, MemoryMax3GiB, swap256MiB,
+CPU4cores, tasks512, Nodeheap1536MiB, temp/builddata≤2GiB, noGPU.
+Build in a constrained transient user scope inheriting the host outer guard;
+do not increase limits on failure. Run focused MCP/policy tests first, then
+one Nextbuild. Keep Docker image assembly light by copying the checked
+standalone output onto the existing runner; preserve gateway/WS/runtime mounts.
+Never include private auth/data/.env in an image or code commit. Existing
+foreign UI/Docker changes are preserved; task commits include only MCP files.

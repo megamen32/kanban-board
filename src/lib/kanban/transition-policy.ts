@@ -47,7 +47,8 @@ export type TransitionDecision =
  * Validate and normalize one requested card transition without performing I/O.
  *
  * Assignee changes require a direct command from the Nikita owner. Deadline
- * changes from automation and MCP are rejected as inferred deadlines. Human
+ * changes from automation and unconfirmed MCP are rejected as inferred deadlines.
+ * Authenticated service MCP may carry a server-issued confirmed owner command. Human
  * completion records manual evidence; non-human completion requires evidence
  * issued by a trusted server-side verifier or is redirected to review.
  *
@@ -87,7 +88,8 @@ export function validateTransition(
     };
   }
 
-  if (changesDeadline(before, policyRequested) && context.origin !== 'human-ui') {
+  if (changesDeadline(before, policyRequested) && context.origin !== 'human-ui'
+    && !(context.origin === 'mcp' && hasOwnerAuthorization(context))) {
     return {
       kind: 'rejected',
       reason: 'deadline_change_requires_human_ui',
