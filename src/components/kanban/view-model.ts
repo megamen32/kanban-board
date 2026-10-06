@@ -1,17 +1,17 @@
 import type { KanbanCard } from '@/lib/kanban/types';
 import { getExecutionView, getInboxView, getRoleBalance, getTodayView, getWeekView, type RoleBalanceView } from '../../lib/kanban/planning-views';
 
-export type PlanningTab = 'execution' | 'inbox' | 'week' | 'today' | 'balance';
+export type PlanningTab = 'execution' | 'inbox' | 'week' | 'today' | 'balance' | 'closed';
 export type WorkspaceView = 'mine' | 'shared' | 'all';
 
 /** Limits the shared Markdown store to the selected person's useful work. */
 export function filterWorkspaceCards(cards: KanbanCard[], person: string, view: WorkspaceView): KanbanCard[] {
   if (view === 'all') return cards;
   if (view === 'shared') return cards.filter(card => card.shared === true);
-  return cards.filter(card => card.owner === person
-    || card.assignees.includes(person)
-    || card.waitingFor?.includes(person)
-    || card.requiresApprovalFrom?.includes(person));
+  const selected = normalizePerson(person);
+  return cards.filter(card => [card.owner, card.assignee, ...card.assignees,
+    ...(card.waitingFor ?? []), ...(card.requiresApprovalFrom ?? [])]
+    .some(value => Boolean(value) && normalizePerson(value!) === selected));
 }
 
 /** Discovers people already represented by card owners or assignments. */
@@ -30,6 +30,7 @@ function normalizePerson(value: string): string {
 /** Returns the cards shown by one planning tab, using the shared deterministic predicates. */
 export function getPlanningTabCards(cards: KanbanCard[], tab: PlanningTab, now: string | Date = new Date()): KanbanCard[] {
   if (tab === 'inbox') return getInboxView(cards);
+  if (tab === 'closed') return cards.filter(isClosedCard);
   if (tab === 'week') return getWeekView(cards, now);
   if (tab === 'today') return getTodayView(cards, now);
   if (tab === 'balance') return Object.values(getRoleBalance(cards, now)).flatMap(balance => balance.activeActions
@@ -73,6 +74,42 @@ export function filterCards(cards: KanbanCard[], project: string, assignee = 'al
 
     return matchesProject && matchesAssignee;
   });
+}
+
+export type AttentionFilter = 'all' | 'blocked' | 'unassigned';
+
+/** Closed cards stay readable without being presented as active work. */
+export function isClosedCard(card: Pick<KanbanCard, 'column'>): boolean {
+  return card.column === 'done' || card.column === 'archived';
+}
+
+/** Search is a read-only projection; all terms must occur in the card. */
+export function searchCards(cards: KanbanCard[], query: string): KanbanCard[] {
+  const normalize = (value: string) => value.normalize('NFKC').toLocaleLowerCase('ru');
+  const terms = normalize(query).trim().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return cards;
+  return cards.filter(card => {
+    const text = normalize([card.title, card.description, card.project, card.source ?? '',
+      ...card.tags, ...card.assignees, card.assignee ?? ''].join(' '));
+    return terms.every(term => text.includes(term));
+  });
+}
+
+export function filterAttentionCards(cards: KanbanCard[], attention: AttentionFilter): KanbanCard[] {
+  if (attention === 'all') return cards;
+  return cards.filter(card => !isClosedCard(card) && (attention === 'blocked'
+    ? card.column === 'blocked'
+    : card.assignees.length === 0 && !card.assignee?.trim()));
+}
+
+export function getBoardCounts(cards: KanbanCard[]) {
+  return {
+    active: cards.filter(card => !isClosedCard(card)).length,
+    done: cards.filter(card => card.column === 'done').length,
+    archived: cards.filter(card => card.column === 'archived').length,
+    blocked: filterAttentionCards(cards, 'blocked').length,
+    unassigned: filterAttentionCards(cards, 'unassigned').length,
+  };
 }
 
 export function isSmartNotesInbox(card: KanbanCard): boolean {

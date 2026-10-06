@@ -70,14 +70,14 @@ export type KanbanColumn = 'inbox' | 'todo' | 'in-progress' | 'review' | 'blocke
 export type Priority = 'low' | 'medium' | 'high' | 'critical';
 
 export const DEFAULT_COLUMNS: { id: KanbanColumn; title: string; color: string }[] = [
-  { id: 'inbox',      title: 'Inbox',       color: 'bg-slate-500' },
-  { id: 'todo',       title: 'To Do',        color: 'bg-zinc-500' },
-  { id: 'in-progress', title: 'In Progress',  color: 'bg-amber-500' },
-  { id: 'review',     title: 'Review',       color: 'bg-violet-500' },
-  { id: 'blocked',    title: 'Blocked',      color: 'bg-red-500' },
-  { id: 'done',       title: 'Done',         color: 'bg-emerald-500' },
-  { id: 'someday',    title: 'Someday',      color: 'bg-slate-400' },
-  { id: 'archived',   title: 'Archived',     color: 'bg-stone-400' },
+  { id: 'inbox', title: 'Входящие', color: 'bg-slate-500' },
+  { id: 'todo', title: 'К выполнению', color: 'bg-zinc-500' },
+  { id: 'in-progress', title: 'В работе', color: 'bg-amber-500' },
+  { id: 'review', title: 'На проверке', color: 'bg-violet-500' },
+  { id: 'blocked', title: 'Заблокировано', color: 'bg-red-500' },
+  { id: 'done', title: 'Готово', color: 'bg-emerald-500' },
+  { id: 'someday', title: 'Бэклог', color: 'bg-slate-400' },
+  { id: 'archived', title: 'Не планируется', color: 'bg-stone-400' },
 ];
 
 export const PRIORITY_COLORS: Record<Priority, string> = {

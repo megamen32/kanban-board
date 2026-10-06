@@ -71,6 +71,7 @@ describe('Kanban MCP transport', () => {
     expect(toolsBody.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
       'kanban.list',
       'kanban.read',
+      'kanban.capture_inbox',
       'kanban.change',
       'kanban.delete',
     ]);

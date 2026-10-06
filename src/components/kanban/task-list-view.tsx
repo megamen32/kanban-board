@@ -1,10 +1,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { CheckCircle2, Circle, Flag } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { DEFAULT_COLUMNS, PRIORITY_COLORS } from '@/lib/kanban/types';
+
 import type { KanbanCard, KanbanColumn } from '@/lib/kanban/types';
 
 interface Props {
@@ -15,69 +14,64 @@ interface Props {
 
 export function TaskListView({ cards, onStatusChange, onOpen }: Props) {
   const [pendingStatuses, setPendingStatuses] = useState<Record<string, KanbanColumn>>({});
+  const [statusError, setStatusError] = useState<string | null>(null);
   const displayCards = useMemo(() => cards.map(card => pendingStatuses[card.id] ? { ...card, column: pendingStatuses[card.id] } : card), [cards, pendingStatuses]);
-  const sorted = useMemo(() => [...cards].sort((a, b) => {
+  const sorted = useMemo(() => [...displayCards].sort((a, b) => {
     if (a.column === 'done' && b.column !== 'done') return 1;
     if (a.column !== 'done' && b.column === 'done') return -1;
     return a.order - b.order;
-  }), [cards]);
+  }), [displayCards]);
 
   const changeStatus = async (card: KanbanCard, column: KanbanColumn) => {
+    if (pendingStatuses[card.id]) return;
+    setStatusError(null);
     setPendingStatuses(previous => ({ ...previous, [card.id]: column }));
-    const result = await onStatusChange(card.id, column, card.version);
-    setPendingStatuses(previous => {
-      const next = { ...previous };
-      delete next[card.id];
-      return next;
-    });
-    if (!result) return;
+    try {
+      const result = await onStatusChange(card.id, column, card.version);
+      if (!result) setStatusError('Статус не сохранён. Проверьте сообщение об ошибке и обновите доску.');
+    } catch {
+      setStatusError('Не удалось сохранить статус. Исходная карточка не скрыта.');
+    } finally {
+      setPendingStatuses(previous => {
+        const next = { ...previous };
+        delete next[card.id];
+        return next;
+      });
+    }
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-3 sm:p-6">
-      <div className="mx-auto max-w-3xl space-y-2">
+    <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
+      <div className="mx-auto max-w-2xl">
+        {statusError && <p role="alert" className="mb-3 rounded-md border p-3 text-sm text-destructive">{statusError}</p>}
         {sorted.length === 0 && (
-          <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-            В этом представлении пока нет задач
-          </div>
+          <div className="py-12 text-center text-sm text-muted-foreground">Задач пока нет</div>
         )}
-        {sorted.map(card => {
-          const displayCard = displayCards.find(item => item.id === card.id) ?? card;
-          const done = displayCard.column === 'done';
-          return (
-            <div key={card.id} className="flex items-center gap-2 rounded-xl border bg-background p-3 shadow-sm">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 shrink-0"
-                aria-label={done ? 'Вернуть задачу в работу' : 'Отметить выполненной'}
-                onClick={() => changeStatus(displayCard, done ? 'todo' : 'done')}
-              >
-                {done ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <Circle className="h-5 w-5 text-muted-foreground" />}
-              </Button>
-              <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(card)}>
-                <div className={`font-medium ${done ? 'text-muted-foreground line-through' : ''}`}>{card.title}</div>
-                <div className="mt-1 line-clamp-2 text-sm text-muted-foreground">{card.description || 'Без описания'}</div>
-                <div className="mt-1 text-[11px] text-muted-foreground">{card.project || 'Без проекта'}{card.assignees.length ? ` · ${card.assignees.join(', ')}` : ''}</div>
-              </button>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <Badge variant="outline" className={`hidden sm:inline-flex text-[10px] px-1.5 py-0 ${PRIORITY_COLORS[card.priority]}`}>
-                  <Flag className="mr-0.5 h-2.5 w-2.5" />{card.priority}
-                </Badge>
-                <select
-                  aria-label={`Статус задачи: ${card.title}`}
-                  className="h-9 max-w-[115px] rounded-md border bg-background px-2 text-xs"
-                  value={displayCard.column}
-                  onChange={event => changeStatus(displayCard, event.target.value as KanbanColumn)}
+        <div className="divide-y">
+          {sorted.map(card => {
+            const displayCard = displayCards.find(item => item.id === card.id) ?? card;
+            const done = displayCard.column === 'done';
+            return (
+              <div key={card.id} className="group flex min-h-12 items-center gap-3 py-2">
+                <button
+                  type="button"
+                  aria-label={done ? 'Вернуть задачу' : 'Отметить выполненной'}
+                  disabled={Boolean(pendingStatuses[card.id])}
+                  onClick={() => changeStatus(displayCard, done ? 'todo' : 'done')}
+                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${done ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-muted-foreground/50 hover:border-foreground'}`}
                 >
-                  {DEFAULT_COLUMNS.filter(column => column.id !== 'archived').map(column => (
-                    <option key={column.id} value={column.id}>{column.title}</option>
-                  ))}
-                </select>
+                  {done && <Check className="h-3.5 w-3.5" />}
+                </button>
+                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(card)}>
+                  <span className={`block text-sm sm:text-base ${done ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{card.title}</span>
+                </button>
+                {card.assignees.length > 0 && (
+                  <span className="hidden shrink-0 text-xs text-muted-foreground sm:block">{card.assignees.join(', ')}</span>
+                )}
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );

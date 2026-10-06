@@ -157,7 +157,7 @@ describe('planning frontmatter schema', () => {
     });
   });
 
-  test('accepts the approved stable roles and rejects unknown role IDs', () => {
+  test('accepts the default and owner-defined role IDs while rejecting non-string values', () => {
     const roles = ROLE_IDS;
     const root = makeRoot();
     for (const [index, role] of roles.entries()) {
@@ -166,8 +166,12 @@ describe('planning frontmatter schema', () => {
       expect(readCardFile(filePath, root)?.role).toBe(role);
     }
 
+    const customPath = path.join(root, 'custom-role.md');
+    fs.writeFileSync(customPath, '---\nid: custom-role\ntitle: Custom\nproject: alpha\nrole: owner-defined-role\n---\nBody');
+    expect(readCardFile(customPath, root)?.role).toBe('owner-defined-role');
+
     const invalidPath = path.join(root, 'invalid-role.md');
-    fs.writeFileSync(invalidPath, '---\nid: invalid-role\ntitle: Invalid\nproject: alpha\nrole: unknown-role\n---\nBody');
+    fs.writeFileSync(invalidPath, '---\nid: invalid-role\ntitle: Invalid\nproject: alpha\nrole: 42\n---\nBody');
     expect(() => readCardFile(invalidPath, root)).toThrow(/role/);
   });
 

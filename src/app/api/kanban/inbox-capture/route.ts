@@ -4,12 +4,23 @@ import { boardIdentityFromRequest } from '@/lib/auth/request';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { dispatchNotification } from '@/lib/notifications/push';
 import { extractSecretaryTasks, persistSecretaryTasks, SecretaryUnavailableError } from '@/lib/kanban/secretary';
+import type { KanbanCard } from '@/lib/kanban/types';
+
+type PersistedCard = KanbanCard | { conflict: true; serverCard: KanbanCard };
 
 export const runtime = 'nodejs';
 
 function captureTitle(text: string): string {
   const firstLine = text.replace(/\s+/g, ' ').trim().slice(0, 96);
   return firstLine || 'Голосовая заметка';
+}
+
+function cardId(card: PersistedCard): string {
+  return 'id' in card ? card.id : card.serverCard.id;
+}
+
+function cardTitle(card: PersistedCard): string {
+  return 'title' in card ? card.title : card.serverCard.title;
 }
 
 function createInboxCard(text: string, owner: string, source: string) {
@@ -21,17 +32,39 @@ async function captureWithSecretary(text: string, owner: string, source: string,
   const tasksDir = tasksDirForScope('work');
   try {
     const tasks = await extractSecretaryTasks(text, owner);
-    const cards = persistSecretaryTasks(tasks, text, owner, tasksDir);
+    const cards = persistSecretaryTasks(tasks, text, owner, tasksDir) as PersistedCard[];
+    const names = cards.map(cardTitle).slice(0, 3).join('\n- ');
+    const body = `Разобрал заметку и обновил карточки: ${cards.length}. ${names ? `Новые: - ${names}` : ''}`;
     await dispatchNotification({
       scope,
       owner,
-      eventKey: `${scope}:${owner}:secretary:${cards.map(card => card.id).join(':')}`,
-      payload: { title: 'Секретарь разобрал заметку', body: `Создано задач: ${cards.length}`, tag: 'kanban-secretary', url: '/' },
+      eventKey: `${scope}:${owner}:secretary:${cards.map(cardId).join(':')}`,
+      payload: {
+        title: 'Секретарь разобрал заметку',
+        body,
+        tag: 'kanban-secretary',
+        url: '/?tab=week',
+      },
     }).catch(() => undefined);
     return { cards, secretary: 'completed' as const };
   } catch (error) {
-    if (!(error instanceof SecretaryUnavailableError)) throw error;
-    return { cards: [createInboxCard(text, owner, source)], secretary: 'waiting_for_key' as const };
+    if (error instanceof SecretaryUnavailableError) {
+      const fallback = createInboxCard(text, owner, source) as PersistedCard;
+      const fallbackId = cardId(fallback);
+      await dispatchNotification({
+        scope,
+        owner,
+        eventKey: `${scope}:${owner}:secretary:${fallbackId}`,
+        payload: {
+          title: 'Секретарь не разобрал заметку',
+          body: 'Сохранил её в Inbox для ручной разметки.',
+          tag: 'kanban-secretary',
+          url: '/?tab=inbox',
+        },
+      }).catch(() => undefined);
+      return { cards: [fallback], secretary: 'waiting_for_key' as const };
+    }
+    throw error;
   }
 }
 

@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { tasksDirForScope } from './data-scope';
 
 describe('scoped task roots', () => {
-  it('resolves only named work/personal roots', () => {
+  it('maps both caller labels to the one shared human board', () => {
     const previous = process.env.KANBAN_SCOPE_ROOT;
     process.env.KANBAN_SCOPE_ROOT = '/app/data/scopes';
     expect(tasksDirForScope('work')).toBe('/app/data/scopes/work');
-    expect(tasksDirForScope('personal')).toBe('/app/data/scopes/personal');
+    expect(tasksDirForScope('personal')).toBe('/app/data/scopes/work');
     process.env.KANBAN_SCOPE_ROOT = previous;
   });
 
