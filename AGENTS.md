@@ -34,7 +34,9 @@ Task Markdown and auth state belong outside this public code checkout.
 Never print/copy `runtime.env`, passwords, bearer tokens, auth databases, or
 real task contents into logs, docs, fixtures, screenshots, or commits.
 Before any build or test, inspect the inherited server-100 resource guard and
-review a project budget; existing unlimited container settings are not a budget.
+review the build budget. The live service must include the final Exmanager
+`deploy/todo/docker-compose.runtime.yml` overlay: 512 MiB RAM, 768 MiB combined
+RAM+swap, 2 CPUs, and 256 PIDs. Use all three Compose files in DEPLOYMENT.md.
 Use one bounded workload at a time. Follow the guarded code refresh contract in
 `CODE_DATA_SPLIT.md`; never reset, stash, or overwrite foreign work to deploy.
 A real MCP initialize, tools/list, and current-card read through Airlock are

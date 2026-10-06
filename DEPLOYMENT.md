@@ -9,7 +9,7 @@ Verified on server-100 on 2026-10-06. Infrastructure discovery starts in
 | Public task board | `https://todo.bezrabotnyi.com/` |
 | Application source | `/home/roomhacker/excode`, `megamen32/kanban-board` |
 | Live Compose project | `/home/roomhacker/services/kanban-board` |
-| Compose files | `docker-compose.yml` + `docker-compose.deploy.yml` in that project |
+| Compose files | Base + deploy files in that project, then `/home/roomhacker/agents-projects/exmanager/deploy/todo/docker-compose.runtime.yml` as the final overlay |
 | Runtime | `kanban-board-kanban-1`, image `local/kanban-board:latest` |
 | Upstream | Host `43327` → container gateway `3000` |
 | Active tasks | `/home/roomhacker/todo-kanban/work-tasks` → `/app/data/scopes/work` |
@@ -28,15 +28,29 @@ runtime change, use the explicit live project:
 
 ```bash
 cd /home/roomhacker/services/kanban-board
-docker compose -f docker-compose.yml -f docker-compose.deploy.yml config --quiet
-docker compose -f docker-compose.yml -f docker-compose.deploy.yml up -d --build kanban
-docker compose -f docker-compose.yml -f docker-compose.deploy.yml ps
+docker compose -f docker-compose.yml -f docker-compose.deploy.yml -f /home/roomhacker/agents-projects/exmanager/deploy/todo/docker-compose.runtime.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.deploy.yml -f /home/roomhacker/agents-projects/exmanager/deploy/todo/docker-compose.runtime.yml up -d --build kanban
+docker compose -f docker-compose.yml -f docker-compose.deploy.yml -f /home/roomhacker/agents-projects/exmanager/deploy/todo/docker-compose.runtime.yml ps
 curl -fsS -o /dev/null http://127.0.0.1:43327/
 ```
 
 Do not dump `docker compose config` without `--quiet`: it can resolve secrets.
 The existing runtime restart policy is `unless-stopped`. A rebuild is not needed
 for an ingress-only MCP correction or Airlock credential binding.
+
+## Required runtime guard
+
+The **third** Compose file is the maintained Exmanager thin runtime overlay:
+`/home/roomhacker/agents-projects/exmanager/deploy/todo/docker-compose.runtime.yml`. It preserves the live work/auth/legacy mounts and supplies
+256 MiB reservation, 512 MiB RAM, 768 MiB combined RAM+swap, 2 CPUs, and 256 PIDs.
+Leaving it out drops the reviewed limits. Keep it last in every inspection or
+restart command; do not start only the old base/deploy pair.
+
+Build resources are separate from those runtime caps. Next build-worker
+concurrency is configured to 2. The bounded confirmed-MCP build receipt recorded
+591,097,856 bytes peak memory, no swap, and 42 PIDs (runner CPU budget: 4); this
+is a build measurement, not a claim that the service runs above its RAM limit.
+No parallel broad build is authorized merely by this deployment recipe.
 
 ## Why there is one external port
 

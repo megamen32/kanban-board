@@ -15,7 +15,9 @@ than treating a healthy web page or a REST `/health` as MCP proof.
 
 The public routing contract is `https://todo.bezrabotnyi.com/mcp` → the current
 app on host port 43327. The corrected route was verified on 2026-10-06 to return application JSON 401
-without credentials; authorized Airlock acceptance remains pending. The former
+without credentials. The initial authorized Airlock list/read/create/update
+canary passed. The separate owner-confirmed assignment/deadline canary also
+passed read/edit, permission rejection, visible panel verification, and cleanup. The former
 route targeted the separate legacy REST
 listener on 8767, which does not implement this transport. That service remains
 available for audited legacy callers; it is not the Airlock connector.
@@ -44,6 +46,19 @@ a task archive, or command output. The rotation procedure is documented in
 `KANBAN_MANAGER_TOKEN` is a separate REST assignment capability: it does not
 create a human session and is not an MCP Bearer token. Do not use it as a
 substitute for AuthStore identity.
+
+## Confirmed owner commands
+
+The app's MCP checks the authenticated token's exact service client, username,
+and work scope before accepting `ownerCommandConfirmed`. X-manager derives
+that bit only through its configured-owner confirmation tools; ordinary
+`board_change` strips it and supplies false. Browser sessions and other OAuth
+clients cannot obtain this authorization by submitting the bit themselves.
+Deadline, weekly-plan, completion-evidence, and optimistic-version policies
+remain in force. The exact confirmed create/read/edit, unauthorized-confirmation denial, visible
+panel check and temporary-card cleanup passed through the real native path.
+The combined receipt is Exmanager's
+`.agents/tasks/outcomes/20261006-todo-and-self-management.md`.
 
 ## Scope and employee selection
 
