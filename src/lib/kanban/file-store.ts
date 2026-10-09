@@ -48,7 +48,14 @@ function sanitizeFileName(name: string): string {
 }
 
 function slugify(title: string, id: string): string {
-  const slug = sanitizeFileName(title);
+  const suffix = `-${id.split('-')[0]}.md`;
+  const budget = 255 - Buffer.byteLength(suffix, 'utf8');
+  let slug = '', bytes = 0;
+  for (const char of sanitizeFileName(title)) {
+    const size = Buffer.byteLength(char, 'utf8');
+    if (bytes + size > budget) break;
+    slug += char; bytes += size;
+  }
   const shortId = id.split('-')[0];
   return `${slug}-${shortId}.md`;
 }

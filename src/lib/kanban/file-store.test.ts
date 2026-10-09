@@ -12,6 +12,17 @@ afterAll(() => {
 });
 
 describe('filesystem kanban contract', () => {
+  test('long Cyrillic titles keep complete content and bounded UTF-8 filenames on create and rename', () => {
+    const title = 'Русская задача с подробным заголовком '.repeat(6);
+    const created = store.createCard(title, 'Details', 'todo', 'medium', [], 'alpha', ['alice']);
+    expect(Buffer.byteLength(created.fileName, 'utf8')).toBeLessThanOrEqual(255);
+    expect(store.readCardFile(path.join(root, created.fileName))?.title).toBe(title);
+    const renamed = title + ' обновлено';
+    const updated = store.updateCard(created.id, { title: renamed }, created.version);
+    if (!updated || 'conflict' in updated) throw new Error('rename failed');
+    expect(Buffer.byteLength(updated.fileName, 'utf8')).toBeLessThanOrEqual(255);
+    expect(store.readCardFile(path.join(root, updated.fileName))?.title).toBe(renamed);
+  });
   test('scans markdown recursively and preserves nested relative files', async () => {
     fs.mkdirSync(path.join(root, 'projects', 'alpha'), { recursive: true });
     fs.writeFileSync(path.join(root, 'projects', 'alpha', 'nested.md'), `---\nid: nested-id\ntitle: Nested\nproject: alpha\n---\nBody`);
