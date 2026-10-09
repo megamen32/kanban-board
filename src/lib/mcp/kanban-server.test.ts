@@ -113,6 +113,37 @@ describe('kanban.change MCP transition policy', () => {
     expect(JSON.parse(textFromResult(completed)).card.column).toBe('review');
   });
 
+  it('accepts a distinct trusted owner status-only completion and rejects forged or mixed commands', async () => {
+    const card = createCard('Owner completion fixture', '', 'in-progress', 'medium', [], 'alpha', [], tasksDir);
+    const { updateCard } = await import('../kanban/file-store');
+    updateCard(card.id, { owner: 'nikita', needsReview: true, requiresApprovalFrom: ['nikita'] }, undefined, tasksDir);
+    const before = findCardById(card.id, tasksDir)!;
+    const args = { mode: 'edit', cardId: card.id, expectedVersion: before.version, column: 'done',
+      ownerCommandConfirmed: true, ownerCompletionConfirmed: true };
+    expect((await client.callTool({ name: 'kanban.change', arguments: args })).isError).toBe(true);
+    expect(findCardById(card.id, tasksDir)).toEqual(before);
+    await client.close(); await server.close();
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    server = createKanbanMcpServer('work', { allowConfirmedOwnerCommands: true });
+    client = new Client({ name: 'trusted-owner-status-only', version: '1' });
+    await server.connect(st); await client.connect(ct);
+    const { expectedVersion: _version, ...withoutVersion } = args;
+    for (const bad of [ withoutVersion, { ...args, expectedVersion: before.version - 1 }, { ...args, ownerCommandConfirmed: false }, { ...args, title: 'Unexpected rename' },
+      { ...args, assignees: ['other'] }, { ...args, dueAt: '2026-11-01T12:00:00Z' } ]) {
+      expect((await client.callTool({ name: 'kanban.change', arguments: bad })).isError).toBe(true);
+      expect(findCardById(card.id, tasksDir)).toEqual(before);
+    }
+    const result = await client.callTool({ name: 'kanban.change', arguments: args });
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(textFromResult(result)).card).toMatchObject({ column: 'done', needsReview: false,
+      requiresApprovalFrom: [], completedBy: 'nikita', completionEvidence: [expect.objectContaining({
+        type: 'owner_confirmed_completion', actor: 'nikita', origin: 'mcp',
+      })] });
+    const done = findCardById(card.id, tasksDir)!;
+    expect((await client.callTool({ name: 'kanban.change', arguments: args })).isError).toBe(true);
+    expect(findCardById(card.id, tasksDir)).toEqual(done);
+  });
+
   it('rejects invalid planning metadata before creating a new Markdown card', async () => {
     const result = await client.callTool({
       name: 'kanban.change',

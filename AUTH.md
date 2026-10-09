@@ -81,3 +81,19 @@ The existing OAuth routes are `/oauth/authorize`, `/oauth/token`, and
 URIs must exactly match the actual client callback. Existing one-time setup and
 password/TOTP login are for human OAuth consent, not prerequisites to recreate
 for the service connection. Never reset a configured owner to attach Airlock.
+
+## Explicit delegated owner completion
+
+The same authenticated eXmanager service may carry a distinct
+`ownerCompletionConfirmed: true` together with `ownerCommandConfirmed: true`
+for an existing owner card, a status-only `column: done` edit, and a positive
+exact `expectedVersion`. The native application derives this bit only from its
+configured owner's confirmed completion tool; it is not exposed as an ordinary
+board change permission. Other fields, foreign owners/reviewers, missing or stale
+versions, and untrusted callers are rejected without a write.
+
+The board records server-issued `owner_confirmed_completion` evidence with
+`origin: mcp`; it does not pretend a browser click or machine-verification.
+Ordinary automated DONE still redirects to review, and caller-supplied audit
+evidence never authorizes completion. Existing queued operations keep their
+original semantics.

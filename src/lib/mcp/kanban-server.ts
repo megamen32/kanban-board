@@ -230,6 +230,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirm
       cardId: z.string().min(1).optional(),
       expectedVersion: z.number().int().optional(),
       ownerCommandConfirmed: z.boolean().optional(),
+      ownerCompletionConfirmed: z.boolean().optional(),
       ...cardInput,
     },
     annotations: { openWorldHint: false },
@@ -239,6 +240,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirm
       cardId,
       expectedVersion,
       ownerCommandConfirmed,
+      ownerCompletionConfirmed,
       title,
       description,
       project,
@@ -264,6 +266,15 @@ export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirm
       dueAt,
       ...planningInput,
     });
+
+    // Completion is a distinct direct-owner delegation. Ordinary automation
+    // and caller-supplied completion evidence still cannot finish a card.
+    if (ownerCompletionConfirmed === true && (!ownerAuthorization || mode !== 'edit'
+      || column !== 'done' || !Number.isSafeInteger(expectedVersion) || expectedVersion! < 1
+      || Object.keys(requested).some(key => key !== 'column'))) {
+      throw new Error('owner completion requires trusted service authority and an exact status-only edit');
+    }
+    const ownerCompletionAuthorization = ownerCompletionConfirmed === true ? ownerAuthorization : undefined;
 
     if (mode === 'new') {
       if (!title) throw new Error('title is required for mode=new');
@@ -302,7 +313,11 @@ export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirm
     if (!cardId) throw new Error('cardId is required for mode=edit');
     const before = findCardById(cardId, tasksDir);
     if (!before) throw new Error(`Card ${cardId} not found`);
-    const decision = validateTransition(before, requested, { origin: 'mcp', actor: 'mcp', ownerAuthorization });
+    if (ownerCompletionAuthorization && (before.owner !== NIKITA_ACTOR
+      || (before.requiresApprovalFrom ?? []).some(actor => actor !== NIKITA_ACTOR))) {
+      throw new Error('owner completion is outside the exact owner review scope');
+    }
+    const decision = validateTransition(before, requested, { origin: 'mcp', actor: 'mcp', ownerAuthorization, ownerCompletionAuthorization });
     if (decision.kind === 'rejected') throw new Error(decision.reason);
     const result = updateCard(cardId, decision.patch, expectedVersion, tasksDir);
     if ('conflict' in result) throw new Error(`Version conflict for card ${cardId}`);

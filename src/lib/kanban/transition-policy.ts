@@ -21,6 +21,8 @@ export interface TransitionContext {
     actor: string;
     evidence: PlanningEvidence;
   };
+  /** Direct owner completion delegated by an authenticated trusted service. */
+  ownerCompletionAuthorization?: { actor: string; evidence: PlanningEvidence };
   weeklyPlanAcceptance?: {
     actor: string;
     week: string;
@@ -133,6 +135,23 @@ export function validateTransition(
 
   if (policyRequested.column !== 'done' || before.column === 'done') {
     return { kind: 'accepted', patch };
+  }
+
+  const ownerCompletion = context.ownerCompletionAuthorization;
+  if (context.origin === 'mcp' && ownerCompletion?.actor === NIKITA_ACTOR
+    && Object.keys(ownerCompletion.evidence).length > 0 && before.owner === NIKITA_ACTOR
+    && Object.keys(policyRequested).every(key => key === 'column')
+    && (before.requiresApprovalFrom ?? []).every(actor => actor === NIKITA_ACTOR)) {
+    return {
+      kind: 'accepted',
+      patch: { ...patch, completedBy: NIKITA_ACTOR, completedAt: new Date().toISOString(),
+        needsReview: false, requiresApprovalFrom: [],
+        completionEvidence: appendEvidence(before.completionEvidence, undefined, {
+          type: 'owner_confirmed_completion', actor: NIKITA_ACTOR, origin: context.origin,
+          evidence: ownerCompletion.evidence,
+        }),
+      },
+    };
   }
 
   if (context.origin === 'human-ui') {
