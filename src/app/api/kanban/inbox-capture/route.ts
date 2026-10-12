@@ -32,6 +32,11 @@ async function captureWithSecretary(text: string, owner: string, source: string,
   const tasksDir = tasksDirForScope('work');
   try {
     const tasks = await extractSecretaryTasks(text, owner);
+    // Capturing a note must not depend on the model finding an actionable task.
+    // Keep the original text for manual review instead of returning a false save.
+    if (tasks.length === 0) return {
+      cards: [createInboxCard(text, owner, source)], secretary: 'needs_review' as const,
+    };
     const cards = persistSecretaryTasks(tasks, text, owner, tasksDir) as PersistedCard[];
     const names = cards.map(cardTitle).slice(0, 3).join('\n- ');
     const body = `Разобрал заметку и обновил карточки: ${cards.length}. ${names ? `Новые: - ${names}` : ''}`;

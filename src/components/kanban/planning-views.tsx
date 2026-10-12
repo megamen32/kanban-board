@@ -25,12 +25,13 @@ export function getExecutionColumnCards(cards: KanbanCard[], columnId: KanbanCol
 
 interface CardListProps {
   cards: KanbanCard[];
+  roles?: RoleDefinition[];
   onOpen: (card: KanbanCard) => void;
   empty: string;
 }
 
 /** Renders a compact keyboard-accessible card list for derived planning views. */
-export function PlanningCardList({ cards, onOpen, empty }: CardListProps) {
+export function PlanningCardList({ cards, roles = [], onOpen, empty }: CardListProps) {
   if (cards.length === 0) return <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">{empty}</div>;
   return (
     <div className="mx-auto w-full max-w-3xl space-y-2">
@@ -40,7 +41,7 @@ export function PlanningCardList({ cards, onOpen, empty }: CardListProps) {
           <span className="min-w-0 flex-1">
             <span className="block truncate font-medium">{card.title}</span>
             <span className="mt-1 block line-clamp-2 text-sm text-muted-foreground">{card.description || 'Без описания'}</span>
-            <span className="mt-1 block text-[11px] text-muted-foreground">{card.project || 'Без проекта'}{card.role ? ` · ${roleLabels[card.role]}` : ''}</span>
+            <span className="mt-1 block text-[11px] text-muted-foreground">{card.project || 'Без проекта'}{card.role ? ` · ${roles.find(role => role.id === card.role)?.label ?? roleLabels[card.role] ?? card.role}` : ''}</span>
           </span>
           <Badge variant="outline" className="shrink-0 text-[10px]">{card.column}</Badge>
         </button>
@@ -51,6 +52,7 @@ export function PlanningCardList({ cards, onOpen, empty }: CardListProps) {
 
 interface WeekViewProps {
   cards?: KanbanCard[];
+  roles?: RoleDefinition[];
   now?: string | Date;
   draft: { week: string; cardIds: string[]; cards: KanbanCard[] } | null;
   loading: boolean;
@@ -79,7 +81,7 @@ export function getWeeklyViewSections(
 }
 
 /** Displays accepted current-week work and keeps the write-free proposal secondary. */
-export function WeeklyPlanView({ cards = [], now = new Date(), draft, loading, error, canAccept, onLoad, onAccept, onOpen }: WeekViewProps) {
+export function WeeklyPlanView({ cards = [], roles, now = new Date(), draft, loading, error, canAccept, onLoad, onAccept, onOpen }: WeekViewProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   useEffect(() => { if (draft) setSelectedIds(draft.cardIds); }, [draft]);
   const sections = useMemo(() => getWeeklyViewSections(cards, draft, now), [cards, draft, now]);
@@ -91,7 +93,7 @@ export function WeeklyPlanView({ cards = [], now = new Date(), draft, loading, e
     <div className="mx-auto w-full max-w-3xl space-y-3">
       <section aria-labelledby="accepted-week-heading" className="space-y-2">
         <div><h2 id="accepted-week-heading" className="font-medium">Текущая неделя</h2><p className="text-xs text-muted-foreground">Принятые Big Rocks и поддерживающие действия</p></div>
-        <PlanningCardList cards={sections.currentWeek} onOpen={onOpen} empty="На эту неделю пока ничего не принято" />
+        <PlanningCardList cards={sections.currentWeek} roles={roles} onOpen={onOpen} empty="На эту неделю пока ничего не принято" />
       </section>
       {!draft && <Button variant="outline" onClick={onLoad} disabled={loading}>{loading ? 'Загружаем…' : 'Загрузить план недели'}</Button>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
@@ -104,7 +106,7 @@ export function WeeklyPlanView({ cards = [], now = new Date(), draft, loading, e
           </Button>
         </div>
         <div className="space-y-2">
-          {draft.cards.map(card => {
+          {sections.proposal.map(card => {
             const selected = selection.selectedIds.includes(card.id);
             return <label key={card.id} className="flex items-start gap-3 rounded-xl border bg-background p-3">
               <input type="checkbox" className="mt-1 h-4 w-4" checked={selected} onChange={() => setSelectedIds(current => selected ? current.filter(id => id !== card.id) : [...current, card.id])} aria-label={`Выбрать Big Rock: ${card.title}`} />

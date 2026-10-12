@@ -67,3 +67,26 @@ personal saved role IDs/labels drive picker/balance, legacy default aliases reta
 without rewriting existing card data. Inbox/roles retain input on failure and
 don't close optimistically or accept duplicate button presses.
 Focused RED/GREEN separately recorded; no runtime repair claim before deployed UI.
+
+## First rollout and additional actual-surface findings
+
+b685030 deployed image64ddb960 source label exact; full175checks PASS19.02s,
+bounded Next build PASS. Actual headed browser: create Beta with all optional
+fields201/v2, edit PATCH200/v3; one injected PATCH503 keeps editor/draft/date fields
+and Russian alert. Clear dates/rank/description/assignees after explicit checkbox
+confirmation PATCH200/v4 and reload retained. Mouse moves Beta todo→in-progress
+PATCH200/v5 and swaps own Alpha/Beta order(v6 both). Delete503 preserves card/editor;
+one retry deletes Beta, server404/absent UI. Today displays own scheduled Alpha.
+Week accepts ONLY Alpha POST200/v5, exact real-other71 hash unchanged:
+5a9e913da73b8a45dc5b965f09f4f7df93ccd9c844aca2a481d563123c072c91.
+Isolated personal role edit503 retains draft, retry saves and deletion saves[].
+
+Acceptance exposed an incomplete source fix: proposal selection used filtered
+sections, but JSX still rendered global draft.cards. Browser showed5foreign+1QA;
+no foreign selection accepted. Added actual render regression RED→GREEN changing
+map to sections.proposal. Also custom role label showed literal undefined in
+planning lists; render regression RED→GREEN now carries saved role definitions.
+Inbox note model returned zero extracted tasks:201/cards[]/no persistence,
+UI correctly retained text but capture itself unusable. Route regression RED→GREEN
+preserves original non-actionable note as Inbox needs_review. No duplicate retry
+of a persisted note; prior201 created zero cards. Final rollout/acceptance pending.
