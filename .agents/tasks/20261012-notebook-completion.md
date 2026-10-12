@@ -75,6 +75,9 @@ enabled minute cron; latest03:48–03:50 runs succeeded,2projects/53cards/20skip
 33READY links/0conflicts with fresh last_seen. Skipped/unassigned/out-of-scope
 cards are not falsely described as fully assigned or projected. No job rerun,
 old digest replay, forged user session or platform DB write.
+Final independent registered-resource list:71cards/bothQAabsent; all33READY
+Secretary link versions exactly match current authoritative board versions.
+Only the task-owned headed Todo tab was closed; shared browser/foreign tabs remain.
 
 Checks:62 focused checks/11files PASS5.40s, final delta18checks PASS3.27s;
 final bounded Next compile/typecheck/static generation PASS~8s. Every individual
