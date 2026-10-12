@@ -41,6 +41,8 @@ vi.mock('@/lib/kanban/weekly-plan', () => ({
 }));
 vi.mock('@/lib/kanban/planning-views', () => ({ moscowIsoWeek: () => '2026-W33' }));
 
+vi.mock('@/lib/auth/board-human', () => ({ boardHumanIdentityFromRequest: async () => authenticated.current }));
+
 import { GET, POST } from './route';
 
 const card = (id: string): KanbanCard => ({

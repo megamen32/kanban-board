@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllCards, createCard, updateCard } from '@/lib/kanban/file-store';
 import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
-import { boardIdentityFromRequest, identityFromRequest, managerRequestAuthorized } from '@/lib/auth/request';
+import { boardIdentityFromRequest, managerRequestAuthorized } from '@/lib/auth/request';
+import { boardHumanIdentityFromRequest } from '@/lib/auth/board-human';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { normalizeDueAt } from '@/lib/kanban/due-at';
 import { dispatchCardEvent } from '@/lib/notifications/push';
@@ -24,7 +25,7 @@ export async function POST(req: NextRequest) {
   try {
     startDueReminderScheduler();
     const identity = boardIdentityFromRequest(req);
-    const authenticatedIdentity = identityFromRequest(req);
+    const authenticatedIdentity = await boardHumanIdentityFromRequest(req);
     const managerAuthorized = identity.scope === 'work' && managerRequestAuthorized(req);
     const body = await req.json();
     if (!body || typeof body !== 'object' || Array.isArray(body)) {

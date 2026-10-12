@@ -5,6 +5,15 @@ protected by the outer `auth.bezrabotnyi.com` cookie gateway. Inside the app,
 the shared work-board UI can render without a Kanban password; that fallback
 does **not** authorize MCP. `/mcp` uses authenticated identity only.
 
+Human transition routes also validate the existing `gptadmin_auth` cookie through
+the existing HTTPS `https://auth.bezrabotnyi.com/check` endpoint (3-second bound,
+no cache/redirects). Only that cookie is forwarded; no signing secret is copied.
+The server-returned fleet owner `roomhacker` maps to the existing board owner
+`nikita`; other verified users keep their own identity. Client headers, body flags
+and the person filter are not authentication. Service Bearers remain non-human.
+OAuth and MCP retain their original Kanban AuthStore contract. This repairs the
+previous mismatch where shared-login clicks were classified as automation.
+
 ## The current MCP contract
 
 `POST /mcp` is the Next application's stateless Streamable HTTP MCP endpoint.

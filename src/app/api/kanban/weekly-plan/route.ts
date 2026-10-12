@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { boardIdentityFromRequest, identityFromRequest } from '@/lib/auth/request';
+import { boardIdentityFromRequest } from '@/lib/auth/request';
+import { boardHumanIdentityFromRequest } from '@/lib/auth/board-human';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { getAllCards, updateCard } from '@/lib/kanban/file-store';
 import { NIKITA_ACTOR, validateTransition } from '@/lib/kanban/transition-policy';
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const identity = boardIdentityFromRequest(req);
-    const authenticated = identityFromRequest(req);
+    const authenticated = await boardHumanIdentityFromRequest(req);
     if (!authenticated || authenticated.username !== NIKITA_ACTOR) {
       return NextResponse.json({ error: 'weekly_plan_acceptance_requires_nikita' }, { status: 403 });
     }

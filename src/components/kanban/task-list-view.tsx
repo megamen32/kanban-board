@@ -5,6 +5,7 @@ import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 import type { KanbanCard, KanbanColumn } from '@/lib/kanban/types';
+import { statusSaveError } from './status-result';
 
 interface Props {
   cards: KanbanCard[];
@@ -28,7 +29,7 @@ export function TaskListView({ cards, onStatusChange, onOpen }: Props) {
     setPendingStatuses(previous => ({ ...previous, [card.id]: column }));
     try {
       const result = await onStatusChange(card.id, column, card.version);
-      if (!result) setStatusError('Статус не сохранён. Проверьте сообщение об ошибке и обновите доску.');
+      setStatusError(statusSaveError(result, column));
     } catch {
       setStatusError('Не удалось сохранить статус. Исходная карточка не скрыта.');
     } finally {

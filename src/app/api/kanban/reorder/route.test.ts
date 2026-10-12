@@ -24,6 +24,8 @@ vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope: () => '/tasks' }));
 vi.mock('@/lib/notifications/push', () => ({ dispatchCardEvent }));
 vi.mock('@/lib/notifications/scheduler', () => ({ startDueReminderScheduler }));
 
+vi.mock('@/lib/auth/board-human', () => ({ boardHumanIdentityFromRequest: async () => null }));
+
 import { POST } from './route';
 
 const firstCard: KanbanCard = {

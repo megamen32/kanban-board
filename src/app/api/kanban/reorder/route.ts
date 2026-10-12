@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { findCardById, reorderColumn } from '@/lib/kanban/file-store';
 import { DEFAULT_COLUMNS, type KanbanColumn } from '@/lib/kanban/types';
-import { boardIdentityFromRequest, identityFromRequest } from '@/lib/auth/request';
+import { boardIdentityFromRequest } from '@/lib/auth/request';
+import { boardHumanIdentityFromRequest } from '@/lib/auth/board-human';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { dispatchCardEvent } from '@/lib/notifications/push';
 import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
@@ -11,7 +12,7 @@ export async function POST(req: NextRequest) {
   try {
     startDueReminderScheduler();
     const identity = boardIdentityFromRequest(req);
-    const authenticatedIdentity = identityFromRequest(req);
+    const authenticatedIdentity = await boardHumanIdentityFromRequest(req);
     const body = await req.json();
     const { column, cardIds } = body ?? {};
     const validColumn = typeof column === 'string'
