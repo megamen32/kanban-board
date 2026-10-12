@@ -48,25 +48,22 @@ export function useKanban() {
     const socket = io(WS_URL);
     socketRef.current = socket;
 
-    socket.on('connect', () => console.log('[ws] connected'));
+    socket.on('connect', () => { console.log('[ws] connected'); fetchCards(); });
     socket.on('disconnect', () => console.log('[ws] disconnected'));
 
-    socket.on('file:created', (card: KanbanCard) => {
-      setCards(prev => {
-        if (prev.some(c => c.id === card.id)) return prev;
-        return [...prev, card];
-      });
-    });
-
-    socket.on('file:updated', (card: KanbanCard) => {
-      setCards(prev => prev.map(c => c.id === card.id ? card : c));
-    });
-
-    socket.on('file:deleted', ({ fileName }: { fileName: string }) => {
-      setCards(prev => prev.filter(c => c.fileName !== fileName));
-    });
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleRefresh = () => {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(fetchCards, 150);
+    };
+    socket.on('board:changed', scheduleRefresh);
+    // Retain rollout compatibility, but never merge legacy truncated payloads.
+    socket.on('file:created', scheduleRefresh);
+    socket.on('file:updated', scheduleRefresh);
+    socket.on('file:deleted', scheduleRefresh);
 
     return () => {
+      clearTimeout(refreshTimer);
       socket.disconnect();
     };
   }, [fetchCards]);
@@ -78,7 +75,9 @@ export function useKanban() {
       body: JSON.stringify({ title, description, column, priority, tags, project, assignees, dueAt, ...planning }),
     });
     const data = await res.json();
-    if (data.card) setCards(prev => [...prev, data.card]);
+    if (data.card) setCards(prev => prev.some(card => card.id === data.card.id)
+      ? prev.map(card => card.id === data.card.id ? data.card : card)
+      : [...prev, data.card]);
     return data.card;
   }, []);
 

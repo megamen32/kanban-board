@@ -30,6 +30,7 @@ COPY --from=builder /app/.next/static ./.next/static/
 COPY --from=builder /app/public ./public
 COPY --from=ws /ws/node_modules ./ws/node_modules/
 COPY --from=ws /ws/index.ts ./ws/
+COPY --from=ws /ws/board-watcher.ts ./ws/
 COPY --from=ws /ws/package.json ./ws/
 COPY gateway.js ./gateway.js
 
