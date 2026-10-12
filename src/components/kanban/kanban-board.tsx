@@ -202,7 +202,7 @@ export function KanbanBoard() {
           </div>
           <TabsContent value="execution" className="min-h-0">
             {view === 'list' ? (
-          <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
+          <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} authoritativeCards={cards} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
             ) : (
           <div className="flex gap-3 sm:gap-4 p-3 sm:p-6 overflow-x-auto overscroll-x-contain flex-1">
             {DEFAULT_COLUMNS.filter(col => col.id !== 'archived' && col.id !== 'done').map(col => (
@@ -231,7 +231,7 @@ export function KanbanBoard() {
                 <option value="archived">Не планируется ({counts.archived})</option>
               </select>
             </div>
-            <TaskListView cards={closedCards} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
+            <TaskListView cards={closedCards} authoritativeCards={cards} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
           </TabsContent>
         </Tabs>
         <Button className="fixed bottom-6 right-6 h-12 w-12 rounded-full shadow-lg z-50" onClick={() => { setDefaultColumn('todo'); setShowAdd(true); }}>

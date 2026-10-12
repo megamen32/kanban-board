@@ -44,5 +44,12 @@ despite «Использовать мою» promising a save. Repair retries onl
 with shown server version, retaining another409 and visible failure; no forced
 overwrite or invented owner approval. Own fresh conflict QA exercises this delta.
 
+Actual conflict RED on21f8fbb: real409, native «Использовать мою» closes but
+todo/v2 remains. Delta5e5eca8/a377a1c fixes saving: real409 -> native choice ->
+PATCH expectedVersion2/200 -> done/v3/manual-human evidence. Final consumer found
+remaining stale warning because execution-view filters remove DONE from its cards;
+repair passes full canonical card state to warning resolution (no inferred success).
+That acceptance was CHANGES_REQUIRED, not declared fully green.
+
 Checks: fast unit identity/policy expected <5s/max30; focused route <10s/max30;
 normal release setup/check/build total max180s; browser steps <=20s each.

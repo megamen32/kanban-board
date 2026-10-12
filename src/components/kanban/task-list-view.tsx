@@ -9,22 +9,23 @@ import { statusSaveError } from './status-result';
 
 interface Props {
   cards: KanbanCard[];
+  authoritativeCards?: KanbanCard[];
   onStatusChange: (id: string, column: KanbanColumn, version: number) => Promise<unknown>;
   onOpen: (card: KanbanCard) => void;
 }
 
-export function TaskListView({ cards, onStatusChange, onOpen }: Props) {
+export function TaskListView({ cards, authoritativeCards = cards, onStatusChange, onOpen }: Props) {
   const [pendingStatuses, setPendingStatuses] = useState<Record<string, KanbanColumn>>({});
   const [statusError, setStatusError] = useState<string | null>(null);
   const [failedStatus, setFailedStatus] = useState<{ id: string; column: KanbanColumn } | null>(null);
   useEffect(() => {
     // An explicit conflict choice can later save the same requested transition.
     // Clear its old warning only when authoritative card state proves success.
-    if (failedStatus && cards.some(card => card.id === failedStatus.id && card.column === failedStatus.column)) {
+    if (failedStatus && authoritativeCards.some(card => card.id === failedStatus.id && card.column === failedStatus.column)) {
       setStatusError(null);
       setFailedStatus(null);
     }
-  }, [cards, failedStatus]);
+  }, [authoritativeCards, failedStatus]);
   const displayCards = useMemo(() => cards.map(card => pendingStatuses[card.id] ? { ...card, column: pendingStatuses[card.id] } : card), [cards, pendingStatuses]);
   const sorted = useMemo(() => [...displayCards].sort((a, b) => {
     if (a.column === 'done' && b.column !== 'done') return 1;
