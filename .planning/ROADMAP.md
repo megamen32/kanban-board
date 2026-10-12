@@ -7,7 +7,7 @@ task storage or weakening automation policies.
 
 ## Phases
 
-- [ ] **Phase 1: Persistent notebook controls** - Repair and verify the reported real path.
+- [x] **Phase 1: Persistent notebook controls** - Repair and verify the reported real path.
 
 ## Phase Details
 
@@ -23,10 +23,10 @@ task storage or weakening automation policies.
 **Plans:** 1 plan
 
 Plans:
-- [ ] 01-01: Reproduce, repair shared-login integration, bounded deploy and UI acceptance.
+- [x] 01-01: Reproduce, repair shared-login integration, bounded deploy and UI acceptance.
 
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Persistent notebook controls | 0/1 | In progress | - |
+| 1. Persistent notebook controls | 1/1 | Complete | 2026-10-12 |

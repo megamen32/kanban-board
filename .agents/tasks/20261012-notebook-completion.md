@@ -51,5 +51,36 @@ remaining stale warning because execution-view filters remove DONE from its card
 repair passes full canonical card state to warning resolution (no inferred success).
 That acceptance was CHANGES_REQUIRED, not declared fully green.
 
+## Final acceptance — PASS for this bounded repair
+
+Final published code e4694dc, imageafd1ed9468e83a724c69b18759e0075fcdc03b9554af07e3f7946696a2eb2c6c,
+existing container started2026-10-12T03:47:57.546Z. No subsequent intentional
+runtime/config changes. Same limits/mounts;101.1MiB/28tasks/OOMfalse/restart0.
+
+Real headed Mini browser, intended existing shared login, task-owned tab only:
+QA10ab1916 currenttodo/v4 -> forced stale expectedVersion1 reaches actual409;
+native explicit «Использовать мою» sends ONLY original status patch with displayed
+version4 ->200/done/v5/manual-human identity. Dialog closes, alerts empty.
+Reload actual closed notebook: done/v5, struck, returnbutton, no stale warning.
+The old failure and the intermediate stale warning were retained as RED evidence,
+not skipped or called successful. Ordinary complete/reopen and external MCP refresh
+already accepted in the same cycle; final delta affects conflict warning only.
+
+Both isolated QA cards removed through normal recoverable DELETE, not business
+cards; card count returns71. All prior source-bound business synchronization kept.
+No cloud/core/native model/TG sends, approval flags or credentials modified.
+
+Secretary automatic polling independently read-only verified in production:
+enabled minute cron; latest03:48–03:50 runs succeeded,2projects/53cards/20skipped,
+33READY links/0conflicts with fresh last_seen. Skipped/unassigned/out-of-scope
+cards are not falsely described as fully assigned or projected. No job rerun,
+old digest replay, forged user session or platform DB write.
+
+Checks:62 focused checks/11files PASS5.40s, final delta18checks PASS3.27s;
+final bounded Next compile/typecheck/static generation PASS~8s. Every individual
+ordinary build/check run remained below180s, resource budgets retained.
+No broad claim that every unrelated Todo feature or original Airlock migration
+is complete. Pages hookup and product/core cutover keep their separate blockers.
+
 Checks: fast unit identity/policy expected <5s/max30; focused route <10s/max30;
 normal release setup/check/build total max180s; browser steps <=20s each.

@@ -15,12 +15,11 @@ Human task changes persist and remain correct after reload.
 ### Validated
 
 - Existing Markdown board and native MCP read/edit integration are retained.
+- Notebook completion/reopen/reload, shared-login identity and explicit conflict save — Phase 1 actual browser accepted2026-10-12.
 
 ### Active
 
-- [ ] Notebook completion persists after a human click and page reload.
-- [ ] Existing shared login is recognized by human board transitions.
-- [ ] Failures are shown instead of silently rolling back controls.
+No additional feature beyond the current bounded repair is auto-started.
 
 ### Out of Scope
 

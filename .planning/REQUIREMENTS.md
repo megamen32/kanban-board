@@ -5,9 +5,9 @@
 
 ## v1 Requirements
 
-- [ ] **TASK-01**: User can complete and reopen a task in notebook, persisted after reload.
-- [ ] **TASK-02**: Existing verified shared login counts as human input without changing MCP identity.
-- [ ] **TASK-03**: Failed saves produce a visible, understandable error.
+- [x] **TASK-01**: User can complete and reopen a task in notebook, persisted after reload.
+- [x] **TASK-02**: Existing verified shared login counts as human input without changing MCP identity.
+- [x] **TASK-03**: Failed saves produce a visible, understandable error.
 
 ## v2 Requirements
 
@@ -21,8 +21,8 @@ New store, new UI, credential changes, Airlock changes, business assignment deci
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TASK-01 | Phase 1 | In Progress |
-| TASK-02 | Phase 1 | In Progress |
-| TASK-03 | Phase 1 | In Progress |
+| TASK-01 | Phase 1 | Complete |
+| TASK-02 | Phase 1 | Complete |
+| TASK-03 | Phase 1 | Complete |
 
 Coverage: 3 total, 3 mapped, 0 unmapped.
