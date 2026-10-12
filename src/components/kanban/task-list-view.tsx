@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -16,6 +16,15 @@ interface Props {
 export function TaskListView({ cards, onStatusChange, onOpen }: Props) {
   const [pendingStatuses, setPendingStatuses] = useState<Record<string, KanbanColumn>>({});
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [failedStatus, setFailedStatus] = useState<{ id: string; column: KanbanColumn } | null>(null);
+  useEffect(() => {
+    // An explicit conflict choice can later save the same requested transition.
+    // Clear its old warning only when authoritative card state proves success.
+    if (failedStatus && cards.some(card => card.id === failedStatus.id && card.column === failedStatus.column)) {
+      setStatusError(null);
+      setFailedStatus(null);
+    }
+  }, [cards, failedStatus]);
   const displayCards = useMemo(() => cards.map(card => pendingStatuses[card.id] ? { ...card, column: pendingStatuses[card.id] } : card), [cards, pendingStatuses]);
   const sorted = useMemo(() => [...displayCards].sort((a, b) => {
     if (a.column === 'done' && b.column !== 'done') return 1;
@@ -26,12 +35,16 @@ export function TaskListView({ cards, onStatusChange, onOpen }: Props) {
   const changeStatus = async (card: KanbanCard, column: KanbanColumn) => {
     if (pendingStatuses[card.id]) return;
     setStatusError(null);
+    setFailedStatus(null);
     setPendingStatuses(previous => ({ ...previous, [card.id]: column }));
     try {
       const result = await onStatusChange(card.id, column, card.version);
-      setStatusError(statusSaveError(result, column));
+      const error = statusSaveError(result, column);
+      setStatusError(error);
+      if (error) setFailedStatus({ id: card.id, column });
     } catch {
       setStatusError('Не удалось сохранить статус. Исходная карточка не скрыта.');
+      setFailedStatus({ id: card.id, column });
     } finally {
       setPendingStatuses(previous => {
         const next = { ...previous };
