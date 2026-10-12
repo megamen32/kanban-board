@@ -90,3 +90,21 @@ Inbox note model returned zero extracted tasks:201/cards[]/no persistence,
 UI correctly retained text but capture itself unusable. Route regression RED→GREEN
 preserves original non-actionable note as Inbox needs_review. No duplicate retry
 of a persisted note; prior201 created zero cards. Final rollout/acceptance pending.
+
+## Delivered real consumer result
+
+e7d50b1 delta published after46files/178tests PASS16.09s and bounded Next build.
+Final image53c9bf7f/sourcee7d50b1 started04:50:18.901Z, unchanged mounts/caps,
+109.8MiB/27tasks/OOMfalse/restart0. Exact final browser journeys recorded in
+.planning/quick/261012-9pn-check-and-repair-main-todo-browser-scena/261012-9pn-VERIFICATION.md.
+Actual final Inbox note6cde16f4 creates201/needs_review with original text (tasks[]),
+rolesstableID/picker/balance work; role reorder persists; filtered weekly proposal
+ONLY own note, acceptanceweek2026-W42/v4 and current-week custom label correct.
+Search/person/workspace/assignee/unassigned/blocked and deep-link reload verified.
+Final Gamma3e1f670c create503 retains draft; retry doubleclick creates exactly1;
+editorblocked, checkboxdone, closedreload and returntodo persist. UI cleanup deletes
+Alpha/Inbox/Gamma exactIDs404; earlier Beta already404. Own roles empty.
+All71 non-QA full-state hash unchanged5a9e913d; SDKMCPkanban.list actualok/count71/QA0.
+Main scenarios ACCEPTED; no blanket claim for unrelated push/microphone onboarding
+or original-Airlock migration. No core/relay/storage/credential or business-card
+mutations. User-facing result kept short; evidence retained here, not chat-only.
