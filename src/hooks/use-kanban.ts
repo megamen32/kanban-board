@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { KanbanCard, KanbanCardUpdates, SyncEvent, ConflictInfo } from '@/lib/kanban/types';
 import type { WeeklyDraft } from '@/lib/kanban/weekly-plan';
+import { retryConflictEdit } from './conflict-choice';
 
 const WS_URL = '/?XTransformPort=3003';
 
@@ -137,13 +138,17 @@ export function useKanban() {
     }
   }, []);
 
-  const resolveConflict = useCallback((useServer: boolean) => {
-    if (!conflict) return;
+  const resolveConflict = useCallback(async (useServer: boolean) => {
+    if (!conflict) return false;
     if (useServer) {
       setCards(prev => prev.map(c => c.id === conflict.cardId ? conflict.serverCard : c));
+      setConflict(null);
+      return true;
     }
-    setConflict(null);
-  }, [conflict]);
+    const saved = await retryConflictEdit(conflict, updateCard);
+    if (saved) setConflict(null);
+    return Boolean(saved);
+  }, [conflict, updateCard]);
 
   const fetchWeeklyDraft = useCallback(async () => {
     setWeeklyLoading(true);
