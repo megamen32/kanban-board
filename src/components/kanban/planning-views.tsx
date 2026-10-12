@@ -4,18 +4,18 @@ import { useEffect, useMemo, useState } from 'react';
 import { Check, Circle, Target } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
-import { ROLE_IDS, type KanbanCard, type KanbanColumn, type RoleId } from '../../lib/kanban/types';
+import { type KanbanCard, type KanbanColumn, type RoleId, type RoleDefinition } from '../../lib/kanban/types';
 import type { RoleBalanceView as RoleBalanceData } from '../../lib/kanban/planning-views';
 import { getExecutionView, getWeekView } from '../../lib/kanban/planning-views';
 import { getWeeklySelectionState } from './view-model';
 
 const roleLabels: Record<RoleId, string> = {
-  'product-builder': 'Product builder',
-  'client-integrator': 'Client integrator',
-  'team-lead': 'Team lead',
-  'author-public': 'Author / public',
-  'personal-relationships': 'Personal relationships',
-  'sharpening-the-saw': 'Sharpening the saw',
+  'product-builder': 'Создатель продуктов',
+  'client-integrator': 'Интегратор для клиентов',
+  'team-lead': 'Руководитель команды',
+  'author-public': 'Автор и публичная роль',
+  'personal-relationships': 'Личное и отношения',
+  'sharpening-the-saw': 'Заточка пилы',
 };
 
 /** Returns one active Execution column, excluding the archived state. */
@@ -74,7 +74,7 @@ export function getWeeklyViewSections(
 ): WeeklyViewSections {
   return {
     currentWeek: getWeekView(cards, now),
-    proposal: draft?.cards ?? [],
+    proposal: draft ? cards.filter(card => card.column !== 'done' && card.column !== 'archived' && !(card.bigRock && card.week === draft.week)) : [],
   };
 }
 
@@ -82,8 +82,10 @@ export function getWeeklyViewSections(
 export function WeeklyPlanView({ cards = [], now = new Date(), draft, loading, error, canAccept, onLoad, onAccept, onOpen }: WeekViewProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   useEffect(() => { if (draft) setSelectedIds(draft.cardIds); }, [draft]);
-  const selection = useMemo(() => getWeeklySelectionState(selectedIds), [selectedIds]);
-  const sections = useMemo(() => getWeeklyViewSections(cards.length > 0 ? cards : (draft?.cards ?? []), draft, now), [cards, draft, now]);
+  const sections = useMemo(() => getWeeklyViewSections(cards, draft, now), [cards, draft, now]);
+  const visibleIds = sections.proposal.map(card => card.id).join('\n');
+  useEffect(() => { setSelectedIds(current => current.filter(id => sections.proposal.some(card => card.id === id))); }, [visibleIds]);
+  const selection = useMemo(() => getWeeklySelectionState(selectedIds.filter(id => sections.proposal.some(card => card.id === id))), [selectedIds, sections.proposal]);
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-3">
@@ -118,12 +120,13 @@ export function WeeklyPlanView({ cards = [], now = new Date(), draft, loading, e
 }
 
 /** Renders the six-role current-week balance with accepted-rock warnings. */
-export function RoleBalanceView({ balance }: { balance: RoleBalanceData }) {
+export function RoleBalanceView({ balance, roles = [] }: { balance: RoleBalanceData; roles?: RoleDefinition[] }) {
   return <div className="mx-auto grid w-full max-w-3xl gap-3 sm:grid-cols-2">
-    {ROLE_IDS.map(role => {
+    {Object.keys(balance).map(role => {
       const item = balance[role];
-      return <section key={role} className="rounded-xl border bg-background p-4" aria-label={roleLabels[role]}>
-        <div className="flex items-center justify-between gap-2"><h2 className="font-medium">{roleLabels[role]}</h2>{item.warning ? <Badge variant="destructive">Нет Big Rock</Badge> : <Badge variant="secondary">В фокусе</Badge>}</div>
+      const label = roles.find(item => item.id === role)?.label ?? roleLabels[role] ?? role;
+      return <section key={role} className="rounded-xl border bg-background p-4" aria-label={label}>
+        <div className="flex items-center justify-between gap-2"><h2 className="font-medium">{label}</h2>{item.warning ? <Badge variant="destructive">Нет Big Rock</Badge> : <Badge variant="secondary">В фокусе</Badge>}</div>
         <p className="mt-2 text-sm text-muted-foreground">{item.acceptedBigRocks.length} принятых Big Rocks · {item.activeActions.length} активных действий</p>
       </section>;
     })}

@@ -81,4 +81,11 @@ describe('planning UI projections', () => {
     expect(sections.currentWeek.map(item => item.id)).toEqual(['accepted-rock']);
     expect(sections.proposal.map(item => item.id)).toEqual(['proposal-only']);
   });
+
+  it('never leaks another filtered project into the weekly proposal', () => {
+    const own = card({ id: 'own', project: 'QA' });
+    const other = card({ id: 'other', project: 'Other' });
+    expect(getWeeklyViewSections([own], { week: '2026-W42', cardIds: ['other'], cards: [other] }).proposal.map(c => c.id)).toEqual(['own']);
+    expect(getWeeklyViewSections([], { week: '2026-W42', cardIds: ['other'], cards: [other] }).proposal).toEqual([]);
+  });
 });

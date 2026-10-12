@@ -11,7 +11,7 @@ import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import { Plus, FolderSync, RotateCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
+import type { KanbanCard, KanbanCardUpdates, RoleDefinition } from '@/lib/kanban/types';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { TaskListView } from './task-list-view';
 import { filterCards, filterWorkspaceCards, getAssigneeOptions, getPeople, getProjectOptions, searchCards, isClosedCard, getBoardCounts, filterAttentionCards, type AttentionFilter, type WorkspaceView } from './view-model';
@@ -25,6 +25,7 @@ import { getExecutionColumnCards } from './planning-views';
 import { RolesDialog } from './roles-dialog';
 import { InboxCapture } from './inbox-capture';
 import { parseBoardUrlState, serializeBoardUrlState, type BoardLayout, type ClosedKind } from './board-url-state';
+import { mutationErrorMessage, readMutationResponse } from '../../lib/kanban/mutation-response';
 
 export function KanbanBoard() {
   const { cards, loading, conflict, createCard, updateCard, deleteCard, moveCard, reorderColumn, resolveConflict, refresh, weeklyDraft, weeklyLoading, weeklyError, fetchWeeklyDraft, acceptWeeklyPlan } = useKanban();
@@ -41,6 +42,9 @@ export function KanbanBoard() {
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('shared');
   const [showWelcome, setShowWelcome] = useState(false);
   const [showRoles, setShowRoles] = useState(false);
+  const [roles, setRoles] = useState<RoleDefinition[] | undefined>();
+  const [roleError, setRoleError] = useState<string | null>(null);
+  const [roleRefresh, setRoleRefresh] = useState(0);
   const [search, setSearch] = useState('');
   const [attention, setAttention] = useState<AttentionFilter>('all');
   const [closedKind, setClosedKind] = useState<ClosedKind>('all');
@@ -54,6 +58,16 @@ export function KanbanBoard() {
   useEffect(() => {
     fetch('/api/auth/session').then(response => response.ok ? response.json() : null).then(data => setUsername(data?.username ?? null)).catch(() => setUsername(null));
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setRoles(undefined); setRoleError(null);
+    fetch(`/api/kanban/roles?owner=${encodeURIComponent(person)}`, { signal: controller.signal })
+      .then(response => readMutationResponse(response))
+      .then(data => { if (data.roles) setRoles(data.roles); })
+      .catch(failure => { if (!controller.signal.aborted) setRoleError(mutationErrorMessage(failure)); });
+    return () => controller.abort();
+  }, [person, roleRefresh]);
 
   useEffect(() => {
     const savedPerson = window.localStorage.getItem('kanban-person');
@@ -115,10 +129,10 @@ export function KanbanBoard() {
     return updateCard(id, updates, version);
   }, [updateCard]);
 
-  const handleDelete = useCallback(async (id: string) => { await deleteCard(id); }, [deleteCard]);
+  const handleDelete = useCallback(async (id: string) => deleteCard(id), [deleteCard]);
   const now = new Date();
   const derivedCards = useMemo(() => getPlanningTabCards(visibleCards, planningTab, now), [planningTab, visibleCards]);
-  const roleBalance = useMemo(() => getPlanningRoleBalance(visibleCards, now), [visibleCards]);
+  const roleBalance = useMemo(() => getPlanningRoleBalance(visibleCards, now, roles), [visibleCards, roles]);
 
   const handlePlanningTabChange = (value: string) => {
     const next = value as PlanningTab;
@@ -142,7 +156,7 @@ export function KanbanBoard() {
   }
 
   return (
-    <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete }}>
+    <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete, roles }}>
       <DndProvider cards={visibleCards} onMoveCard={moveCard} onReorder={reorderColumn}>
         <div className="px-3 sm:px-6 pt-3 sm:pt-4 pb-2 border-b">
           <div className="flex items-center gap-2 sm:gap-3">
@@ -221,7 +235,7 @@ export function KanbanBoard() {
           <TabsContent value="inbox" className="min-h-0 overflow-y-auto space-y-3 p-3 sm:p-6"><InboxCapture owner={person} onCaptured={refresh} /><PlanningCardList cards={derivedCards} onOpen={setSelectedCard} empty="Входящих задач пока нет" /></TabsContent>
           <TabsContent value="week" className="min-h-0 overflow-y-auto p-3 sm:p-6"><WeeklyPlanView cards={visibleCards} draft={weeklyDraft} loading={weeklyLoading} error={weeklyError} canAccept={username === 'nikita'} onLoad={() => void fetchWeeklyDraft()} onAccept={ids => acceptWeeklyPlan(ids)} onOpen={setSelectedCard} /></TabsContent>
           <TabsContent value="today" className="min-h-0 overflow-y-auto p-3 sm:p-6"><PlanningCardList cards={derivedCards} onOpen={setSelectedCard} empty="На сегодня задач нет" /></TabsContent>
-          <TabsContent value="balance" className="min-h-0 overflow-y-auto p-3 sm:p-6"><RoleBalanceView balance={roleBalance} /></TabsContent>
+          <TabsContent value="balance" className="min-h-0 overflow-y-auto p-3 sm:p-6">{roleError && <p role="alert" className="text-sm text-destructive">{roleError}</p>}<RoleBalanceView balance={roleBalance} roles={roles} /></TabsContent>
           <TabsContent value="closed" className="min-h-0 overflow-y-auto">
             <div className="flex flex-wrap items-center gap-2 px-3 pt-3 sm:px-6">
               <p className="text-sm text-muted-foreground">Карточки сохранены. Отмена не считается выполнением.</p>
@@ -237,8 +251,8 @@ export function KanbanBoard() {
         <Button className="fixed bottom-6 right-6 h-12 w-12 rounded-full shadow-lg z-50" onClick={() => { setDefaultColumn('todo'); setShowAdd(true); }}>
           <Plus className="h-5 w-5" />
         </Button>
-        <AddCardDialog open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={createCard} />
-        {selectedCard && <CardEditDialog card={selectedCard} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} />}
+        <AddCardDialog roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={createCard} />
+        {selectedCard && <CardEditDialog roles={roles} card={selectedCard} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} />}
         {conflict && <ConflictDialog conflict={conflict} onResolve={resolveConflict} />}
         <Dialog open={showWelcome} onOpenChange={setShowWelcome}>
           <DialogContent className="sm:max-w-md" showCloseButton={false}>
@@ -254,7 +268,7 @@ export function KanbanBoard() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <RolesDialog owner={person} open={showRoles} onOpenChange={setShowRoles} />
+        <RolesDialog owner={person} open={showRoles} onOpenChange={setShowRoles} onSaved={() => setRoleRefresh(value => value + 1)} />
       </DndProvider>
     </CardActionsContext.Provider>
   );

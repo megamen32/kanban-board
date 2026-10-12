@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,8 +8,10 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { X, Plus } from 'lucide-react';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
-import type { KanbanCard, Priority, PlanningType } from '@/lib/kanban/types';
+import type { KanbanCard, Priority, PlanningType, RoleDefinition } from '@/lib/kanban/types';
+import { RolePicker } from './role-picker';
 import { fromDateTimeLocalValue } from '@/lib/kanban/date-input';
+import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
 
 export interface PlanningMetadataForm {
   type: PlanningType;
@@ -48,10 +50,11 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultColumn: string;
+  roles?: RoleDefinition[];
   onCreate: (title: string, description: string, column: string, priority: string, tags: string[], project: string, assignees: string[], dueAt?: string, planning?: ReturnType<typeof buildPlanningMetadataCreate>) => Promise<KanbanCard | undefined>;
 }
 
-export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: Props) {
+export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate, roles }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [column, setColumn] = useState(defaultColumn);
@@ -63,11 +66,18 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
   const [planning, setPlanning] = useState<PlanningMetadataForm>({ type: 'action', role: '', important: false, urgent: false, scheduledAt: '', todayRank: '', waitingFor: '', requiresApprovalFrom: '', suggestedAssignee: '', parent: '' });
   const [tagInput, setTagInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { if (open) { setColumn(defaultColumn); setError(null); } }, [open, defaultColumn]);
 
   const handleSubmit = async () => {
-    if (!title.trim() || !project.trim()) return;
+    if (!title.trim() || !project.trim() || submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
-    await onCreate(title.trim(), description.trim(), column, priority, tags, project.trim(), assignees.split(',').map(value => value.trim()).filter(Boolean), fromDateTimeLocalValue(dueAt), buildPlanningMetadataCreate(planning));
+    setError(null);
+    try {
+    const saved = await onCreate(title.trim(), description.trim(), column, priority, tags, project.trim(), assignees.split(',').map(value => value.trim()).filter(Boolean), fromDateTimeLocalValue(dueAt), buildPlanningMetadataCreate(planning));
+    if (!saved) { setError('Создание не подтверждено. Введённые данные остались в форме.'); return; }
     setTitle('');
     setDescription('');
     setTags([]);
@@ -76,8 +86,9 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
     setDueAt('');
     setTagInput('');
     setPlanning({ type: 'action', role: '', important: false, urgent: false, scheduledAt: '', todayRank: '', waitingFor: '', requiresApprovalFrom: '', suggestedAssignee: '', parent: '' });
-    setSubmitting(false);
     onOpenChange(false);
+    } catch (failure) { setError(mutationErrorMessage(failure)); }
+    finally { submittingRef.current = false; setSubmitting(false); }
   };
 
   const addTag = () => {
@@ -98,7 +109,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
             placeholder="Название задачи"
             value={title}
             onChange={e => setTitle(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleSubmit(); } }}
             autoFocus
           />
 
@@ -129,7 +140,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
             <label className="text-sm font-medium">Планирование</label>
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-muted-foreground">Тип<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.type} onChange={e => setPlanning({ ...planning, type: e.target.value as PlanningMetadataForm['type'] })}><option value="action">Действие</option><option value="outcome">Результат</option></select></label>
-              <label className="text-xs text-muted-foreground">Роль<Input className="mt-1" placeholder="Из «Роли»" value={planning.role} onChange={e => setPlanning({ ...planning, role: e.target.value })} /></label>
+              <label className="text-xs text-muted-foreground">Роль<RolePicker roles={roles} value={planning.role} onChange={role => setPlanning({ ...planning, role })} /></label>
             </div>
             <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><input type="checkbox" checked={planning.important} onChange={e => setPlanning({ ...planning, important: e.target.checked })} /> Важно</label><label className="flex items-center gap-2"><input type="checkbox" checked={planning.urgent} onChange={e => setPlanning({ ...planning, urgent: e.target.checked })} /> Срочно</label></div>
             <div className="grid grid-cols-2 gap-3"><label className="text-xs text-muted-foreground">Планировать на дату<Input className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
@@ -196,6 +207,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate }: P
         </div>
 
         <DialogFooter>
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <Button variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
           <Button onClick={handleSubmit} disabled={!title.trim() || !project.trim() || submitting}>Создать</Button>
         </DialogFooter>

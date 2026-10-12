@@ -5,6 +5,7 @@ import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { useState, useCallback } from 'react';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import type { KanbanCard as CardType, KanbanColumn as ColType } from '@/lib/kanban/types';
+import { mutationErrorMessage, BoardMutationError } from '../../lib/kanban/mutation-response';
 
 const COL_IDS: ReadonlyArray<ColType> = DEFAULT_COLUMNS.map(c => c.id);
 
@@ -17,6 +18,7 @@ interface Props {
 
 export function DndProvider({ children, cards, onMoveCard, onReorder }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 8 } }),
@@ -52,18 +54,23 @@ export function DndProvider({ children, cards, onMoveCard, onReorder }: Props) {
       }
     }
 
+    setError(null);
+    try {
     if (targetCol !== card.column) {
-      await onMoveCard(cardId, targetCol, targetOrder);
+      const saved = await onMoveCard(cardId, targetCol, targetOrder);
+      if (!saved || saved.column !== targetCol) throw new BoardMutationError('Перемещение не подтверждено. Проверьте статус и конфликт версий.');
     } else if (targetOrder !== undefined) {
       const colCards = cards.filter(c => c.column === targetCol).sort((a, b) => a.order - b.order);
       const reordered = colCards.filter(c => c.id !== cardId);
       reordered.splice(targetOrder, 0, card);
       await onReorder(targetCol, reordered.map(c => c.id));
     }
+    } catch (failure) { setError(mutationErrorMessage(failure)); }
   }, [cards, onMoveCard, onReorder]);
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+      {error && <p role="alert" className="border p-3 text-sm text-destructive">{error}</p>}
       {children}
       <DragOverlay>
         {activeCard && (

@@ -1,4 +1,4 @@
-import type { KanbanCard } from '@/lib/kanban/types';
+import type { KanbanCard, RoleDefinition } from '@/lib/kanban/types';
 import { getExecutionView, getInboxView, getRoleBalance, getTodayView, getWeekView, type RoleBalanceView } from '../../lib/kanban/planning-views';
 
 export type PlanningTab = 'execution' | 'inbox' | 'week' | 'today' | 'balance' | 'closed';
@@ -40,8 +40,8 @@ export function getPlanningTabCards(cards: KanbanCard[], tab: PlanningTab, now: 
 }
 
 /** Returns the role balance projection for the current planning scope. */
-export function getPlanningRoleBalance(cards: KanbanCard[], now: string | Date = new Date()): RoleBalanceView {
-  return getRoleBalance(cards, now);
+export function getPlanningRoleBalance(cards: KanbanCard[], now: string | Date = new Date(), roles?: readonly RoleDefinition[]): RoleBalanceView {
+  return getRoleBalance(cards, now, roles);
 }
 
 /** Validates the server contract for selecting a weekly batch of one to six cards. */

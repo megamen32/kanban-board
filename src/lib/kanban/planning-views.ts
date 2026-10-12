@@ -1,5 +1,5 @@
 import { ROLE_IDS } from './types';
-import type { KanbanCard, KanbanColumn, RoleId } from './types';
+import type { KanbanCard, KanbanColumn, RoleId, RoleDefinition } from './types';
 
 const MOSCOW_TIME_ZONE = 'Europe/Moscow';
 const NIKITA = 'nikita';
@@ -148,21 +148,32 @@ export function getTodayView(cards: KanbanCard[], now: string | Date = new Date(
 }
 
 /** Returns current-week role balance, warning only for roles without an accepted Big Rock. */
-export function getRoleBalance(cards: KanbanCard[], now: string | Date = new Date()): RoleBalanceView {
+export function getRoleBalance(cards: KanbanCard[], now: string | Date = new Date(), roles?: readonly RoleDefinition[]): RoleBalanceView {
   const week = moscowIsoWeek(now);
   const result = {} as RoleBalanceView;
-  for (const role of ROLE_IDS) {
+  const roleIds: string[] = roles ? roles.map(role => role.id) : [...ROLE_IDS];
+  const resolveRole = (role: string) => {
+    if (roleIds.includes(role)) return role;
+    const legacyIndex = ROLE_IDS.indexOf(role as typeof ROLE_IDS[number]);
+    const configuredDefault = `nikita-${legacyIndex + 1}`;
+    return legacyIndex >= 0 && roleIds.includes(configuredDefault) ? configuredDefault : role;
+  };
+  for (const card of cards) if (card.role) {
+    const id = resolveRole(card.role);
+    if (!roleIds.includes(id)) roleIds.push(id);
+  }
+  for (const role of roleIds) {
     result[role] = { acceptedBigRocks: [], activeActions: [], warning: true };
   }
   if (!week) return result;
 
   for (const card of cards) {
-    if (!card.role || !ROLE_IDS.includes(card.role as typeof ROLE_IDS[number])) continue;
-    const balance = result[card.role as RoleId];
+    if (!card.role) continue;
+    const balance = result[resolveRole(card.role)];
     if (card.week === week && card.bigRock === true && card.needsReview !== true) balance.acceptedBigRocks.push(card.id);
     if (card.type === 'action' && ACTIVE_COLUMNS.has(card.column)) balance.activeActions.push(card.id);
   }
-  for (const role of ROLE_IDS) {
+  for (const role of roleIds) {
     result[role].warning = result[role].acceptedBigRocks.length === 0;
   }
   return result;

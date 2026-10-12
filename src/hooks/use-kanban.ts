@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { KanbanCard, KanbanCardUpdates, SyncEvent, ConflictInfo } from '@/lib/kanban/types';
+import type { KanbanCard, KanbanCardUpdates, KanbanColumn, ConflictInfo } from '@/lib/kanban/types';
 import type { WeeklyDraft } from '@/lib/kanban/weekly-plan';
 import { retryConflictEdit } from './conflict-choice';
+import { BoardMutationError, readMutationResponse } from '../lib/kanban/mutation-response';
 
 const WS_URL = '/?XTransformPort=3003';
 
@@ -75,11 +76,13 @@ export function useKanban() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, description, column, priority, tags, project, assignees, dueAt, ...planning }),
     });
-    const data = await res.json();
-    if (data.card) setCards(prev => prev.some(card => card.id === data.card.id)
-      ? prev.map(card => card.id === data.card.id ? data.card : card)
-      : [...prev, data.card]);
-    return data.card;
+    const data = await readMutationResponse(res);
+    const saved = data.card;
+    if (!saved) throw new BoardMutationError('Сервер не подтвердил создание задачи. Введённые данные не удалены.');
+    if (saved) setCards(prev => prev.some(card => card.id === saved.id)
+      ? prev.map(card => card.id === saved.id ? saved : card)
+      : [...prev, saved]);
+    return saved;
   }, []);
 
   const updateCard = useCallback(async (id: string, updates: KanbanUpdateRequest, expectedVersion?: number) => {
@@ -88,40 +91,36 @@ export function useKanban() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildUpdateRequestBody(updates, expectedVersion)),
     });
-    const data = await res.json();
+    const data = await readMutationResponse(res, true);
     if (res.status === 409) {
       setConflict({
         cardId: id,
-        serverVersion: data.serverCard.version,
+        serverVersion: data.serverCard!.version,
         clientVersion: expectedVersion ?? 0,
-        serverCard: data.serverCard,
+        serverCard: data.serverCard!,
         clientCard: { id, ...updates } as KanbanCard,
       });
       return null;
     }
-    if (data.card) {
-      setCards(prev => prev.map(c => c.id === id ? data.card : c));
-    }
-    return data.card;
+    const saved = data.card;
+    if (!saved) throw new BoardMutationError('Сервер не подтвердил сохранение карточки. Введённые данные не удалены.');
+    setCards(prev => prev.map(c => c.id === id ? saved : c));
+    return saved;
   }, []);
 
   const deleteCard = useCallback(async (id: string) => {
-    await fetch(`/api/kanban/cards/${id}`, { method: 'DELETE' });
+    const response = await fetch(`/api/kanban/cards/${id}`, { method: 'DELETE' });
+    const data = await readMutationResponse(response);
+    if (!data.success) throw new BoardMutationError('Сервер не подтвердил удаление. Карточка не скрыта.');
     setCards(prev => prev.filter(c => c.id !== id));
+    return true;
   }, []);
 
   const moveCard = useCallback(async (id: string, column: string, order?: number) => {
-    const res = await fetch(`/api/kanban/cards/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ column, order }),
-    });
-    const data = await res.json();
-    if (data.card) {
-      setCards(prev => prev.map(c => c.id === id ? data.card : c));
-    }
-    return data.card as KanbanCard | null;
-  }, []);
+    const current = cards.find(card => card.id === id);
+    if (!current) throw new BoardMutationError('Карточка изменилась. Обновите доску перед перемещением.');
+    return updateCard(id, { column: column as KanbanColumn, order }, current.version);
+  }, [cards, updateCard]);
 
   const reorderColumn = useCallback(async (column: string, cardIds: string[]) => {
     const res = await fetch('/api/kanban/reorder', {
@@ -129,7 +128,8 @@ export function useKanban() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ column, cardIds }),
     });
-    const data = await res.json();
+    const data = await readMutationResponse(res);
+    if (!data.cards) throw new BoardMutationError('Сервер не подтвердил порядок карточек. Обновите доску.');
     if (data.cards) {
       setCards((prev: KanbanCard[]) => {
         const updated = new Map<KanbanCard['id'], KanbanCard>((data.cards as KanbanCard[]).map((c: KanbanCard) => [c.id, c]));

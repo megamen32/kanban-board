@@ -9,15 +9,19 @@ import { Badge } from '@/components/ui/badge';
 import { X, Plus, Trash2 } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DEFAULT_COLUMNS, PRIORITY_COLORS } from '@/lib/kanban/types';
-import type { KanbanCard, Priority, KanbanColumn, PlanningType } from '@/lib/kanban/types';
+import type { KanbanCard, Priority, KanbanColumn, PlanningType, RoleDefinition } from '@/lib/kanban/types';
+import { RolePicker } from './role-picker';
 import { fromDateTimeLocalValue, toDateTimeLocalValue } from '@/lib/kanban/date-input';
 import type { KanbanUpdateRequest } from '@/hooks/use-kanban';
+import { initialPlanningMetadata } from './initial-planning';
+import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
 
 interface Props {
   card: KanbanCard;
   open: boolean;
+  roles?: RoleDefinition[];
   onOpenChange: (open: boolean) => void;
-  onDelete?: (id: string) => void;
+  onDelete?: (id: string) => Promise<unknown>;
   onUpdate?: (id: string, updates: KanbanUpdateRequest, version?: number) => Promise<KanbanCard | null>;
 }
 
@@ -60,7 +64,7 @@ export function buildPlanningMetadataUpdates(card: KanbanCard, form: PlanningMet
   return updates as KanbanUpdateRequest;
 }
 
-export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }: Props) {
+export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, roles }: Props) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
   const [column, setColumn] = useState(card.column);
@@ -70,13 +74,11 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
   const [assignees, setAssignees] = useState(card.assignees.join(', '));
   const [reassignmentConfirmed, setReassignmentConfirmed] = useState(false);
   const [dueAt, setDueAt] = useState(toDateTimeLocalValue(card.dueAt));
-  const [planning, setPlanning] = useState<PlanningMetadataForm>({
-    type: card.type ?? 'action', role: card.role ?? '', important: card.important ?? false, urgent: card.urgent ?? false,
-    scheduledAt: card.scheduledAt ?? '', todayRank: card.todayRank?.toString() ?? '', waitingFor: card.waitingFor?.join(', ') ?? '',
-    requiresApprovalFrom: card.requiresApprovalFrom?.join(', ') ?? '', suggestedAssignee: card.suggestedAssignee ?? '', parent: card.parent ?? '',
-  });
+  const [planning, setPlanning] = useState<PlanningMetadataForm>(() => initialPlanningMetadata(card));
   const [tagInput, setTagInput] = useState('');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState(card);
 
   useEffect(() => {
     setTitle(card.title);
@@ -87,20 +89,21 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
     setProject(card.project);
     setAssignees(card.assignees.join(', '));
     setReassignmentConfirmed(false);
+    setBaseline(card);
+    setError(null);
     setDueAt(toDateTimeLocalValue(card.dueAt));
-    setPlanning({
-      type: card.type ?? 'action', role: card.role ?? '', important: card.important ?? false, urgent: card.urgent ?? false,
-      scheduledAt: card.scheduledAt ?? '', todayRank: card.todayRank?.toString() ?? '', waitingFor: card.waitingFor?.join(', ') ?? '',
-      requiresApprovalFrom: card.requiresApprovalFrom?.join(', ') ?? '', suggestedAssignee: card.suggestedAssignee ?? '', parent: card.parent ?? '',
-    });
-  }, [card]);
+    setPlanning(initialPlanningMetadata(card));
+    // A remote update must not erase unsaved input or silently advance its CAS.
+  }, [card.id, open]);
 
   const handleSave = async () => {
-    if (!title.trim() || !onUpdate) return;
+    if (!title.trim() || !project.trim() || !onUpdate || saving) return;
     const nextAssignees = assignees.split(',').map(value => value.trim()).filter(Boolean);
-    const assigneesChanged = JSON.stringify(nextAssignees) !== JSON.stringify(card.assignees);
+    const assigneesChanged = JSON.stringify(nextAssignees) !== JSON.stringify(baseline.assignees);
     if (assigneesChanged && !reassignmentConfirmed) return;
     setSaving(true);
+    setError(null);
+    try {
     const updates: KanbanUpdateRequest = {
       title: title.trim(),
       description: description.trim(),
@@ -110,17 +113,21 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
       project: project.trim(),
       assignees: nextAssignees,
       dueAt: fromDateTimeLocalValue(dueAt) || null,
-      ...buildPlanningMetadataUpdates(card, planning, nextAssignees),
+      ...buildPlanningMetadataUpdates(baseline, planning, nextAssignees),
     };
-    await onUpdate(card.id, updates, card.version);
-    setSaving(false);
+    const saved = await onUpdate(card.id, updates, baseline.version);
+    if (!saved) { setError('Карточка изменилась. Разрешите конфликт версий; ваш текст остался в форме.'); return; }
     onOpenChange(false);
+    } catch (failure) { setError(mutationErrorMessage(failure)); }
+    finally { setSaving(false); }
   };
 
   const handleDelete = async () => {
-    if (!onDelete) return;
-    await onDelete(card.id);
-    onOpenChange(false);
+    if (!onDelete || saving) return;
+    setSaving(true); setError(null);
+    try { await onDelete(card.id); onOpenChange(false); }
+    catch (failure) { setError(mutationErrorMessage(failure)); }
+    finally { setSaving(false); }
   };
 
   const addTag = () => {
@@ -155,7 +162,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Ответственные</label>
               <Input value={assignees} onChange={e => setAssignees(e.target.value)} placeholder="через запятую" />
-              {JSON.stringify(assignees.split(',').map(value => value.trim()).filter(Boolean)) !== JSON.stringify(card.assignees) && (
+              {JSON.stringify(assignees.split(',').map(value => value.trim()).filter(Boolean)) !== JSON.stringify(baseline.assignees) && (
                 <label className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
                   <Checkbox checked={reassignmentConfirmed} onCheckedChange={value => setReassignmentConfirmed(value === true)} />
                   <span>Подтверждаю явное переназначение ответственных</span>
@@ -173,7 +180,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
             <label className="text-sm font-medium">Планирование</label>
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-muted-foreground">Тип<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.type} onChange={e => setPlanning({ ...planning, type: e.target.value as PlanningType | '' })}><option value="">Не выбран</option><option value="action">Действие</option><option value="outcome">Результат</option></select></label>
-              <label className="text-xs text-muted-foreground">Роль<Input className="mt-1" placeholder="Из «Роли»" value={planning.role} onChange={e => setPlanning({ ...planning, role: e.target.value })} /></label>
+              <label className="text-xs text-muted-foreground">Роль<RolePicker roles={roles} value={planning.role} onChange={role => setPlanning({ ...planning, role })} /></label>
             </div>
             <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><Checkbox checked={planning.important} onCheckedChange={value => setPlanning({ ...planning, important: value === true })} /> Важно</label><label className="flex items-center gap-2"><Checkbox checked={planning.urgent} onCheckedChange={value => setPlanning({ ...planning, urgent: value === true })} /> Срочно</label></div>
             <div className="grid grid-cols-2 gap-3"><label className="text-xs text-muted-foreground">Планировать на дату<Input className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
@@ -243,8 +250,9 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate }:
         </div>
 
         <DialogFooter className="flex justify-between">
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           {onDelete && (
-            <Button variant="destructive" size="sm" onClick={handleDelete}>
+            <Button variant="destructive" size="sm" disabled={saving} onClick={handleDelete}>
               <Trash2 className="h-3.5 w-3.5 mr-1" /> Удалить
             </Button>
           )}
