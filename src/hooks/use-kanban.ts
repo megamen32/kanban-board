@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { KanbanCard, KanbanCardUpdates, KanbanColumn, ConflictInfo } from '@/lib/kanban/types';
+import type { KanbanProject } from '@/lib/kanban/project-store';
 import type { WeeklyDraft } from '@/lib/kanban/weekly-plan';
 import { retryConflictEdit } from './conflict-choice';
 import { BoardMutationError, readMutationResponse } from '../lib/kanban/mutation-response';
@@ -24,6 +25,7 @@ export interface WeeklyPlanResult extends WeeklyDraft {
 
 export function useKanban() {
   const [cards, setCards] = useState<KanbanCard[]>([]);
+  const [projects, setProjects] = useState<KanbanProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
   const [weeklyDraft, setWeeklyDraft] = useState<WeeklyDraft | null>(null);
@@ -36,6 +38,7 @@ export function useKanban() {
       const res = await fetch('/api/kanban/cards');
       const data = await res.json();
       if (data.cards) setCards(data.cards);
+      if (data.projects) setProjects(data.projects);
     } catch (e) {
       console.error('Fetch cards error:', e);
     } finally {
@@ -193,6 +196,7 @@ export function useKanban() {
 
   return {
     cards,
+    projects,
     loading,
     conflict,
     createCard,

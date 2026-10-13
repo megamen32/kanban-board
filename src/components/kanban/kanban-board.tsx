@@ -28,7 +28,7 @@ import { parseBoardUrlState, serializeBoardUrlState, type BoardLayout, type Clos
 import { mutationErrorMessage, readMutationResponse } from '../../lib/kanban/mutation-response';
 
 export function KanbanBoard() {
-  const { cards, loading, conflict, createCard, updateCard, deleteCard, moveCard, reorderColumn, resolveConflict, refresh, weeklyDraft, weeklyLoading, weeklyError, fetchWeeklyDraft, acceptWeeklyPlan } = useKanban();
+  const { cards, projects, loading, conflict, createCard, updateCard, deleteCard, moveCard, reorderColumn, resolveConflict, refresh, weeklyDraft, weeklyLoading, weeklyError, fetchWeeklyDraft, acceptWeeklyPlan } = useKanban();
   const [showAdd, setShowAdd] = useState(false);
   const [defaultColumn, setDefaultColumn] = useState('inbox');
   const [view, setView] = useState<BoardLayout>('list');
@@ -107,7 +107,7 @@ export function KanbanBoard() {
     if (next !== current) window.history.replaceState(window.history.state, '', next);
   }, [assignee, attention, closedKind, inboxOnly, person, planningTab, project, search, urlReady, view, workspaceView]);
 
-  const projectOptions = getProjectOptions(cards);
+  const projectOptions = getProjectOptions(cards, projects);
   const assigneeOptions = useMemo(() => getAssigneeOptions(cards), [cards]);
   const people = useMemo(() => getPeople(cards), [cards]);
   const scopedCards = searchCards(filterWorkspaceCards(filterCards(cards, project, assignee), person, workspaceView), search);

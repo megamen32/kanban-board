@@ -31,4 +31,21 @@ describe('board file change notifications', () => {
       await fs.rm(dir, { recursive: true });
     }
   }, 5000);
+  // Focused integration: new hidden project directory added after watcher startup;
+  // expected <1s/max5s, ensures empty project reaches live selectors without reload.
+  it('notifies the board when a persistent project is published', async () => {
+    const root = path.join(process.cwd(), '.tmp');
+    await fs.mkdir(root, { recursive: true });
+    const dir = await fs.mkdtemp(path.join(root, 'project-watch-'));
+    const events: string[] = [];
+    const watcher = watchBoard(dir, fileName => events.push(fileName));
+    try {
+      await new Promise<void>(resolve => watcher.once('ready', resolve));
+      await fs.mkdir(path.join(dir, '.projects'));
+      const name = 'a'.repeat(64) + '.json';
+      await fs.writeFile(path.join(dir, '.projects', name), '{}');
+      await expect.poll(() => events.includes(name), { timeout: 1500 }).toBe(true);
+    } finally { await watcher.close(); await fs.rm(dir, { recursive: true }); }
+  }, 5000);
+
 });

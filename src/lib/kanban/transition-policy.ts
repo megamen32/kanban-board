@@ -15,6 +15,8 @@ export interface TransitionContext {
   actor: string;
   /** True only for a new-card request; existing-card changes remain protected. */
   isCreation?: boolean;
+  /** Authenticated work-service task authority; cannot be set by request data. */
+  internalTeamAuthorization?: { actor: string; evidence: PlanningEvidence };
   /** Machine evidence issued by a trusted server-side verifier, never by the request payload. */
   trustedCompletionEvidence?: PlanningEvidence[];
   ownerAuthorization?: {
@@ -82,7 +84,7 @@ export function validateTransition(
   if (
     changesAssignee(before, policyRequested)
     && !(context.isCreation && context.origin === 'human-ui' && context.actor === NIKITA_ACTOR)
-    && !hasOwnerAuthorization(context)
+    && !hasOwnerAuthorization(context) && !hasInternalTeamAuthorization(context)
   ) {
     return {
       kind: 'rejected',
@@ -91,7 +93,7 @@ export function validateTransition(
   }
 
   if (changesDeadline(before, policyRequested) && context.origin !== 'human-ui'
-    && !(context.origin === 'mcp' && hasOwnerAuthorization(context))) {
+    && !(context.origin === 'mcp' && (hasOwnerAuthorization(context) || hasInternalTeamAuthorization(context)))) {
     return {
       kind: 'rejected',
       reason: 'deadline_change_requires_human_ui',
@@ -135,6 +137,18 @@ export function validateTransition(
 
   if (policyRequested.column !== 'done' || before.column === 'done') {
     return { kind: 'accepted', patch };
+  }
+
+  if (hasInternalTeamAuthorization(context) && (requested.completionEvidence ?? []).some(item =>
+    typeof item.type === 'string' && item.type.trim() && Object.keys(item).some(key => key !== 'type')
+  ) && !(before.requiresApprovalFrom ?? []).length && !(policyRequested.requiresApprovalFrom ?? []).length) {
+    return { kind: 'accepted', patch: { ...patch, completedBy: context.internalTeamAuthorization!.actor,
+      completedAt: new Date().toISOString(), needsReview: false,
+      completionEvidence: appendEvidence(before.completionEvidence, undefined, {
+        type: 'internal_team_completion', actor: context.internalTeamAuthorization!.actor, origin: 'mcp',
+        evidence: context.internalTeamAuthorization!.evidence, result: requested.completionEvidence,
+      }),
+    } };
   }
 
   const ownerCompletion = context.ownerCompletionAuthorization;
@@ -220,6 +234,11 @@ function hasWeeklyPlanAcceptance(context: TransitionContext, requestedWeek?: str
  * @param context Transition origin, actor, and optional owner authorization.
  * @returns True only when the context contains valid direct-owner authority.
  */
+function hasInternalTeamAuthorization(context: TransitionContext): boolean {
+  return context.origin === 'mcp' && !!context.internalTeamAuthorization?.actor
+    && Object.keys(context.internalTeamAuthorization.evidence).length > 0;
+}
+
 function hasOwnerAuthorization(context: TransitionContext): boolean {
   return context.ownerAuthorization?.actor === NIKITA_ACTOR
     && Object.keys(context.ownerAuthorization.evidence).length > 0;

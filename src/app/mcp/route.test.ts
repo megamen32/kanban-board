@@ -73,7 +73,40 @@ describe('Kanban MCP transport', () => {
       'kanban.read',
       'kanban.capture_inbox',
       'kanban.change',
+      'kanban.project.ensure',
+      'kanban.project.list',
       'kanban.delete',
     ]);
   });
+  async function tool(name: string, args: Record<string, unknown>) {
+    const response = await POST(request({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name, arguments: args } }));
+    return (await response.json()).result;
+  }
+  it('ensures and lists persistent empty projects over authenticated HTTP, with conflict and repeat', async () => {
+    const args = { externalKey: 'exmanager:fixture:binding', name: 'Empty fixture' };
+    const first = JSON.parse((await tool('kanban.project.ensure', args)).content[0].text);
+    expect(first.created).toBe(true);
+    expect(JSON.parse((await tool('kanban.project.ensure', args)).content[0].text)).toEqual({ ...first, created: false });
+    expect(JSON.parse((await tool('kanban.project.list', {})).content[0].text)).toEqual({ projects: [first.project] });
+    expect((await tool('kanban.project.ensure', { ...args, name: 'Renamed' })).isError).toBe(true);
+    expect(JSON.parse((await tool('kanban.list', {})).content[0].text).cards).toEqual([]);
+  });
+  it('uses exact work service identity for normal internal edits and preserves CAS/evidence', async () => {
+    const auth = new AuthStore({ rootDir: authDir, encryptionKey: authSecret });
+    const code = auth.createAuthorizationCode('exmanager-service', 'exmanager-airlock-service', 'http://localhost/callback', 'kanban:work');
+    token = auth.exchangeAuthorizationCode(code, 'exmanager-airlock-service', 'http://localhost/callback')!.accessToken;
+    const first = JSON.parse((await tool('kanban.change', { mode: 'new', title: 'Internal fixture', project: 'QA', assignees: ['fixture'], dueAt: '2026-11-01T12:00:00Z' })).content[0].text).card;
+    expect(first.assignees).toEqual(['fixture']);
+    const edit = { mode: 'edit', cardId: first.id, expectedVersion: first.version, assignees: ['other'], dueAt: '2026-11-02T12:00:00Z' };
+    const changed = JSON.parse((await tool('kanban.change', edit)).content[0].text).card;
+    expect(changed.assignees).toEqual(['other']);
+    expect(changed.dueAt).toBe('2026-11-02T12:00:00.000Z');
+    expect((await tool('kanban.change', edit)).isError).toBe(true);
+    expect((await tool('kanban.change', { mode: 'edit', cardId: first.id, column: 'todo' })).isError).toBe(true);
+    const done = JSON.parse((await tool('kanban.change', { mode: 'edit', cardId: first.id, expectedVersion: changed.version, column: 'done', completionEvidence: [{ type: 'work_result', result: 'own fixture checked' }] })).content[0].text).card;
+    expect(done.column).toBe('done');
+    expect(done.completedBy).toBe('exmanager-service');
+    expect(done.completionEvidence).toEqual([expect.objectContaining({ type: 'internal_team_completion' })]);
+  });
+
 });

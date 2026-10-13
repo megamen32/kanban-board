@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { ensureProject, listProjects, projectInput } from '../kanban/project-store';
 import { createCard, deleteCard, findCardById, getAllCards, updateCard } from '../kanban/file-store';
 import { normalizeDueAt } from '../kanban/due-at';
 import { NIKITA_ACTOR, validateTransition } from '../kanban/transition-policy';
@@ -171,7 +172,7 @@ function filterCards(cards: KanbanCard[], filters: {
   return filters.limit ? result.slice(0, filters.limit) : result;
 }
 
-export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirmedOwnerCommands?: boolean } = {}): McpServer {
+export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirmedOwnerCommands?: boolean; allowInternalTeamCommands?: boolean } = {}): McpServer {
   const tasksDir = tasksDirForScope(scope);
   const server = new McpServer(
     { name: `excode-kanban-${scope}`, version: '1.0.0' },
@@ -251,6 +252,12 @@ export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirm
       dueAt,
       ...planningInput
     } = input as typeof input & ChangeInput;
+    const internalTeamAuthorization = options.allowInternalTeamCommands
+      ? { actor: 'exmanager-service', evidence: { type: 'authenticated_internal_team_command', service: 'exmanager-airlock-service' } }
+      : undefined;
+    if (internalTeamAuthorization && mode === 'edit' && (!Number.isSafeInteger(expectedVersion) || expectedVersion! < 1)) {
+      throw new Error('expectedVersion is required for internal team edits');
+    }
     // Trust comes from the authenticated service principal, never the payload.
     const ownerAuthorization = options.allowConfirmedOwnerCommands && ownerCommandConfirmed === true
       ? { actor: NIKITA_ACTOR, evidence: { type: 'airlock_confirmed_command', service: 'exmanager-airlock-service' } }
@@ -285,6 +292,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirm
         actor: 'mcp',
         isCreation: true,
         ownerAuthorization,
+        internalTeamAuthorization,
       });
       if (decision.kind === 'rejected') throw new Error(decision.reason);
 
@@ -317,12 +325,26 @@ export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirm
       || (before.requiresApprovalFrom ?? []).some(actor => actor !== NIKITA_ACTOR))) {
       throw new Error('owner completion is outside the exact owner review scope');
     }
-    const decision = validateTransition(before, requested, { origin: 'mcp', actor: 'mcp', ownerAuthorization, ownerCompletionAuthorization });
+    const decision = validateTransition(before, requested, { origin: 'mcp', actor: 'mcp', ownerAuthorization, ownerCompletionAuthorization, internalTeamAuthorization });
     if (decision.kind === 'rejected') throw new Error(decision.reason);
     const result = updateCard(cardId, decision.patch, expectedVersion, tasksDir);
     if ('conflict' in result) throw new Error(`Version conflict for card ${cardId}`);
     return textResult({ card: result, scope, transition: decision });
   });
+
+  server.registerTool('kanban.project.ensure', {
+    title: 'Ensure a persistent Kanban project',
+    description: 'Create an empty project or return the same immutable project for the external key. A different name for an existing key conflicts.',
+    inputSchema: projectInput,
+    annotations: { idempotentHint: true, destructiveHint: false, openWorldHint: false },
+  }, async input => textResult(ensureProject(tasksDir, input)));
+
+  server.registerTool('kanban.project.list', {
+    title: 'List persistent Kanban projects',
+    description: 'List registered projects including projects with zero cards.',
+    inputSchema: {},
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  }, async () => textResult({ projects: listProjects(tasksDir) }));
 
   server.registerTool('kanban.delete', {
     title: 'Delete a Kanban card',

@@ -26,3 +26,7 @@ or mounted task data. Keep source updates separate from data backup/recovery.
 Never use an old deployment copy or an image tag alone to identify the running
 source revision. Verify the live Compose build context and image before a
 release claim.
+
+Empty projects are private durable board metadata: `.projects/*.json` in the
+existing work-tasks mount. Include this hidden registry in board data backups;
+never copy it into source or images. Legacy Markdown cards need no migration.

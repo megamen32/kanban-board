@@ -106,3 +106,31 @@ The board records server-issued `owner_confirmed_completion` evidence with
 Ordinary automated DONE still redirects to review, and caller-supplied audit
 evidence never authorizes completion. Existing queued operations keep their
 original semantics.
+
+## Internal team work and empty projects (2026-10-13)
+
+Native `kanban.project.ensure {externalKey,name}` returns
+`{project:{id,externalKey,name},created}`; `kanban.project.list {}` returns
+`{projects:[...]}`. The registry lives in `.projects/*.json` inside the same
+scoped work mount, outside public source. It creates no cards. A repeated
+exact key/name returns the same immutable UUID; a different name conflicts.
+Publication is atomic across processes and fsynced before acknowledgment.
+The UI combines registered names and legacy card-derived names, including
+zero-card projects after reload. Project deletion/rename is not exposed.
+
+The owner-approved internal team contract supersedes confirmation for the
+exact existing `exmanager-airlock-service` / `exmanager-service` work principal.
+Normal `kanban.change` can assign and change deadlines without confirmation
+bits; edits require positive `expectedVersion`. X-manager retains actual
+caller/team/project authorization before invoking its bound work resource.
+Other clients and human UI keep their existing policy. No principal or secret
+is copied, invented or changed. Completion requires non-empty typed result
+`completionEvidence` (type plus a result field), and records server-issued
+`internal_team_completion` with the service actor and original result evidence.
+Outstanding reviewer requirements and missing evidence still redirect to review;
+request data cannot impersonate this service or manufacture completion authority.
+
+Static preview metadata and `/link-preview` contain no task or owner data.
+The external UI remains behind the existing SSO gateway and `/mcp` remains
+Bearer-authenticated. Public crawler ingress routing is a separate reviewed
+infrastructure change; application metadata alone does not prove Telegram preview.

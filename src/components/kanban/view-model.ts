@@ -50,8 +50,8 @@ export function getWeeklySelectionState(selectedIds: string[]): { selectedIds: s
   return { selectedIds: uniqueIds, canAccept: uniqueIds.length >= 1 && uniqueIds.length <= 6 };
 }
 
-export function getProjectOptions(cards: KanbanCard[]): string[] {
-  const projects = new Set(cards.map(card => card.project.trim()).filter(Boolean));
+export function getProjectOptions(cards: KanbanCard[], registered: { name: string }[] = []): string[] {
+  const projects = new Set([...registered.map(project => project.name.trim()), ...cards.map(card => card.project.trim())].filter(Boolean));
   return [...projects].sort((a, b) => a.localeCompare(b, 'ru'))
     .concat(cards.some(card => !card.project.trim()) ? ['Без проекта'] : []);
 }

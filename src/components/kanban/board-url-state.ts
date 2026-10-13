@@ -30,7 +30,8 @@ function boundedValue(value: string | null): string | undefined {
 /** Parses a shareable board URL without trusting arbitrary values as enums. */
 export function parseBoardUrlState(params: URLSearchParams): Partial<BoardUrlState> {
   const parsed: { -readonly [Key in keyof BoardUrlState]?: BoardUrlState[Key] } = {};
-  const project = boundedValue(params.get('project'));
+  // Project names are storage identities; NFKC would change registered names.
+  const project = params.get('project')?.trim().slice(0, 512);
   const assignee = boundedValue(params.get('assignee'));
   const person = boundedValue(params.get('person'));
   const search = boundedValue(params.get('search'));

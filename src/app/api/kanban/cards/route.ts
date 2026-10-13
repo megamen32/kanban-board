@@ -4,6 +4,7 @@ import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
 import { boardIdentityFromRequest, managerRequestAuthorized } from '@/lib/auth/request';
 import { boardHumanIdentityFromRequest } from '@/lib/auth/board-human';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
+import { listProjects } from '../../../../lib/kanban/project-store';
 import { normalizeDueAt } from '@/lib/kanban/due-at';
 import { dispatchCardEvent } from '@/lib/notifications/push';
 import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
@@ -15,7 +16,7 @@ export async function GET(req: NextRequest) {
     startDueReminderScheduler();
     const identity = boardIdentityFromRequest(req);
     const cards = getAllCards(tasksDirForScope(identity.scope));
-    return NextResponse.json({ cards });
+    return NextResponse.json({ cards, projects: listProjects(tasksDirForScope(identity.scope)) });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }

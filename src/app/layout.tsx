@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { todoPreview } from "@/lib/kanban/public-preview";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
@@ -14,16 +15,20 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "My Kanban",
-  description: "Mobile-first Kanban for people and agents.",
+  title: todoPreview.title,
+  description: todoPreview.description,
+  metadataBase: new URL(todoPreview.url),
+  twitter: { card: "summary_large_image", title: todoPreview.title, description: todoPreview.description, images: [todoPreview.image] },
   manifest: "/manifest.webmanifest",
   icons: {
     icon: "/logo.svg",
   },
   openGraph: {
-    title: "My Kanban",
-    description: "Mobile-first Kanban for people and agents.",
+    title: todoPreview.title,
+    description: todoPreview.description,
     type: "website",
+    url: todoPreview.url,
+    images: [{ url: todoPreview.image, width: 1200, height: 630, alt: todoPreview.title }],
   },
 };
 
