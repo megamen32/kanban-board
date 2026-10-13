@@ -51,10 +51,11 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   defaultColumn: string;
   roles?: RoleDefinition[];
+  projectOptions?: string[];
   onCreate: (title: string, description: string, column: string, priority: string, tags: string[], project: string, assignees: string[], dueAt?: string, planning?: ReturnType<typeof buildPlanningMetadataCreate>) => Promise<KanbanCard | undefined>;
 }
 
-export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate, roles }: Props) {
+export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate, roles, projectOptions = [] }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [column, setColumn] = useState(defaultColumn);
@@ -123,7 +124,8 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, onCreate, rol
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Проект *</label>
-              <Input placeholder="Hermes, Xcode..." value={project} onChange={e => setProject(e.target.value)} />
+              <Input aria-label="Проект" list="kanban-create-projects" placeholder="Hermes, Xcode..." value={project} onChange={e => setProject(e.target.value)} />
+              <datalist id="kanban-create-projects">{projectOptions.map(name => <option key={name} value={name} />)}</datalist>
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Ответственные</label>

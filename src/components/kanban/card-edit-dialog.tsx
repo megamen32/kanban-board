@@ -20,6 +20,7 @@ interface Props {
   card: KanbanCard;
   open: boolean;
   roles?: RoleDefinition[];
+  projectOptions?: string[];
   onOpenChange: (open: boolean) => void;
   onDelete?: (id: string) => Promise<unknown>;
   onUpdate?: (id: string, updates: KanbanUpdateRequest, version?: number) => Promise<KanbanCard | null>;
@@ -64,7 +65,7 @@ export function buildPlanningMetadataUpdates(card: KanbanCard, form: PlanningMet
   return updates as KanbanUpdateRequest;
 }
 
-export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, roles }: Props) {
+export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, roles, projectOptions = [] }: Props) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
   const [column, setColumn] = useState(card.column);
@@ -157,7 +158,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, r
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Проект *</label>
-              <Input value={project} onChange={e => setProject(e.target.value)} />
+              <Input aria-label="Проект" list="kanban-edit-projects" value={project} onChange={e => setProject(e.target.value)} />
+              <datalist id="kanban-edit-projects">{projectOptions.map(name => <option key={name} value={name} />)}</datalist>
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Ответственные</label>
