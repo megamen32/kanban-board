@@ -60,7 +60,7 @@ No Telegram preview or authenticated external SSO UI acceptance claimed. Localho
 Private sanitized proof and exact attempt records: owning ignored
 .tmp/project-ensure/{live-canary,airlock-handshake,native-readback,
 native-deploy-status,board-before,board-after,build-resources}.json.
-Synthetic registry fixture remains pending actual empty-project UI proof;
+Synthetic registry fixture is retained as an explicit empty QA project after UI acceptance;
 there is deliberately no project deletion/rename API.
 
 
