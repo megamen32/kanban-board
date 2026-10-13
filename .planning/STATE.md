@@ -4,7 +4,7 @@
 
 See: .planning/PROJECT.md (updated 2026-10-12)
 **Core value:** Human task changes persist after reload.
-**Current focus:** Persistent empty projects accepted through installed MCP and actual localhost UI
+**Current focus:** Native static preview installed; anonymous ingress awaiting owning Admin
 
 ## Current Position
 
@@ -24,7 +24,7 @@ Preserve existing board/data/policy; verify exact human login rather than accept
 
 Reported notebook repair accepted. Unrelated site features and platform migration not blanket-accepted.
 
-Quick261013-u31 project/MCP/UI contract accepted using owner-selected localhost without SSO. Public crawler ingress/Telegram preview remains expressly deferred to root review; static preview installed, public SSO intact. See quick/261013-u31-persistent-empty-projects-and-native-mcp/261013-u31-VERIFICATION.md.
+Quick261013-u31 project/MCP/UI contract accepted using owner-selected localhost without SSO. Quick261014-0me fixed native preview HTML/PNG published/installed; anonymous native ingress401 is handed to owning Admin through root. Public SSO and native auth intact; Telegram rendering is not yet accepted. See quick/261013-u31-persistent-empty-projects-and-native-mcp/261013-u31-VERIFICATION.md.
 
 ### Quick Tasks Completed
 
