@@ -4,14 +4,14 @@
 
 See: .planning/PROJECT.md (updated 2026-10-12)
 **Core value:** Human task changes persist after reload.
-**Current focus:** Main Todo browser scenarios accepted on deployed board
+**Current focus:** Persistent projects installed; real SSO browser acceptance pending
 
 ## Current Position
 
 Phase: 1 of 1 (Persistent notebook controls)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-10-12 — Quick261012-9pn delivered; main UI journeys passed after final rollout; own fixtures removed and all71 business cards unchanged.
+Last activity: 2026-10-13 — Quick261013-u31 installed and MCP verified; native filter entry deployed. GUI acceptance awaits actual SSO login and bounded managed browser.
 Progress: 100%
 
 ## Accumulated Context
@@ -24,6 +24,8 @@ Preserve existing board/data/policy; verify exact human login rather than accept
 
 Reported notebook repair accepted. Unrelated site features and platform migration not blanket-accepted.
 
+Quick261013-u31 remains incomplete: existing human SSO login and managed bounded44/88 browser are missing for empty-project UI/reload proof. Public crawler ingress review belongs to root; installed static preview remains SSO302. See quick/261013-u31-persistent-empty-projects-and-native-mcp/261013-u31-VERIFICATION.md.
+
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
@@ -33,5 +35,5 @@ Reported notebook repair accepted. Unrelated site features and platform migratio
 ## Session Continuity
 
 Last session: 2026-10-12
-Stopped at: Real consumer acceptance and task-owned cleanup
+Stopped at: Installed MCP acceptance complete; pending actual authenticated GUI acceptance
 Resume file: None
