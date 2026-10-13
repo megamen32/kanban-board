@@ -1,8 +1,8 @@
 export const todoPreview = {
   title: 'Todo — задачи и проекты',
-  description: 'Общая доска задач: проекты, исполнители, сроки и результаты работы. Вход через единый аккаунт.',
-  url: 'https://todo.bezrabotnyi.com/',
-  image: 'https://todo.bezrabotnyi.com/todo-preview.png',
+  description: 'Общая доска задач: проекты, исполнители, сроки и результаты работы. Доступ к доске после входа.',
+  url: 'https://todo-board.airlock.bezrabotnyi.com/',
+  image: 'https://todo-board.airlock.bezrabotnyi.com/static/todo-preview.a322669a5f08.png',
 };
 
 /** Static crawler document: never imports authentication or reads board data. */
