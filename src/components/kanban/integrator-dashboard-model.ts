@@ -69,6 +69,16 @@ export function executionStartRequest(expectedVersion: number, operationId: stri
   return { expectedVersion, operationId };
 }
 
+/** Retry an uncertain saved key only when the current Board read shows no attempt is recorded. */
+export function canRetrySameOperation(
+  operation: StoredStartOperation | null | 'invalid' | undefined,
+  execution: ExecutionSnapshot | null | undefined,
+): operation is StoredStartOperation {
+  return operation !== null && operation !== undefined && operation !== 'invalid'
+    && operation.status !== 'admitted'
+    && execution?.state === 'not-started' && execution.startAvailable === true;
+}
+
 /** Read back only the operation already admitted by the board. */
 export function executionSyncRequest(operationId: string, expectedVersion: number) {
   return { action: 'sync-result' as const, operationId, expectedVersion };

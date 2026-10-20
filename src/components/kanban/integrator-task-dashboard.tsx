@@ -6,6 +6,7 @@ import type { KanbanCard } from '@/lib/kanban/types';
 import { Button } from '@/components/ui/button';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import {
+  canRetrySameOperation,
   executionOperationStorageKey,
   executionSignalLabel,
   executionStartRequest,
@@ -65,33 +66,37 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
     }
   }, []);
 
-  async function startTask(card: KanbanCard) {
+  async function startTask(card: KanbanCard, retryOperation?: StoredStartOperation) {
     if (inFlightStarts.current.has(card.id)) return;
     const prior = storedOperations[card.id];
+    if (retryOperation && (!canRetrySameOperation(prior, executions[card.id])
+        || prior.operationId !== retryOperation.operationId)) return;
     if (prior === 'invalid') {
       setStartMessages(previous => ({ ...previous, [card.id]: 'Сохранённая запись запуска повреждена; повторная отправка отключена.' }));
       return;
     }
-    if (prior) {
+    if (prior && !retryOperation) {
       setStartMessages(previous => ({ ...previous, [card.id]: 'Для этой карточки уже есть незавершённая запись запуска. Повторная отправка отключена.' }));
       return;
     }
-    if (!executions[card.id] || executions[card.id]?.startAvailable !== true) return;
+    if (!retryOperation && (!executions[card.id] || executions[card.id]?.startAvailable !== true)) return;
 
-    const operationId = window.crypto?.randomUUID?.();
+    const operationId = retryOperation?.operationId ?? window.crypto?.randomUUID?.();
     if (!operationId) {
       setStartMessages(previous => ({ ...previous, [card.id]: 'Браузер не смог создать ключ операции; запуск не отправлен.' }));
       return;
     }
-    const operation: StoredStartOperation = { operationId, status: 'pending' };
-    if (!writeOperation(card.id, operation)) {
+    const operation: StoredStartOperation = retryOperation ?? { operationId, status: 'pending' };
+    if (!retryOperation && !writeOperation(card.id, operation)) {
       setStartMessages(previous => ({ ...previous, [card.id]: 'Не удалось сохранить ключ операции; запуск не отправлен.' }));
       return;
     }
 
     inFlightStarts.current.add(card.id);
     setStartBusy(previous => ({ ...previous, [card.id]: true }));
-    setStartMessages(previous => ({ ...previous, [card.id]: 'Отправляю один запрос запуска…' }));
+    setStartMessages(previous => ({ ...previous, [card.id]: retryOperation
+      ? 'Сверяю сохранённый запуск тем же ключом…'
+      : 'Отправляю один запрос запуска…' }));
     try {
       const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
         method: 'POST',
@@ -106,8 +111,8 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
         writeOperation(card.id, { operationId, status: 'admitted' });
         setStartMessages(previous => ({ ...previous, [card.id]: 'Запуск принят. Повторная отправка отключена; результат появится после сохранения сервером.' }));
       } else if (response.status === 409 && body && typeof body === 'object' && 'conflict' in body && body.conflict === true) {
-        clearOperation(card.id);
-        setStartMessages(previous => ({ ...previous, [card.id]: 'Карточка изменилась; данные обновлены, запуск не отправлен.' }));
+        writeOperation(card.id, { operationId, status: 'unknown' });
+        setStartMessages(previous => ({ ...previous, [card.id]: 'Запуск не подтверждён: версия карточки изменилась. Тот же ключ сохранён; новый запуск не создан.' }));
       } else {
         writeOperation(card.id, { operationId, status: 'unknown' });
         setStartMessages(previous => ({ ...previous, [card.id]: 'Исход запроса не подтверждён. Повторный запуск не отправлен.' }));
@@ -224,6 +229,8 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
               const storedOperation = storedOperations[card.id];
               const storageReady = storageLoadedFor === cardIdsKey && Object.hasOwn(storedOperations, card.id);
               const canStart = storageReady && storedOperation === null && execution?.startAvailable === true && !startBusy[card.id];
+              const retryOperation = storageReady && canRetrySameOperation(storedOperation, execution) ? storedOperation : null;
+              const canRetry = retryOperation !== null && !startBusy[card.id] && !syncBusy[card.id];
               const column = DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column;
               const sourceUrl = card.source ? safeSourceUrl(card.source) : null;
               return (
@@ -278,6 +285,9 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
                       </p>}
                       {storedOperation && storedOperation !== 'invalid' && <Button size="sm" variant="outline" disabled={startBusy[card.id] || syncBusy[card.id]} onClick={() => void syncResult(card, storedOperation)}>
                         {syncBusy[card.id] ? 'Проверяю…' : 'Проверить результат'}
+                      </Button>}
+                      {canRetry && retryOperation && <Button size="sm" variant="outline" disabled={startBusy[card.id] || syncBusy[card.id]} onClick={() => void startTask(card, retryOperation)}>
+                        Повторить с тем же ключом
                       </Button>}
                       {!storedOperation && execution?.startAvailable === false && execution.unavailableReason && <p className="text-sm text-muted-foreground">{execution.unavailableReason}</p>}
                       {!storedOperation && execution && execution.startAvailable === undefined && <p className="text-sm text-muted-foreground">Готовность к запуску пока не подтверждена.</p>}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   executionOperationStorageKey,
+  canRetrySameOperation,
   executionSignalLabel,
   executionStartRequest,
   executionSyncRequest,
@@ -42,6 +43,20 @@ describe('integrator dashboard model', () => {
     expect(parseStoredStartOperation(null)).toBeNull();
     expect(parseStoredStartOperation('{broken')).toBe('invalid');
     expect(parseStoredStartOperation(JSON.stringify({ operationId: 'short', status: 'pending' }))).toBe('invalid');
+  });
+
+  it('allows an explicit same-key retry only after a current not-started readiness read', () => {
+    const saved = { operationId: 'c5419ca2-62c3-4183-86bc-7bff0343a194', status: 'unknown' as const };
+    const ready = parseExecutionSnapshot({ cardId: 'task-1', state: 'not-started', startAvailable: true }, 'task-1');
+    expect(canRetrySameOperation(saved, ready)).toBe(true);
+    expect(executionStartRequest(4, saved.operationId)).toEqual({
+      expectedVersion: 4,
+      operationId: 'c5419ca2-62c3-4183-86bc-7bff0343a194',
+    });
+    expect(canRetrySameOperation(saved, parseExecutionSnapshot({ cardId: 'task-1', state: 'running', startAvailable: true }, 'task-1'))).toBe(false);
+    expect(canRetrySameOperation(saved, parseExecutionSnapshot({ cardId: 'task-1', state: 'not-started', startAvailable: false }, 'task-1'))).toBe(false);
+    expect(canRetrySameOperation({ ...saved, status: 'admitted' }, ready)).toBe(false);
+    expect(canRetrySameOperation('invalid', ready)).toBe(false);
   });
 
   it('projects only the stored immutable catalog references, never live relationship state', () => {
