@@ -1,13 +1,25 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { ArrowUpRight, CircleHelp, Clock3 } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowUpRight, CircleHelp, Clock3, Play } from 'lucide-react';
 import type { KanbanCard } from '@/lib/kanban/types';
 import { Button } from '@/components/ui/button';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
-import { executionSignalLabel, getDashboardCounts, getLatestResult, isVerifiedSessionUrl, parseExecutionSnapshot, type ExecutionSnapshot } from './integrator-dashboard-model';
+import {
+  executionOperationStorageKey,
+  executionSignalLabel,
+  executionStartRequest,
+  getDashboardCounts,
+  getLatestResult,
+  isVerifiedSessionUrl,
+  parseExecutionSnapshot,
+  parseStoredStartOperation,
+  type ExecutionSnapshot,
+  type StoredStartOperation,
+} from './integrator-dashboard-model';
 
-type Props = { cards: KanbanCard[]; onOpen: (card: KanbanCard) => void };
+type StoredOperationState = StoredStartOperation | null | 'invalid';
+type Props = { cards: KanbanCard[]; onOpen: (card: KanbanCard) => void; onRefresh: () => Promise<unknown> | void };
 
 function safeSourceUrl(value: string): string | null {
   try {
@@ -16,13 +28,157 @@ function safeSourceUrl(value: string): string | null {
   } catch { return null; }
 }
 
-export function IntegratorTaskDashboard({ cards, onOpen }: Props) {
+export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
   const [executions, setExecutions] = useState<Record<string, ExecutionSnapshot | null>>({});
+  const [storedOperations, setStoredOperations] = useState<Record<string, StoredOperationState>>({});
+  const [storageLoadedFor, setStorageLoadedFor] = useState<string | null>(null);
+  const [startBusy, setStartBusy] = useState<Record<string, boolean>>({});
+  const [syncBusy, setSyncBusy] = useState<Record<string, boolean>>({});
+  const [startMessages, setStartMessages] = useState<Record<string, string>>({});
+  const inFlightStarts = useRef(new Set<string>());
+  const inFlightSyncs = useRef(new Set<string>());
   const counts = getDashboardCounts(cards);
+  const cardIdsKey = cards.map(card => card.id).sort().join('\0');
+
+  function writeOperation(cardId: string, operation: StoredStartOperation): boolean {
+    try {
+      window.localStorage.setItem(executionOperationStorageKey(cardId), JSON.stringify(operation));
+      setStoredOperations(previous => ({ ...previous, [cardId]: operation }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  const clearOperation = useCallback((cardId: string) => {
+    try {
+      window.localStorage.removeItem(executionOperationStorageKey(cardId));
+      setStoredOperations(previous => ({ ...previous, [cardId]: null }));
+      setStartMessages(previous => {
+        if (!Object.hasOwn(previous, cardId)) return previous;
+        const next = { ...previous };
+        delete next[cardId];
+        return next;
+      });
+    } catch {
+      // Keep the existing record and fail closed if browser storage is unavailable.
+    }
+  }, []);
+
+  async function startTask(card: KanbanCard) {
+    if (inFlightStarts.current.has(card.id)) return;
+    const prior = storedOperations[card.id];
+    if (prior === 'invalid') {
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Сохранённая запись запуска повреждена; повторная отправка отключена.' }));
+      return;
+    }
+    if (prior) {
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Для этой карточки уже есть незавершённая запись запуска. Повторная отправка отключена.' }));
+      return;
+    }
+    if (!executions[card.id] || executions[card.id]?.startAvailable !== true) return;
+
+    const operationId = window.crypto?.randomUUID?.();
+    if (!operationId) {
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Браузер не смог создать ключ операции; запуск не отправлен.' }));
+      return;
+    }
+    const operation: StoredStartOperation = { operationId, status: 'pending' };
+    if (!writeOperation(card.id, operation)) {
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Не удалось сохранить ключ операции; запуск не отправлен.' }));
+      return;
+    }
+
+    inFlightStarts.current.add(card.id);
+    setStartBusy(previous => ({ ...previous, [card.id]: true }));
+    setStartMessages(previous => ({ ...previous, [card.id]: 'Отправляю один запрос запуска…' }));
+    try {
+      const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(executionStartRequest(card.version, operationId)),
+      });
+      const body: unknown = await response.json().catch(() => null);
+      const snapshot = parseExecutionSnapshot(body, card.id);
+      if (snapshot) setExecutions(previous => ({ ...previous, [card.id]: snapshot }));
+
+      if (response.status === 201 || response.status === 200) {
+        writeOperation(card.id, { operationId, status: 'admitted' });
+        setStartMessages(previous => ({ ...previous, [card.id]: 'Запуск принят. Повторная отправка отключена; результат появится после сохранения сервером.' }));
+      } else if (response.status === 409 && body && typeof body === 'object' && 'conflict' in body && body.conflict === true) {
+        clearOperation(card.id);
+        setStartMessages(previous => ({ ...previous, [card.id]: 'Карточка изменилась; данные обновлены, запуск не отправлен.' }));
+      } else {
+        writeOperation(card.id, { operationId, status: 'unknown' });
+        setStartMessages(previous => ({ ...previous, [card.id]: 'Исход запроса не подтверждён. Повторный запуск не отправлен.' }));
+      }
+    } catch {
+      writeOperation(card.id, { operationId, status: 'unknown' });
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Не удалось подтвердить ответ сервера. Повторный запуск не отправлен.' }));
+    } finally {
+      inFlightStarts.current.delete(card.id);
+      await Promise.resolve(onRefresh()).catch(() => undefined);
+      setStartBusy(previous => ({ ...previous, [card.id]: false }));
+    }
+  }
+
+  async function syncResult(card: KanbanCard, operation: StoredStartOperation) {
+    if (inFlightSyncs.current.has(card.id) || startBusy[card.id]) return;
+    inFlightSyncs.current.add(card.id);
+    setSyncBusy(previous => ({ ...previous, [card.id]: true }));
+    setStartMessages(previous => ({ ...previous, [card.id]: 'Проверяю результат этого запуска…' }));
+    try {
+      const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'sync-result', operationId: operation.operationId, expectedVersion: card.version }),
+      });
+      const body: unknown = await response.json().catch(() => null);
+      const snapshot = parseExecutionSnapshot(body, card.id);
+      if (snapshot) setExecutions(previous => ({ ...previous, [card.id]: snapshot }));
+
+      if (response.status === 200) {
+        clearOperation(card.id);
+        const resultCard = body && typeof body === 'object' && 'card' in body
+          ? (body as { card?: { id?: unknown; column?: unknown; needsReview?: unknown } }).card : undefined;
+        const reviewReady = resultCard?.id === card.id && resultCard.column === 'review' && resultCard.needsReview === true;
+        setStartMessages(previous => ({
+          ...previous,
+          [card.id]: reviewReady
+            ? 'Результат сохранён и ждёт проверки человека.'
+            : snapshot?.state === 'stopped'
+              ? 'Этот запуск завершён без результата для проверки.'
+              : 'Результат этого запуска уже сохранён.',
+        }));
+      } else if (response.status === 202) {
+        setStartMessages(previous => ({ ...previous, [card.id]: 'Результат ещё не подтверждён; запуск остаётся ожидающим. Можно проверить его позже.' }));
+      } else if (response.status === 409) {
+        setStartMessages(previous => ({ ...previous, [card.id]: 'Версия карточки изменилась. Данные обновлены; автоматического повтора нет.' }));
+      } else {
+        setStartMessages(previous => ({ ...previous, [card.id]: 'Сверка результата не подтверждена. Ключ запуска сохранён; новый запуск отключён.' }));
+      }
+    } catch {
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Ответ сверки не подтверждён. Ключ запуска сохранён; новый запуск отключён.' }));
+    } finally {
+      await Promise.resolve(onRefresh()).catch(() => undefined);
+      inFlightSyncs.current.delete(card.id);
+      setSyncBusy(previous => ({ ...previous, [card.id]: false }));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     const candidates = cards.filter(card => !['done', 'archived'].includes(card.column));
+    const loaded: Record<string, StoredOperationState> = {};
+    for (const card of cards) {
+      try {
+        loaded[card.id] = parseStoredStartOperation(window.localStorage.getItem(executionOperationStorageKey(card.id)));
+      } catch {
+        loaded[card.id] = 'invalid';
+      }
+    }
+    setStoredOperations(loaded);
+    setStorageLoadedFor(cardIdsKey);
     setExecutions({});
     const load = async () => {
       for (let offset = 0; offset < candidates.length; offset += 4) {
@@ -34,7 +190,8 @@ export function IntegratorTaskDashboard({ cards, onOpen }: Props) {
             const body: unknown = await response.json();
             const data = body && typeof body === 'object' && 'execution' in body
               ? (body as { execution: unknown }).execution : body;
-            return [card.id, parseExecutionSnapshot(data, card.id)] as const;
+            const snapshot = parseExecutionSnapshot(data, card.id);
+            return [card.id, snapshot] as const;
           } catch { return [card.id, null] as const; }
         }));
         if (!cancelled) setExecutions(previous => ({ ...previous, ...Object.fromEntries(results) }));
@@ -42,7 +199,7 @@ export function IntegratorTaskDashboard({ cards, onOpen }: Props) {
     };
     void load();
     return () => { cancelled = true; };
-  }, [cards]);
+  }, [cards, cardIdsKey, clearOperation]);
 
   return (
     <section aria-labelledby="integrator-dashboard-title" className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-6">
@@ -64,6 +221,9 @@ export function IntegratorTaskDashboard({ cards, onOpen }: Props) {
             {cards.map(card => {
               const result = getLatestResult(card);
               const execution = executions[card.id];
+              const storedOperation = storedOperations[card.id];
+              const storageReady = storageLoadedFor === cardIdsKey && Object.hasOwn(storedOperations, card.id);
+              const canStart = storageReady && storedOperation === null && execution?.startAvailable === true && !startBusy[card.id];
               const column = DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column;
               const sourceUrl = card.source ? safeSourceUrl(card.source) : null;
               return (
@@ -101,6 +261,29 @@ export function IntegratorTaskDashboard({ cards, onOpen }: Props) {
                     {execution?.waitReason && <p className="mt-2 text-sm"><span className="text-muted-foreground">Причина ожидания:</span> {execution.waitReason}</p>}
                     {execution?.nextAction && <p className="mt-2 text-sm"><span className="text-muted-foreground">Следующий шаг исполнителя:</span> {execution.nextAction}</p>}
                     {execution?.sessionUrl && isVerifiedSessionUrl(execution.sessionUrl) && <a className="mt-2 inline-flex items-center gap-1 text-sm underline" href={execution.sessionUrl} target="_blank" rel="noreferrer">Открыть сессию исполнителя <ArrowUpRight aria-hidden className="h-3.5 w-3.5" /></a>}
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <Button size="sm" disabled={!canStart} onClick={() => void startTask(card)}>
+                        <Play aria-hidden className="mr-1 h-3.5 w-3.5" />
+                        {startBusy[card.id] ? 'Запуск…' : 'Запустить задачу'}
+                      </Button>
+                      {storedOperation === 'invalid' && <p role="status" className="text-sm text-destructive">Сохранённая запись запуска повреждена; повторная отправка отключена.</p>}
+                      {storedOperation && storedOperation !== 'invalid' && <p role="status" className="text-sm text-muted-foreground">
+                        {syncBusy[card.id]
+                          ? 'Проверяю результат этого запуска…'
+                          : startBusy[card.id]
+                          ? 'Отправляю один запрос запуска…'
+                          : startMessages[card.id] ?? (storedOperation.status === 'admitted'
+                          ? 'Запуск принят. Повторная отправка отключена; ждём сохранённый результат.'
+                          : 'Исход запуска не подтверждён. Повторная отправка отключена.')}
+                      </p>}
+                      {storedOperation && storedOperation !== 'invalid' && <Button size="sm" variant="outline" disabled={startBusy[card.id] || syncBusy[card.id]} onClick={() => void syncResult(card, storedOperation)}>
+                        {syncBusy[card.id] ? 'Проверяю…' : 'Проверить результат'}
+                      </Button>}
+                      {!storedOperation && execution?.startAvailable === false && execution.unavailableReason && <p className="text-sm text-muted-foreground">{execution.unavailableReason}</p>}
+                      {!storedOperation && execution && execution.startAvailable === undefined && <p className="text-sm text-muted-foreground">Готовность к запуску пока не подтверждена.</p>}
+                      {!storedOperation && !execution && <p className="text-sm text-muted-foreground">Проверяем доступность запуска…</p>}
+                      {!storedOperation && startMessages[card.id] && <p role="status" className="text-sm text-muted-foreground">{startMessages[card.id]}</p>}
+                    </div>
                   </div>
 
                   {result && <div className="mt-3 border-l-2 pl-3">

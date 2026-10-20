@@ -3,11 +3,49 @@ import type { KanbanCard } from '@/lib/kanban/types';
 export type ExecutionSnapshot = {
   cardId: string;
   state: 'not-started' | 'running' | 'waiting' | 'stopped' | 'unknown';
+  startAvailable?: boolean;
+  unavailableReason?: string;
   lastProgress?: { summary: string; at: string };
   nextAction?: string;
   waitReason?: string;
   sessionUrl?: string;
 };
+
+export type StoredStartOperation = {
+  operationId: string;
+  status: 'pending' | 'admitted' | 'unknown';
+};
+
+export const EXECUTION_OPERATION_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+
+export function executionOperationStorageKey(cardId: string): string {
+  return `kanban:task-execution:${encodeURIComponent(cardId)}`;
+}
+
+/** A present but malformed record fails closed so a lost start is never replaced with a new ID. */
+export function parseStoredStartOperation(value: string | null): StoredStartOperation | null | 'invalid' {
+  if (value === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'invalid';
+    const record = parsed as Record<string, unknown>;
+    if (typeof record.operationId !== 'string' || !EXECUTION_OPERATION_ID_PATTERN.test(record.operationId)
+      || !['pending', 'admitted', 'unknown'].includes(String(record.status))) return 'invalid';
+    return { operationId: record.operationId, status: record.status as StoredStartOperation['status'] };
+  } catch {
+    return 'invalid';
+  }
+}
+
+/** Keep the browser request limited to the server-owned task/version join and its idempotency key. */
+export function executionStartRequest(expectedVersion: number, operationId: string) {
+  return { expectedVersion, operationId };
+}
+
+/** Read back only the operation already admitted by the board. */
+export function executionSyncRequest(operationId: string, expectedVersion: number) {
+  return { action: 'sync-result' as const, operationId, expectedVersion };
+}
 
 export function executionSignalLabel(state: ExecutionSnapshot['state']): string {
   return {
@@ -33,6 +71,8 @@ export function parseExecutionSnapshot(value: unknown, expectedCardId: string): 
   return {
     cardId: expectedCardId,
     state: candidate.state as ExecutionSnapshot['state'],
+    ...(typeof candidate.startAvailable === 'boolean' ? { startAvailable: candidate.startAvailable } : {}),
+    ...(typeof candidate.unavailableReason === 'string' ? { unavailableReason: candidate.unavailableReason } : {}),
     ...(lastProgress ? { lastProgress } : {}),
     ...(typeof candidate.nextAction === 'string' ? { nextAction: candidate.nextAction } : {}),
     ...(typeof candidate.waitReason === 'string' ? { waitReason: candidate.waitReason } : {}),

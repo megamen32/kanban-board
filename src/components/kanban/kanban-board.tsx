@@ -228,7 +228,7 @@ export function KanbanBoard() {
             </TabsList>
           </div>
           <TabsContent value="dashboard" className="min-h-0">
-            <IntegratorTaskDashboard cards={derivedCards} onOpen={setSelectedCard} />
+            <IntegratorTaskDashboard cards={derivedCards} onOpen={setSelectedCard} onRefresh={refresh} />
           </TabsContent>
           <TabsContent value="execution" className="min-h-0">
             {view === 'list' ? (

@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { executionSignalLabel, getDashboardCounts, getLatestResult, isVerifiedSessionUrl, parseExecutionSnapshot } from './integrator-dashboard-model';
+import {
+  executionOperationStorageKey,
+  executionSignalLabel,
+  executionStartRequest,
+  executionSyncRequest,
+  getDashboardCounts,
+  getLatestResult,
+  isVerifiedSessionUrl,
+  parseExecutionSnapshot,
+  parseStoredStartOperation,
+} from './integrator-dashboard-model';
 import type { KanbanCard } from '@/lib/kanban/types';
 
 const card = (overrides: Partial<KanbanCard> = {}): KanbanCard => ({
@@ -13,6 +23,24 @@ describe('integrator dashboard model', () => {
     expect(parseExecutionSnapshot({ cardId: 'task-1', state: 'running' }, 'task-1')?.state).toBe('running');
     expect(parseExecutionSnapshot({ cardId: 'task-2', state: 'running' }, 'task-1')).toBeNull();
     expect(parseExecutionSnapshot({ cardId: 'task-1', state: 'done' }, 'task-1')).toBeNull();
+  });
+
+  it('uses server readiness and keeps the start request limited to version plus operation ID', () => {
+    expect(parseExecutionSnapshot({ cardId: 'task-1', state: 'not-started', startAvailable: true }, 'task-1')?.startAvailable).toBe(true);
+    expect(parseExecutionSnapshot({ cardId: 'task-1', state: 'not-started', startAvailable: false, unavailableReason: 'Not configured' }, 'task-1'))
+      .toMatchObject({ startAvailable: false, unavailableReason: 'Not configured' });
+    expect(executionStartRequest(7, 'a'.repeat(32))).toEqual({ expectedVersion: 7, operationId: 'a'.repeat(32) });
+    expect(Object.keys(executionStartRequest(7, 'a'.repeat(32))).sort()).toEqual(['expectedVersion', 'operationId']);
+    expect(executionSyncRequest('a'.repeat(32), 8)).toEqual({ action: 'sync-result', operationId: 'a'.repeat(32), expectedVersion: 8 });
+  });
+
+  it('persists a valid per-card operation identity and rejects malformed stored data', () => {
+    const saved = { operationId: 'a'.repeat(32), status: 'unknown' as const };
+    expect(executionOperationStorageKey('task/one')).toBe('kanban:task-execution:task%2Fone');
+    expect(parseStoredStartOperation(JSON.stringify(saved))).toEqual(saved);
+    expect(parseStoredStartOperation(null)).toBeNull();
+    expect(parseStoredStartOperation('{broken')).toBe('invalid');
+    expect(parseStoredStartOperation(JSON.stringify({ operationId: 'short', status: 'pending' }))).toBe('invalid');
   });
 
   it('counts persisted business/review/result state without inferring executor activity', () => {
