@@ -2,9 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
-import { DEFAULT_COLUMNS, PLANNING_VERSION } from './types';
+import { DEFAULT_COLUMNS, parseCatalogTaskLink, PLANNING_VERSION } from './types';
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
-import type { KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskResult, TaskReviewRecord } from './types';
+import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskResult, TaskReviewRecord } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
@@ -14,7 +14,7 @@ const KNOWN_FRONTMATTER_KEYS = new Set([
   'today_rank', 'source', 'needs_review', 'suggested_assignee', 'waiting_for',
   'requires_approval_from', 'completed_by', 'completed_at', 'completion_evidence',
   'approval_evidence', 'result_history', 'review_history', 'next_action',
-  'source_admission',
+  'source_admission', 'catalog_task_link',
 ]);
 const PLANNING_FRONTMATTER_KEYS = new Set([
   'planning_version', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
@@ -102,6 +102,9 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
   const relativeDirectory = path.dirname(fileName);
   const legacyProject = relativeDirectory !== '.' ? relativeDirectory.split(path.sep)[0] : legacyName;
   const planning = parsePlanningMetadata(data);
+  const cardId = data.id || legacyName;
+  const catalogLink = data.catalog_task_link !== undefined ? parseCatalogTaskLink(data.catalog_task_link) : undefined;
+  if (catalogLink && catalogLink.taskId !== cardId) throw new Error('canonical catalog link task ID does not match Markdown card');
   const rawFrontmatter = Object.fromEntries(
     Object.entries(data).filter(([key]) => !KNOWN_FRONTMATTER_KEYS.has(key)),
   ) as RawFrontmatter;
@@ -121,7 +124,7 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
   const priority = enumField(data.priority, 'priority', ['low', 'medium', 'high', 'critical'] as const, 'medium', true);
 
   return {
-    id: data.id || legacyName,
+    id: cardId,
     title: data.title || legacyName.replace(/-[^-]+$/, '').replace(/-/g, ' '),
     description: content.trim(),
     column,
@@ -139,6 +142,7 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     shared: booleanField(data, 'shared', false),
     ...planning,
     ...(data.source_admission && typeof data.source_admission === 'object' ? { sourceAdmission: data.source_admission as SourceAdmissionBinding } : {}),
+    ...(catalogLink ? { catalogLink } : {}),
     rawFrontmatter,
   };
 }
@@ -197,6 +201,9 @@ export function updateCard(id: string, updates: KanbanCardUpdates, expectedVersi
 function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersion: number | undefined, tasksDir: string): KanbanCard | { conflict: true; serverCard: KanbanCard } {
   if (Object.hasOwn(updates as object, 'sourceAdmission')) {
     throw new Error('source admission binding is immutable');
+  }
+  if (Object.hasOwn(updates as object, 'catalogLink')) {
+    throw new Error('canonical catalog link is immutable');
   }
   const card = findCardById(id, tasksDir);
   if (!card) throw new Error(`Card ${id} not found`);
@@ -316,6 +323,76 @@ export function getTasksDir(tasksDir = TASKS_DIR): string {
   return tasksDir;
 }
 
+export type CatalogTaskLinkWriteResult =
+  | { status: 'created' | 'reused'; card: KanbanCard; link: CatalogTaskLink }
+  | { status: 'stale' | 'conflict' };
+
+/**
+ * Read-only exact replay check serialized with ordinary Board card writers.
+ * The sole permitted version delta is the +1 made by this link commit; any
+ * later unrelated card edit makes the historical replay stale.
+ */
+export function readCatalogTaskLinkForReplay(
+  cardId: string,
+  expectedBoardVersion: number,
+  untrustedLink: CatalogTaskLink,
+  tasksDir = TASKS_DIR,
+): { status: 'reused'; card: KanbanCard; link: CatalogTaskLink } | { status: 'stale' | 'conflict' | 'missing' } {
+  const link = parseCatalogTaskLink(untrustedLink);
+  if (link.taskId !== cardId || link.boardVersion !== expectedBoardVersion) throw new Error('catalog replay identity does not match requested operation');
+  return withSourceOperationLock(tasksDir, () => {
+    const card = findCardById(cardId, tasksDir);
+    if (!card) return { status: 'missing' };
+    if (!card.catalogLink) return { status: 'missing' };
+    if (!sameCatalogTaskLink(card.catalogLink, link)) return { status: 'conflict' };
+    if (card.version !== expectedBoardVersion + 1) return { status: 'stale' };
+    return { status: 'reused', card, link: card.catalogLink };
+  });
+}
+
+/** Internal persistence boundary. Call only after the canonical owner readback succeeds. */
+export function persistCatalogTaskLink(
+  cardId: string,
+  expectedVersion: number,
+  untrustedLink: CatalogTaskLink,
+  tasksDir = TASKS_DIR,
+): CatalogTaskLinkWriteResult {
+  const link = parseCatalogTaskLink(untrustedLink);
+  if (link.taskId !== cardId || link.boardVersion !== expectedVersion) throw new Error('catalog link identity does not match CAS target');
+  return withSourceOperationLock(tasksDir, () => {
+    const card = findCardById(cardId, tasksDir);
+    if (!card) throw new Error('catalog link task was not found');
+    if (card.catalogLink) {
+      if (!sameCatalogTaskLink(card.catalogLink, link)) return { status: 'conflict' };
+      return { status: 'reused', card, link: card.catalogLink };
+    }
+    if (card.version !== expectedVersion) return { status: 'stale' };
+    if (getAllCards(tasksDir).some(candidate => candidate.id !== cardId
+        && candidate.catalogLink?.operationRef === link.operationRef)) return { status: 'conflict' };
+
+    const updated: KanbanCard = {
+      ...card,
+      catalogLink: link,
+      version: card.version + 1,
+      updated: new Date().toISOString(),
+    };
+    writeCard(updated, tasksDir);
+    const readback = findCardById(cardId, tasksDir);
+    if (!readback?.catalogLink || !sameCatalogTaskLink(readback.catalogLink, link)) {
+      throw new Error('canonical catalog link readback mismatch');
+    }
+    return { status: 'created', card: readback, link: readback.catalogLink };
+  });
+}
+
+export function findCatalogTaskLink(cardId: string, tasksDir = TASKS_DIR): CatalogTaskLink | null {
+  return findCardById(cardId, tasksDir)?.catalogLink ?? null;
+}
+
+function sameCatalogTaskLink(a: CatalogTaskLink, b: CatalogTaskLink): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 function buildFrontmatter(card: KanbanCard): string {
   validatePlanningMetadata(card);
   enumField(card.column, 'column', DEFAULT_COLUMNS.map(item => item.id), 'inbox');
@@ -333,6 +410,7 @@ function buildFrontmatter(card: KanbanCard): string {
     project: card.project,
     assignees: card.assignees,
     ...(card.sourceAdmission ? { source_admission: card.sourceAdmission } : {}),
+    ...(card.catalogLink ? { catalog_task_link: parseCatalogTaskLink(card.catalogLink) } : {}),
     owner: card.owner ?? 'nikita',
     shared: card.shared ?? false,
   };

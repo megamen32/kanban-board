@@ -44,6 +44,8 @@ export interface KanbanCard {
   nextAction?: string;
   /** Immutable source admission identity; the board operation journal owns lifecycle state. */
   sourceAdmission?: SourceAdmissionBinding;
+  /** Immutable canonical catalog references; IDs and causal revisions only. */
+  catalogLink?: CatalogTaskLink;
   /** Unknown frontmatter is retained internally so unrelated edits are lossless. */
   rawFrontmatter?: Record<string, unknown>;
 }
@@ -61,6 +63,57 @@ export interface SourceAdmissionBinding {
   readonly requestedProject: string;
   readonly classification: 'explicit-task';
   readonly evidenceRefs: readonly string[];
+}
+
+/**
+ * Reference-only task-to-catalog binding. The catalog owner remains the source
+ * of truth; this record stores no names, task text, or copied catalog payload.
+ */
+export interface CatalogTaskLink {
+  readonly version: 1;
+  readonly taskId: string;
+  readonly operationRef: string;
+  readonly boardVersion: number;
+  readonly sourceRef: string;
+  readonly sourceRevision: string;
+  readonly projectId: string;
+  readonly planIds: readonly string[];
+  readonly gateIds: readonly string[];
+  readonly contactIds: readonly string[];
+  readonly catalogRevision: string;
+}
+
+export function parseCatalogTaskLink(value: unknown): CatalogTaskLink {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid canonical catalog link');
+  const raw = value as Record<string, unknown>;
+  const allowed = new Set(['version', 'taskId', 'operationRef', 'boardVersion', 'sourceRef', 'sourceRevision', 'projectId', 'planIds', 'gateIds', 'contactIds', 'catalogRevision']);
+  if (Object.keys(raw).some(key => !allowed.has(key)) || raw.version !== 1
+      || !Number.isSafeInteger(raw.boardVersion) || (raw.boardVersion as number) < 1) {
+    throw new Error('invalid canonical catalog link');
+  }
+  const id = (candidate: unknown): candidate is string => typeof candidate === 'string'
+    && candidate.length > 0 && candidate.length <= 512 && !/\s/.test(candidate);
+  if (!id(raw.taskId) || !id(raw.operationRef) || !id(raw.sourceRef) || !id(raw.sourceRevision)
+      || !id(raw.projectId) || !id(raw.catalogRevision)) throw new Error('invalid canonical catalog link IDs');
+  const ids = (candidate: unknown): string[] => {
+    if (!Array.isArray(candidate) || candidate.some(item => !id(item)) || new Set(candidate).size !== candidate.length) {
+      throw new Error('invalid canonical catalog link IDs');
+    }
+    return [...candidate] as string[];
+  };
+  return Object.freeze({
+    version: 1 as const,
+    taskId: raw.taskId,
+    operationRef: raw.operationRef,
+    boardVersion: raw.boardVersion as number,
+    sourceRef: raw.sourceRef,
+    sourceRevision: raw.sourceRevision,
+    projectId: raw.projectId,
+    planIds: Object.freeze(ids(raw.planIds)),
+    gateIds: Object.freeze(ids(raw.gateIds)),
+    contactIds: Object.freeze(ids(raw.contactIds)),
+    catalogRevision: raw.catalogRevision,
+  });
 }
 
 export type PlanningType = 'outcome' | 'action';
