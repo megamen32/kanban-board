@@ -15,6 +15,7 @@ export const dynamic = 'force-dynamic';
 type RecordValue = Record<string, unknown>;
 const SESSION_MODEL = 'gpt-6-luna';
 const MAX_TASK_TEXT = 48_000;
+const MAX_TASK_EXECUTION_HISTORY = 32;
 
 const isRecord = (value: unknown): value is RecordValue => !!value && typeof value === 'object' && !Array.isArray(value);
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -58,6 +59,9 @@ function startAvailability(card: KanbanCard) {
   const latest = card.taskExecutionHistory?.at(-1);
   if (latest && !['result', 'stopped'].includes(latest.phase)) {
     return { startAvailable: false, unavailableReason: 'Предыдущий запуск ещё не разрешён' };
+  }
+  if ((card.taskExecutionHistory?.length ?? 0) >= MAX_TASK_EXECUTION_HISTORY) {
+    return { startAvailable: false, unavailableReason: 'История запусков заполнена; создайте новую карточку для следующего запуска' };
   }
   return { startAvailable: true as const };
 }
@@ -103,6 +107,77 @@ function saveReceiptProgress(
   return undefined;
 }
 
+function taskPrompt(card: KanbanCard): string {
+  return [
+    `Выполни задачу канбан карточки ${card.id} из проекта «${card.project}».`,
+    `Название: ${card.title}`,
+    `Описание задачи:\n${card.description}`,
+    'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
+    'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
+  ].join('\n\n').slice(0, MAX_TASK_TEXT);
+}
+
+function exactSessionView(result: HerderToolResult, hostId: string, sessionId: string, cwd: string): boolean {
+  const view = isRecord(result.structuredContent) ? result.structuredContent : undefined;
+  const details = isRecord(view?.details) ? view.details : undefined;
+  const native = isRecord(details?.session) ? details.session : undefined;
+  return view?.hostId === hostId && native?.id === sessionId && native?.harness === 'codex'
+    && native.cwd === cwd && native.model === SESSION_MODEL;
+}
+
+async function dispatchCreatedTask(input: {
+  card: KanbanCard;
+  tasksDir: string;
+  actor: string;
+  operationId: string;
+  requestHash: string;
+  nativeSessionId: string;
+  messageInputId: string;
+  admittedStatus: number;
+}): Promise<NextResponse> {
+  let dispatchTool: HerderToolResult;
+  try {
+    dispatchTool = await callOwnerHerderTool('send_message', {
+      sessionId: input.nativeSessionId, harness: 'codex', inputId: input.messageInputId,
+      message: taskPrompt(input.card), mode: 'steer', humanRequested: true,
+    });
+  } catch {
+    const saved = saveReceiptProgress(input.card.id, input.tasksDir, input.operationId, input.requestHash, {
+      phase: 'dispatch-unknown', nativeSessionId: input.nativeSessionId,
+      dispatchReceiptText: 'owner MCP dispatch outcome unknown; never replay this operation',
+    });
+    return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : { cardId: input.card.id, state: 'unknown' as const }), operationId: input.operationId, retryable: false }, {
+      status: 202, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+
+  const dispatchText = textOf(dispatchTool);
+  const receiptMatch = dispatchText.match(/(?:Native admission|Current-turn context reservation) receipt:\s*(\{[^\n]+\})/);
+  let dispatchReceipt: RecordValue | undefined;
+  if (receiptMatch?.[1]) {
+    try { const value: unknown = JSON.parse(receiptMatch[1]); if (isRecord(value)) dispatchReceipt = value; } catch { /* Receipt text remains recorded as unknown. */ }
+  }
+  const admitted = dispatchReceipt?.admitted === true && dispatchReceipt.inputId === input.messageInputId
+    && typeof dispatchReceipt.turnId === 'string' && dispatchReceipt.turnId.trim().length > 0;
+  const startedFromVersion = input.card.version;
+  const updated = saveReceiptProgress(input.card.id, input.tasksDir, input.operationId, input.requestHash, {
+    phase: admitted ? 'running' : 'dispatch-unknown', nativeSessionId: input.nativeSessionId,
+    ...(typeof dispatchReceipt?.turnId === 'string' ? { nativeTurnId: dispatchReceipt.turnId } : {}),
+    dispatchReceiptText: dispatchText,
+    lastProgress: admitted ? 'Задание передано в нативную сессию; ожидается результат.' : 'Статус передачи задания не подтверждён.',
+    lastProgressAt: now(),
+  }, admitted ? current => {
+    if (current.version !== startedFromVersion || current.column === 'in-progress') return {};
+    const startTransition = validateTransition(current, { column: 'in-progress' }, { origin: 'automation', actor: input.actor });
+    return startTransition.kind === 'accepted' ? startTransition.patch : {};
+  } : undefined);
+  const snapshot = updated ? taskExecutionSnapshot(updated) : { cardId: input.card.id, state: 'unknown' as const };
+  return NextResponse.json({ ...snapshot, operationId: input.operationId, retryable: false }, {
+    status: admitted ? input.admittedStatus : 202,
+    headers: { 'Cache-Control': 'no-store' },
+  });
+}
+
 /** Read the execution-facing snapshot from the authenticated caller's existing Board scope. */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -135,10 +210,26 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       || !/^[A-Za-z0-9_-]{16,128}$/.test(body.operationId)) {
       return NextResponse.json({ error: 'invalid execution request' }, { status: 400 });
     }
+    const operationId = operationIdFor(context.card.id, body.operationId);
+    const prior = context.card.taskExecutionHistory?.find(entry => entry.operationId === operationId);
+    if (!prior && context.card.version !== body.expectedVersion) {
+      return NextResponse.json({ conflict: true, serverCard: context.card }, { status: 409 });
+    }
+    if (!prior && (['review', 'done', 'archived', 'blocked'].includes(context.card.column) || context.card.needsReview)) {
+      return NextResponse.json({ error: 'task is not available for execution' }, { status: 409 });
+    }
+    if (!prior) {
+      const active = context.card.taskExecutionHistory?.at(-1);
+      if (active && !['result', 'stopped'].includes(active.phase)) {
+        return NextResponse.json({ error: 'another task execution is unresolved', operationId: active.operationId }, { status: 409 });
+      }
+    }
+    if (!prior && (context.card.taskExecutionHistory?.length ?? 0) >= MAX_TASK_EXECUTION_HISTORY) {
+      return NextResponse.json({ error: 'История запусков заполнена; создайте новую карточку для следующего запуска' }, { status: 409 });
+    }
     const configuredCwd = process.env.EXMANAGER_TASK_EXECUTION_CWD?.trim();
     if (!configuredCwd || !path.isAbsolute(configuredCwd)) return NextResponse.json({ error: 'task execution project is not configured' }, { status: 503 });
     const cwd = path.resolve(configuredCwd);
-    const operationId = operationIdFor(context.card.id, body.operationId);
     const createInputId = sha256(`${operationId}\0create`);
     const messageInputId = sha256(`${operationId}\0dispatch`);
 
@@ -160,7 +251,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
     const hostId = nodeInfo.hostId;
     const requestHash = taskFingerprint(context.card, context.identity.username, hostId, cwd);
-    const prior = context.card.taskExecutionHistory?.find(entry => entry.operationId === operationId);
     if (prior) {
       if (prior.requestHash !== requestHash || context.card.version !== prior.lastBoardVersion) {
         return NextResponse.json({ error: 'operation identity conflict or card changed after execution receipt' }, { status: 409 });
@@ -170,15 +260,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         headers: { 'Cache-Control': 'no-store' },
       });
     }
-    if (context.card.version !== body.expectedVersion) return NextResponse.json({ conflict: true, serverCard: context.card }, { status: 409 });
-    if (['review', 'done', 'archived', 'blocked'].includes(context.card.column) || context.card.needsReview) {
-      return NextResponse.json({ error: 'task is not available for execution' }, { status: 409 });
-    }
-    const active = context.card.taskExecutionHistory?.at(-1);
-    if (active && !['result', 'stopped'].includes(active.phase)) {
-      return NextResponse.json({ error: 'another task execution is unresolved', operationId: active.operationId }, { status: 409 });
-    }
-
     const intent: TaskExecutionReceipt = {
       operationId, requestHash, lastBoardVersion: context.card.version + 1, createInputId, messageInputId, phase: 'intent',
       hostId, harness: 'codex', startedBy: context.identity.username,
@@ -225,12 +306,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
 
     // Verify exact native host/session/CWD/model before sending any task text.
-    const viewTool = await callOwnerHerderTool('fleet_session_view', { harness: 'codex', sessionId: created.sessionId });
-    const view = isRecord(viewTool.structuredContent) ? viewTool.structuredContent : undefined;
-    const details = isRecord(view?.details) ? view.details : undefined;
-    const native = isRecord(details?.session) ? details.session : undefined;
-    if (view?.hostId !== hostId || native?.id !== created.sessionId || native?.harness !== 'codex'
-      || native.cwd !== cwd || native.model !== SESSION_MODEL) {
+    let viewTool: HerderToolResult;
+    try {
+      viewTool = await callOwnerHerderTool('fleet_session_view', { harness: 'codex', sessionId: created.sessionId });
+    } catch {
+      return NextResponse.json({ ...taskExecutionSnapshot(createdCard), operationId,
+        waitReason: 'Сессия создана; проверка её параметров временно недоступна. Повторите проверку этой же операции.',
+        retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+    }
+    if (!exactSessionView(viewTool, hostId, created.sessionId, cwd)) {
       const saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
         phase: 'stopped', nativeSessionId: created.sessionId,
         lastProgress: 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено.',
@@ -238,54 +322,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       });
       return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : taskExecutionSnapshot(createdCard)), operationId, retryable: false }, { status: 409 });
     }
-
-    const prompt = [
-      `Выполни задачу канбан карточки ${currentCard.id} из проекта «${currentCard.project}».`,
-      `Название: ${currentCard.title}`,
-      `Описание задачи:\n${currentCard.description}`,
-      'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
-      'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
-    ].join('\n\n').slice(0, MAX_TASK_TEXT);
-    let dispatchTool: HerderToolResult;
-    try {
-      dispatchTool = await callOwnerHerderTool('send_message', {
-        sessionId: created.sessionId, harness: 'codex', inputId: messageInputId,
-        message: prompt, mode: 'steer', humanRequested: true,
-      });
-    } catch {
-      const saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
-        phase: 'dispatch-unknown', nativeSessionId: created.sessionId,
-        dispatchReceiptText: 'owner MCP dispatch outcome unknown; never replay this operation',
-      });
-      return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : { cardId: context.card.id, state: 'unknown' as const }), operationId, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
-    }
-
-    const dispatchText = textOf(dispatchTool);
-    const receiptMatch = dispatchText.match(/(?:Native admission|Current-turn context reservation) receipt:\s*(\{[^\n]+\})/);
-    let dispatchReceipt: RecordValue | undefined;
-    if (receiptMatch?.[1]) {
-      try { const value: unknown = JSON.parse(receiptMatch[1]); if (isRecord(value)) dispatchReceipt = value; } catch { /* Receipt text remains recorded as unknown. */ }
-    }
-    const admitted = dispatchReceipt?.admitted === true && dispatchReceipt.inputId === messageInputId
-      && typeof dispatchReceipt.turnId === 'string' && dispatchReceipt.turnId.trim().length > 0;
-    const startedFromVersion = createdCard.version;
-    const updated = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
-      phase: admitted ? 'running' : 'dispatch-unknown', nativeSessionId: created.sessionId,
-      ...(typeof dispatchReceipt?.turnId === 'string' ? { nativeTurnId: dispatchReceipt.turnId } : {}),
-      dispatchReceiptText: dispatchText,
-      lastProgress: admitted ? 'Задание передано в нативную сессию; ожидается результат.' : 'Статус передачи задания не подтверждён.',
-      lastProgressAt: now(),
-    }, admitted ? current => {
-      if (current.version !== startedFromVersion || current.column === 'in-progress') return {};
-      const startTransition = validateTransition(current, { column: 'in-progress' }, {
-        origin: 'automation', actor: context.identity.username,
-      });
-      return startTransition.kind === 'accepted' ? startTransition.patch : {};
-    } : undefined);
-    const snapshot = updated ? taskExecutionSnapshot(updated) : { cardId: context.card.id, state: 'unknown' as const };
-    return NextResponse.json({ ...snapshot, operationId, retryable: false }, {
-      status: admitted ? 201 : 202,
-      headers: { 'Cache-Control': 'no-store' },
+    return dispatchCreatedTask({
+      card: createdCard, tasksDir: context.tasksDir, actor: context.identity.username,
+      operationId, requestHash, nativeSessionId: created.sessionId,
+      messageInputId, admittedStatus: 201,
     });
   } catch {
     return NextResponse.json({ error: 'task execution request could not be processed safely' }, { status: 400 });
@@ -308,6 +348,51 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const attempt = context.card.taskExecutionHistory?.find(entry => entry.operationId === operationId);
     if (!attempt) return NextResponse.json({ error: 'execution operation not found' }, { status: 404 });
     if (attempt.phase === 'result') return NextResponse.json(taskExecutionSnapshot(context.card), { headers: { 'Cache-Control': 'no-store' } });
+    if (attempt.phase === 'created' && attempt.nativeSessionId) {
+      const configuredCwd = process.env.EXMANAGER_TASK_EXECUTION_CWD?.trim();
+      if (!configuredCwd || !path.isAbsolute(configuredCwd)) return NextResponse.json({ error: 'task execution project is not configured' }, { status: 503 });
+      if (!process.env.AGENT_HERDER_HTTP_TOKEN?.trim()) return NextResponse.json({ error: 'protected task execution channel is not configured' }, { status: 503 });
+      const cwd = path.resolve(configuredCwd);
+      let nodeInfoResult: HerderToolResult;
+      try { nodeInfoResult = await callOwnerHerderTool('fleet_node_info', {}); }
+      catch { return NextResponse.json({ error: 'protected task execution channel is unavailable' }, { status: 503 }); }
+      const nodeInfo = jsonFromTool(nodeInfoResult);
+      if (!nodeInfo || typeof nodeInfo.hostId !== 'string' || nodeInfo.hostId !== attempt.hostId
+        || typeof nodeInfo.nativeUser !== 'string' || !nodeInfo.nativeUser.trim()) {
+        return NextResponse.json({ error: 'created session owner could not be verified' }, { status: 409 });
+      }
+      if (attempt.lastBoardVersion !== context.card.version
+        || taskFingerprint(context.card, attempt.startedBy, attempt.hostId, cwd) !== attempt.requestHash) {
+        return NextResponse.json({ error: 'task changed after native session creation; recovery is denied' }, { status: 409 });
+      }
+      let viewTool: HerderToolResult;
+      try {
+        viewTool = await callOwnerHerderTool('fleet_session_view', { harness: attempt.harness, sessionId: attempt.nativeSessionId });
+      } catch {
+        return NextResponse.json({ ...taskExecutionSnapshot(context.card), operationId: attempt.operationId,
+          waitReason: 'Сессия создана; проверка её параметров временно недоступна. Повторите проверку этой же операции.',
+          retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+      }
+      if (!exactSessionView(viewTool, attempt.hostId, attempt.nativeSessionId, cwd)) {
+        const saved = saveReceiptProgress(id, context.tasksDir, operationId, attempt.requestHash, {
+          phase: 'stopped', nativeSessionId: attempt.nativeSessionId,
+          lastProgress: 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено.',
+          lastProgressAt: now(),
+        });
+        return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : taskExecutionSnapshot(context.card)), operationId, retryable: false }, { status: 409 });
+      }
+      const current = findCardById(id, context.tasksDir);
+      if (!current || current.version !== context.card.version
+        || taskFingerprint(current, attempt.startedBy, attempt.hostId, cwd) !== attempt.requestHash) {
+        return NextResponse.json({ error: 'task changed during created-session recovery; no dispatch was attempted' }, { status: 409 });
+      }
+      return dispatchCreatedTask({
+        card: current, tasksDir: context.tasksDir, actor: attempt.startedBy,
+        operationId, requestHash: attempt.requestHash,
+        nativeSessionId: attempt.nativeSessionId, messageInputId: attempt.messageInputId,
+        admittedStatus: 202,
+      });
+    }
     if (!['running', 'waiting'].includes(attempt.phase) || !attempt.nativeSessionId) {
       return NextResponse.json({ ...taskExecutionSnapshot(context.card), retryable: false }, { status: 409 });
     }

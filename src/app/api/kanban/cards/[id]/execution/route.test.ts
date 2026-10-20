@@ -96,7 +96,9 @@ describe('task execution API', () => {
     mocks.callOwnerHerderTool.mockImplementation(toolResult);
     mocks.validateTransition.mockReturnValue({ kind: 'accepted', patch: { column: 'in-progress' } });
     mocks.taskExecutionSnapshot.mockImplementation((card: KanbanCard) => ({
-      cardId: card.id, state: card.taskExecutionHistory?.at(-1)?.phase === 'running' ? 'running' : 'not-started',
+      cardId: card.id,
+      state: card.taskExecutionHistory?.at(-1)?.phase === 'running' ? 'running'
+        : card.taskExecutionHistory?.at(-1)?.phase === 'created' ? 'waiting' : 'not-started',
     }));
     process.env.EXMANAGER_TASK_EXECUTION_CWD = cwd;
     process.env.AGENT_HERDER_HTTP_TOKEN = 'test-only-protected-ref';
@@ -116,6 +118,36 @@ describe('task execution API', () => {
       params: Promise.resolve({ id: baseCard.id }),
     });
     expect(await response.json()).toMatchObject({ startAvailable: false, unavailableReason: expect.any(String) });
+  });
+
+  it('denies a new start before any owner call when the retained receipt history is full', async () => {
+    mocks.currentCard.value = {
+      ...baseCard,
+      taskExecutionHistory: Array.from({ length: 32 }, (_, index) => ({
+        operationId: `operation-${index}`,
+        requestHash: `request-${index}`,
+        lastBoardVersion: baseCard.version,
+        createInputId: `create-${index}`,
+        messageInputId: `dispatch-${index}`,
+        phase: 'result' as const,
+        hostId: 'roomhacker-server-100',
+        harness: 'codex' as const,
+        startedBy: 'nikita',
+        createdAt: baseCard.created,
+        updatedAt: baseCard.updated,
+      })),
+    };
+    const ready = await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution'), {
+      params: Promise.resolve({ id: baseCard.id }),
+    });
+    expect(await ready.json()).toMatchObject({ startAvailable: false, unavailableReason: expect.stringMatching(/истори/i) });
+
+    const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('task execution response missing');
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: expect.stringMatching(/истори/i) });
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+    expect(mocks.updateCard).not.toHaveBeenCalled();
   });
 
   it('accepts only stable operation and expected version; host, CWD and project are server derived', async () => {
@@ -178,6 +210,43 @@ describe('task execution API', () => {
     if (!staleReplay) throw new Error('stale task execution response missing');
     expect(staleReplay.status).toBe(409);
     expect(mocks.updateCard).toHaveBeenCalledTimes(writeCount);
+  });
+
+  it('keeps a created receipt recoverable after transient view failure and resumes the same operation explicitly', async () => {
+    let failFirstView = true;
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'fleet_session_view' && failFirstView) {
+        failFirstView = false;
+        throw new Error('transient owner readback failure');
+      }
+      return toolResult(tool, args);
+    });
+
+    const first = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!first) throw new Error('first task execution response missing');
+    expect(first.status).toBe(202);
+    expect((await first.json()).state).toBe('waiting');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'created', nativeSessionId: sessionId,
+    });
+
+    const current = mocks.currentCard.value!;
+    const recovery = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: current.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+
+    if (!recovery) throw new Error('created-session recovery response missing');
+    expect(recovery.status).toBe(202);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'running', nativeSessionId: sessionId, nativeTurnId: 'turn-1',
+    });
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(1);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+    expect(mocks.callOwnerHerderTool.mock.calls.find(([tool]) => tool === 'send_message')?.[1]).toMatchObject({
+      inputId: mocks.currentCard.value?.taskExecutionHistory?.[0]?.messageInputId,
+      sessionId,
+    });
   });
 
   it('does not promote stale idle commentary while the exact admitted turn is still running', async () => {
