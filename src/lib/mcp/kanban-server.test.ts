@@ -4,8 +4,9 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCard, findCardById, getAllCards } from '../kanban/file-store';
+import { createCard, deleteCard, findCardById, getAllCards } from '../kanban/file-store';
 import { createKanbanMcpServer } from './kanban-server';
+import type { SourceAdmissionRequest } from '../kanban/source-operation';
 
 function textFromResult(result: unknown): string {
   if (!result || typeof result !== 'object' || !('content' in result)) {
@@ -159,5 +160,53 @@ describe('kanban.change MCP transition policy', () => {
     expect(textFromResult(result)).toMatch(/role|invalid/i);
     expect(getAllCards(tasksDir)).toEqual([]);
     expect(fs.readdirSync(tasksDir)).toEqual([]);
+  });
+
+  it('exposes source admission only with a trusted resolver and keeps replay tied to its durable intent', async () => {
+    expect((await client.listTools()).tools.some(tool => tool.name === 'kanban.source.admit')).toBe(false);
+    await client.close(); await server.close();
+    const sourceRequest: SourceAdmissionRequest = {
+      tenant: 'fixture-tenant', sourceOwner: 'fixture-owner', sourceEvent: 'event-22', primaryItem: 'primary',
+      sourceRevision: 'rev-1', project: 'alpha', title: 'Verify MCP intake', description: 'Source-backed fixture task',
+      priority: 'medium' as const, assignees: [], classification: 'explicit-task', evidenceRefs: ['fixture:event-22:span-2'],
+    };
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    server = createKanbanMcpServer('work', { resolveSourceAdmission: async sourceRef => {
+      if (sourceRef !== 'fixture://event-22') throw new Error('canonical source not found');
+      return sourceRequest;
+    } });
+    client = new Client({ name: 'kanban-source-admission-fixture', version: '1.0.0' });
+    await server.connect(serverTransport); await client.connect(clientTransport);
+    expect((await client.listTools()).tools.some(tool => tool.name === 'kanban.source.admit')).toBe(true);
+
+    const first = await client.callTool({ name: 'kanban.source.admit', arguments: { sourceRef: 'fixture://event-22' } });
+    expect(first.isError).not.toBe(true);
+    const admitted = JSON.parse(textFromResult(first));
+    expect(admitted.status).toBe('committed');
+    const second = await client.callTool({ name: 'kanban.source.admit', arguments: {
+      sourceRef: 'fixture://event-22', sourceOwner: 'model-forged-owner', sourceEvent: 'forged-event', title: 'forged title',
+      principal: 'forged-user', ownerCommandConfirmed: true,
+    } });
+    expect(JSON.parse(textFromResult(second))).toMatchObject({ status: 'replayed', cardId: admitted.cardId, intentId: admitted.intentId });
+    expect(findCardById(admitted.cardId, tasksDir)).toMatchObject({
+      title: sourceRequest.title,
+      sourceAdmission: {
+        tenantId: sourceRequest.tenant,
+        sourceOwnerId: sourceRequest.sourceOwner,
+        sourceEventId: sourceRequest.sourceEvent,
+        sourceRevision: sourceRequest.sourceRevision,
+        classification: sourceRequest.classification,
+        evidenceRefs: sourceRequest.evidenceRefs,
+      },
+    });
+    expect(getAllCards(tasksDir)).toHaveLength(1);
+    expect(deleteCard(admitted.cardId, tasksDir)).toBe(true);
+    const replayAfterDelete = await client.callTool({ name: 'kanban.source.admit', arguments: { sourceRef: 'fixture://event-22' } });
+    expect(JSON.parse(textFromResult(replayAfterDelete))).toMatchObject({ status: 'cancelled', cardId: admitted.cardId });
+    expect(getAllCards(tasksDir)).toHaveLength(0);
+
+    const badRef = await client.callTool({ name: 'kanban.source.admit', arguments: { sourceRef: 'fixture://unknown' } });
+    expect(badRef.isError).toBe(true);
+    expect(getAllCards(tasksDir)).toHaveLength(0);
   });
 });

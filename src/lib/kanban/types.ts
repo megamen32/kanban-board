@@ -39,8 +39,25 @@ export interface KanbanCard {
   completedAt?: string;
   completionEvidence?: PlanningEvidence[];
   approvalEvidence?: PlanningEvidence[];
+  /** Immutable source admission identity; the board operation journal owns lifecycle state. */
+  sourceAdmission?: SourceAdmissionBinding;
   /** Unknown frontmatter is retained internally so unrelated edits are lossless. */
   rawFrontmatter?: Record<string, unknown>;
+}
+
+export interface SourceAdmissionBinding {
+  readonly operationKey: string;
+  readonly requestHash: string;
+  readonly provenanceHash: string;
+  readonly intentId: string;
+  readonly tenantId: string;
+  readonly sourceOwnerId: string;
+  readonly sourceEventId: string;
+  readonly primaryItem: 'primary';
+  readonly sourceRevision: string;
+  readonly requestedProject: string;
+  readonly classification: 'explicit-task';
+  readonly evidenceRefs: readonly string[];
 }
 
 export type PlanningType = 'outcome' | 'action';

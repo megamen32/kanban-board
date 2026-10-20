@@ -3,7 +3,8 @@ import path from 'path';
 import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
 import { DEFAULT_COLUMNS, PLANNING_VERSION } from './types';
-import type { KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority } from './types';
+import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
+import type { KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
@@ -13,6 +14,7 @@ const KNOWN_FRONTMATTER_KEYS = new Set([
   'today_rank', 'source', 'needs_review', 'suggested_assignee', 'waiting_for',
   'requires_approval_from', 'completed_by', 'completed_at', 'completion_evidence',
   'approval_evidence',
+  'source_admission',
 ]);
 const PLANNING_FRONTMATTER_KEYS = new Set([
   'planning_version', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
@@ -132,14 +134,18 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     owner: optionalString(data, 'owner') ?? 'nikita',
     shared: booleanField(data, 'shared', false),
     ...planning,
+    ...(data.source_admission && typeof data.source_admission === 'object' ? { sourceAdmission: data.source_admission as SourceAdmissionBinding } : {}),
     rawFrontmatter,
   };
 }
 
 export function createCard(title: string, description: string = '', column: KanbanColumn = 'inbox', priority: Priority = 'medium', tags: string[] = [], project?: string, assignees: string[] = [], tasksDir = TASKS_DIR, dueAt?: string): KanbanCard {
+  return withSourceOperationLock(tasksDir, () => createCardRecord(title, description, column, priority, tags, project, assignees, tasksDir, dueAt));
+}
+
+function createCardRecord(title: string, description: string, column: KanbanColumn, priority: Priority, tags: string[], project: string | undefined, assignees: string[], tasksDir: string, dueAt?: string, id = uuidv4(), sourceAdmission?: SourceAdmissionBinding): KanbanCard {
   if (!project?.trim()) throw new Error('project is required for new cards');
   ensureDir(tasksDir);
-  const id = uuidv4();
   const now = new Date().toISOString();
   const existing = getAllCards(tasksDir).filter(c => c.column === column);
   const maxOrder = existing.length > 0 ? Math.max(...existing.map(c => c.order)) + 1 : 0;
@@ -159,6 +165,7 @@ export function createCard(title: string, description: string = '', column: Kanb
     version: 1,
     project: project.trim(),
     assignees,
+    ...(sourceAdmission ? { sourceAdmission } : {}),
     owner: 'nikita',
     shared: false,
     ...defaultPlanningMetadata(),
@@ -168,9 +175,25 @@ export function createCard(title: string, description: string = '', column: Kanb
   return card;
 }
 
+/** Write with the ID reserved in the board journal; caller must hold the board writer lock. */
+export function createAdmittedCard(input: {
+  id: string; title: string; description: string; project: string;
+  priority: Priority; assignees: string[]; dueAt?: string; sourceAdmission: SourceAdmissionBinding;
+}, tasksDir = TASKS_DIR): KanbanCard {
+  return createCardRecord(input.title, input.description, 'inbox', input.priority, ['source-admitted'], input.project,
+    input.assignees, tasksDir, input.dueAt, input.id, input.sourceAdmission);
+}
+
 export type KanbanCardUpdates = TypedKanbanCardUpdates & Partial<Pick<KanbanCard, 'version'>>;
 
 export function updateCard(id: string, updates: KanbanCardUpdates, expectedVersion?: number, tasksDir = TASKS_DIR): KanbanCard | { conflict: true; serverCard: KanbanCard } {
+  return withSourceOperationLock(tasksDir, () => updateCardRecord(id, updates, expectedVersion, tasksDir));
+}
+
+function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersion: number | undefined, tasksDir: string): KanbanCard | { conflict: true; serverCard: KanbanCard } {
+  if (Object.hasOwn(updates as object, 'sourceAdmission')) {
+    throw new Error('source admission binding is immutable');
+  }
   const card = findCardById(id, tasksDir);
   if (!card) throw new Error(`Card ${id} not found`);
   if (updates.project !== undefined && !updates.project.trim()) throw new Error('project is required');
@@ -203,7 +226,7 @@ export function updateCard(id: string, updates: KanbanCardUpdates, expectedVersi
   buildFrontmatter(updated);
 
   // If title changed, rename file
-  if (updates.title && updates.title !== card.title) {
+  if (updates.title && updates.title !== card.title && !card.sourceAdmission) {
     const oldPath = path.join(tasksDir, card.fileName);
     if (fs.existsSync(oldPath)) fs.unlinkSync(/*turbopackIgnore: true*/ oldPath);
     updated.fileName = slugify(updates.title, id);
@@ -214,12 +237,15 @@ export function updateCard(id: string, updates: KanbanCardUpdates, expectedVersi
 }
 
 export function deleteCard(id: string, tasksDir = TASKS_DIR): boolean {
-  const card = findCardById(id, tasksDir);
-  if (!card) return false;
-
-  const filePath = path.join(tasksDir, card.fileName);
-  if (fs.existsSync(filePath)) fs.unlinkSync(/*turbopackIgnore: true*/ filePath);
-  return true;
+  return withSourceOperationLock(tasksDir, () => {
+    const card = findCardById(id, tasksDir);
+    if (!card) return false;
+    cancelSourceOperationForCardLocked(card, tasksDir);
+    const filePath = path.join(tasksDir, card.fileName);
+    if (fs.existsSync(filePath)) fs.unlinkSync(/*turbopackIgnore: true*/ filePath);
+    fsyncDirectory(path.dirname(filePath));
+    return true;
+  });
 }
 
 export function moveCard(id: string, newColumn: KanbanColumn, newOrder?: number, tasksDir = TASKS_DIR): KanbanCard | { conflict: true; serverCard: KanbanCard } {
@@ -252,6 +278,7 @@ export function importExistingFile(filePath: string, tasksDir = TASKS_DIR): Kanb
 
   const card = readCardFile(filePath, tasksDir);
   if (!card) return null;
+  if (card.sourceAdmission) throw new Error('source admission cards cannot be imported from an external file');
 
   // Check if already imported (by id or filename)
   const existing = findCardById(card.id, tasksDir);
@@ -290,6 +317,7 @@ function buildFrontmatter(card: KanbanCard): string {
     version: card.version,
     project: card.project,
     assignees: card.assignees,
+    ...(card.sourceAdmission ? { source_admission: card.sourceAdmission } : {}),
     owner: card.owner ?? 'nikita',
     shared: card.shared ?? false,
   };
@@ -334,7 +362,19 @@ function writeCard(card: KanbanCard, tasksDir = TASKS_DIR): void {
   const filePath = path.join(tasksDir, card.fileName);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const frontmatter = buildFrontmatter(card);
-  fs.writeFileSync(filePath, frontmatter + (card.description ? '\n' + card.description : ''));
+  const tmp = `${filePath}.${process.pid}.${uuidv4()}.tmp`;
+  const fd = fs.openSync(tmp, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, frontmatter + (card.description ? '\n' + card.description : ''));
+    fs.fsyncSync(fd);
+  } finally { fs.closeSync(fd); }
+  fs.renameSync(tmp, filePath);
+  fsyncDirectory(path.dirname(filePath));
+}
+
+function fsyncDirectory(dir: string): void {
+  const fd = fs.openSync(dir, 'r');
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
 interface PlanningMetadata {

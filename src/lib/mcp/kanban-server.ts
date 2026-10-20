@@ -1,7 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ensureProject, listProjects, projectInput } from '../kanban/project-store';
-import { createCard, deleteCard, findCardById, getAllCards, updateCard } from '../kanban/file-store';
+import { createAdmittedCard, createCard, deleteCard, findCardById, getAllCards, updateCard } from '../kanban/file-store';
+import { admitSourceTask } from '../kanban/source-operation';
+import type { SourceAdmissionRequest } from '../kanban/source-operation';
 import { normalizeDueAt } from '../kanban/due-at';
 import { NIKITA_ACTOR, validateTransition } from '../kanban/transition-policy';
 import { tasksDirForScope } from '../auth/data-scope';
@@ -172,7 +174,14 @@ function filterCards(cards: KanbanCard[], filters: {
   return filters.limit ? result.slice(0, filters.limit) : result;
 }
 
-export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirmedOwnerCommands?: boolean; allowInternalTeamCommands?: boolean } = {}): McpServer {
+export interface KanbanMcpOptions {
+  allowConfirmedOwnerCommands?: boolean;
+  allowInternalTeamCommands?: boolean;
+  /** Must resolve a reference through a server-side canonical source and principal check. */
+  resolveSourceAdmission?: (sourceRef: string) => Promise<SourceAdmissionRequest>;
+}
+
+export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptions = {}): McpServer {
   const tasksDir = tasksDirForScope(scope);
   const server = new McpServer(
     { name: `excode-kanban-${scope}`, version: '1.0.0' },
@@ -331,6 +340,24 @@ export function createKanbanMcpServer(scope: BoardScope, options: { allowConfirm
     if ('conflict' in result) throw new Error(`Version conflict for card ${cardId}`);
     return textResult({ card: result, scope, transition: decision });
   });
+
+  if (options.resolveSourceAdmission) {
+    server.registerTool('kanban.source.admit', {
+      title: 'Admit a task from a verified source',
+      description: 'Resolve one canonical source reference server-side and reserve its single primary task. Caller-supplied source identity, task text, and principal are not accepted.',
+      inputSchema: { sourceRef: z.string().min(1) },
+      annotations: { idempotentHint: true, openWorldHint: false },
+    }, async ({ sourceRef }) => {
+      const request = await options.resolveSourceAdmission!(sourceRef);
+      const result = admitSourceTask(
+        request,
+        tasksDir,
+        id => findCardById(id, tasksDir),
+        card => createAdmittedCard(card, tasksDir),
+      );
+      return textResult({ ...result, scope });
+    });
+  }
 
   server.registerTool('kanban.project.ensure', {
     title: 'Ensure a persistent Kanban project',
