@@ -11,6 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { DEFAULT_COLUMNS, PRIORITY_COLORS } from '@/lib/kanban/types';
 import type { KanbanCard, Priority, KanbanColumn, PlanningType, RoleDefinition } from '@/lib/kanban/types';
 import type { HumanReviewAction } from '@/lib/kanban/transition-policy';
+import { CatalogLinkPanel } from './catalog-link-panel';
 import { RolePicker } from './role-picker';
 import { fromDateTimeLocalValue, toDateTimeLocalValue } from '@/lib/kanban/date-input';
 import type { KanbanUpdateRequest } from '@/hooks/use-kanban';
@@ -154,6 +155,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     setTagInput('');
   };
 
+  const catalogLink = card.catalogLink;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="top-auto bottom-0 translate-y-0 w-[calc(100%-1rem)] max-h-[92vh] overflow-y-auto rounded-t-2xl sm:top-[50%] sm:bottom-auto sm:translate-y-[-50%] sm:w-full sm:max-w-[520px] sm:rounded-lg">
@@ -199,6 +202,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               </div>
             </div>}
           </section>
+          {catalogLink && <CatalogLinkPanel link={catalogLink} />}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Название</label>
             <Input value={title} onChange={e => setTitle(e.target.value)} />

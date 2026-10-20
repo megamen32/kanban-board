@@ -16,6 +16,33 @@ export type StoredStartOperation = {
   status: 'pending' | 'admitted' | 'unknown';
 };
 
+export type CatalogLinkDisplay = {
+  projectId: string;
+  planIds: string[];
+  gateIds: string[];
+  contactIds: string[];
+  sourceRef: string;
+  sourceRevision: string;
+  catalogRevision: string;
+  boardVersion: number;
+};
+
+/** Expose only the immutable catalog link persisted on the card, not live catalog state. */
+export function getCatalogLinkDisplay(card: Pick<KanbanCard, 'catalogLink'>): CatalogLinkDisplay | null {
+  const link = card.catalogLink;
+  if (!link) return null;
+  return {
+    projectId: link.projectId,
+    planIds: [...link.planIds],
+    gateIds: [...link.gateIds],
+    contactIds: [...link.contactIds],
+    sourceRef: link.sourceRef,
+    sourceRevision: link.sourceRevision,
+    catalogRevision: link.catalogRevision,
+    boardVersion: link.boardVersion,
+  };
+}
+
 export const EXECUTION_OPERATION_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 
 export function executionOperationStorageKey(cardId: string): string {

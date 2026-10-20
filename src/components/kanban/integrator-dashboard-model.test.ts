@@ -4,6 +4,7 @@ import {
   executionSignalLabel,
   executionStartRequest,
   executionSyncRequest,
+  getCatalogLinkDisplay,
   getDashboardCounts,
   getLatestResult,
   isVerifiedSessionUrl,
@@ -41,6 +42,31 @@ describe('integrator dashboard model', () => {
     expect(parseStoredStartOperation(null)).toBeNull();
     expect(parseStoredStartOperation('{broken')).toBe('invalid');
     expect(parseStoredStartOperation(JSON.stringify({ operationId: 'short', status: 'pending' }))).toBe('invalid');
+  });
+
+  it('projects only the stored immutable catalog references, never live relationship state', () => {
+    const catalogLink = {
+      version: 1 as const,
+      taskId: 'task-1',
+      operationRef: 'catalog-operation-1',
+      boardVersion: 4,
+      sourceRef: 'source-event-2',
+      sourceRevision: 'source-rev-3',
+      projectId: 'catalog-project-7',
+      planIds: ['plan-1'],
+      gateIds: ['gate-2'],
+      contactIds: ['contact-3'],
+      catalogRevision: 'catalog-rev-9',
+    };
+    const display = getCatalogLinkDisplay(card({ catalogLink }));
+    expect(display).toEqual({
+      projectId: 'catalog-project-7', planIds: ['plan-1'], gateIds: ['gate-2'], contactIds: ['contact-3'],
+      sourceRef: 'source-event-2', sourceRevision: 'source-rev-3', catalogRevision: 'catalog-rev-9', boardVersion: 4,
+    });
+    expect(Object.keys(display ?? {}).sort()).toEqual([
+      'boardVersion', 'catalogRevision', 'contactIds', 'gateIds', 'planIds', 'projectId', 'sourceRef', 'sourceRevision',
+    ]);
+    expect(getCatalogLinkDisplay(card())).toBeNull();
   });
 
   it('counts persisted business/review/result state without inferring executor activity', () => {
