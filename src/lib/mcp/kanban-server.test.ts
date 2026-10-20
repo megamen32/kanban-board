@@ -166,25 +166,25 @@ describe('kanban.change MCP transition policy', () => {
     expect((await client.listTools()).tools.some(tool => tool.name === 'kanban.source.admit')).toBe(false);
     await client.close(); await server.close();
     const sourceRequest: SourceAdmissionRequest = {
-      tenant: 'fixture-tenant', sourceOwner: 'fixture-owner', sourceEvent: 'event-22', primaryItem: 'primary',
+      tenant: 'fixture-tenant', sourceOwner: 'fixture-owner', sourceEvent: '8be4b0d5-79cf-44fa-90e4-b57c0a8f5c90', primaryItem: 'primary',
       sourceRevision: 'rev-1', project: 'alpha', title: 'Verify MCP intake', description: 'Source-backed fixture task',
       priority: 'medium' as const, assignees: [], classification: 'explicit-task', evidenceRefs: ['fixture:event-22:span-2'],
     };
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     server = createKanbanMcpServer('work', { resolveSourceAdmission: async sourceRef => {
-      if (sourceRef !== 'fixture://event-22') throw new Error('canonical source not found');
+      if (sourceRef !== '8be4b0d5-79cf-44fa-90e4-b57c0a8f5c90') throw new Error('canonical source not found');
       return sourceRequest;
     } });
     client = new Client({ name: 'kanban-source-admission-fixture', version: '1.0.0' });
     await server.connect(serverTransport); await client.connect(clientTransport);
     expect((await client.listTools()).tools.some(tool => tool.name === 'kanban.source.admit')).toBe(true);
 
-    const first = await client.callTool({ name: 'kanban.source.admit', arguments: { sourceRef: 'fixture://event-22' } });
+    const first = await client.callTool({ name: 'kanban.source.admit', arguments: { sourceRef: '8be4b0d5-79cf-44fa-90e4-b57c0a8f5c90' } });
     expect(first.isError).not.toBe(true);
     const admitted = JSON.parse(textFromResult(first));
     expect(admitted.status).toBe('committed');
     const second = await client.callTool({ name: 'kanban.source.admit', arguments: {
-      sourceRef: 'fixture://event-22', sourceOwner: 'model-forged-owner', sourceEvent: 'forged-event', title: 'forged title',
+      sourceRef: '8be4b0d5-79cf-44fa-90e4-b57c0a8f5c90', sourceOwner: 'model-forged-owner', sourceEvent: 'forged-event', title: 'forged title',
       principal: 'forged-user', ownerCommandConfirmed: true,
     } });
     expect(JSON.parse(textFromResult(second))).toMatchObject({ status: 'replayed', cardId: admitted.cardId, intentId: admitted.intentId });
@@ -201,12 +201,13 @@ describe('kanban.change MCP transition policy', () => {
     });
     expect(getAllCards(tasksDir)).toHaveLength(1);
     expect(deleteCard(admitted.cardId, tasksDir)).toBe(true);
-    const replayAfterDelete = await client.callTool({ name: 'kanban.source.admit', arguments: { sourceRef: 'fixture://event-22' } });
+    const replayAfterDelete = await client.callTool({ name: 'kanban.source.admit', arguments: { sourceRef: '8be4b0d5-79cf-44fa-90e4-b57c0a8f5c90' } });
     expect(JSON.parse(textFromResult(replayAfterDelete))).toMatchObject({ status: 'cancelled', cardId: admitted.cardId });
     expect(getAllCards(tasksDir)).toHaveLength(0);
 
-    const badRef = await client.callTool({ name: 'kanban.source.admit', arguments: { sourceRef: 'fixture://unknown' } });
+    const badRef = await client.callTool({ name: 'kanban.source.admit', arguments: { sourceRef: 'not-a-uuid' } });
     expect(badRef.isError).toBe(true);
     expect(getAllCards(tasksDir)).toHaveLength(0);
   });
+
 });

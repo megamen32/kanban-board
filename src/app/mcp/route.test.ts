@@ -78,6 +78,17 @@ describe('Kanban MCP transport', () => {
       'kanban.delete',
     ]);
   });
+  it('keeps source admission disabled on the live MCP route until an authenticated canonical lookup is wired', async () => {
+    vi.stubEnv('EXMANAGER_SOURCE_ADMISSION_PUBLIC_KEY', 'legacy-signed-envelope-must-not-enable-admission');
+    const ordinary = await POST(request({ jsonrpc: '2.0', id: 11, method: 'tools/list', params: {} }));
+    expect((await ordinary.json()).result.tools.map((tool: { name: string }) => tool.name)).not.toContain('kanban.source.admit');
+
+    const auth = new AuthStore({ rootDir: authDir, encryptionKey: authSecret });
+    const code = auth.createAuthorizationCode('exmanager-service', 'exmanager-airlock-service', 'http://localhost/callback', 'kanban:work');
+    token = auth.exchangeAuthorizationCode(code, 'exmanager-airlock-service', 'http://localhost/callback')!.accessToken;
+    const trusted = await POST(request({ jsonrpc: '2.0', id: 12, method: 'tools/list', params: {} }));
+    expect((await trusted.json()).result.tools.map((tool: { name: string }) => tool.name)).not.toContain('kanban.source.admit');
+  });
   async function tool(name: string, args: Record<string, unknown>) {
     const response = await POST(request({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name, arguments: args } }));
     return (await response.json()).result;

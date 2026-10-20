@@ -345,7 +345,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     server.registerTool('kanban.source.admit', {
       title: 'Admit a task from a verified source',
       description: 'Resolve one canonical source reference server-side and reserve its single primary task. Caller-supplied source identity, task text, and principal are not accepted.',
-      inputSchema: { sourceRef: z.string().min(1) },
+      inputSchema: { sourceRef: z.string().uuid() },
       annotations: { idempotentHint: true, openWorldHint: false },
     }, async ({ sourceRef }) => {
       const request = await options.resolveSourceAdmission!(sourceRef);
