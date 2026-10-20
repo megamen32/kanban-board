@@ -672,7 +672,15 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       || entry.createReceiptText !== undefined && (typeof entry.createReceiptText !== 'string' || entry.createReceiptText.length > 4096)
       || entry.dispatchReceiptText !== undefined && (typeof entry.dispatchReceiptText !== 'string' || entry.dispatchReceiptText.length > 4096)
       || entry.lastProgress !== undefined && (typeof entry.lastProgress !== 'string' || entry.lastProgress.length > 4000)
-      || entry.lastProgressAt !== undefined && (typeof entry.lastProgressAt !== 'string' || Number.isNaN(Date.parse(entry.lastProgressAt)))) {
+      || entry.lastProgressAt !== undefined && (typeof entry.lastProgressAt !== 'string' || Number.isNaN(Date.parse(entry.lastProgressAt)))
+      || entry.taskDecisionRequest !== undefined && (!isRecord(entry.taskDecisionRequest)
+        || Object.keys(entry.taskDecisionRequest).some(key => !['requestId', 'requestHash', 'purpose', 'version'].includes(key))
+        || typeof entry.taskDecisionRequest.requestId !== 'string' || !/^td-[a-f0-9]{40}$/.test(entry.taskDecisionRequest.requestId)
+        || typeof entry.taskDecisionRequest.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(entry.taskDecisionRequest.requestHash)
+        || typeof entry.taskDecisionRequest.purpose !== 'string' || !entry.taskDecisionRequest.purpose.trim()
+        || entry.taskDecisionRequest.purpose.length > 128 || /[\x00-\x1f\x7f]/.test(entry.taskDecisionRequest.purpose)
+        || !Number.isSafeInteger(entry.taskDecisionRequest.version) || (entry.taskDecisionRequest.version as number) < 1
+        || (entry.taskDecisionRequest.version as number) > (entry.lastBoardVersion as number))) {
       throw invalidPlanningField(field, 'invalid immutable operation identity or receipt state');
     }
     if (['created', 'dispatch-unknown', 'running', 'waiting', 'stopped', 'result'].includes(String(entry.phase)) && !entry.nativeSessionId) {
@@ -693,6 +701,12 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       harness: entry.harness as TaskExecutionReceipt['harness'],
       ...(typeof entry.nativeSessionId === 'string' ? { nativeSessionId: entry.nativeSessionId } : {}),
       ...(typeof entry.nativeTurnId === 'string' ? { nativeTurnId: entry.nativeTurnId } : {}),
+      ...(isRecord(entry.taskDecisionRequest) ? { taskDecisionRequest: {
+        requestId: entry.taskDecisionRequest.requestId as string,
+        requestHash: entry.taskDecisionRequest.requestHash as string,
+        purpose: entry.taskDecisionRequest.purpose as string,
+        version: entry.taskDecisionRequest.version as number,
+      } } : {}),
       ...(typeof entry.createReceiptText === 'string' ? { createReceiptText: entry.createReceiptText } : {}),
       ...(typeof entry.dispatchReceiptText === 'string' ? { dispatchReceiptText: entry.dispatchReceiptText } : {}),
       ...(typeof entry.lastProgress === 'string' ? { lastProgress: entry.lastProgress } : {}),

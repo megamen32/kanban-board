@@ -7,7 +7,7 @@ import { findCardById, updateCard } from '@/lib/kanban/file-store';
 import { taskExecutionSnapshot } from '@/lib/kanban/task-execution';
 import { callOwnerHerderTool, type HerderToolResult } from '@/lib/kanban/task-execution-client';
 import { validateTransition } from '@/lib/kanban/transition-policy';
-import type { KanbanCard, KanbanCardUpdates, TaskExecutionReceipt } from '@/lib/kanban/types';
+import type { KanbanCard, KanbanCardUpdates, TaskDecisionRequestReference, TaskExecutionReceipt } from '@/lib/kanban/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,6 +16,9 @@ type RecordValue = Record<string, unknown>;
 const SESSION_MODEL = 'gpt-6-luna';
 const MAX_TASK_TEXT = 48_000;
 const MAX_TASK_EXECUTION_HISTORY = 32;
+const NOTICE_TASK_DECISION_URL = 'https://notify.bezrabotnyi.com/v1/task-decisions';
+const MAX_NOTICE_RESPONSE_BYTES = 1_000_000;
+const MAX_NOTICE_MESSAGE_CHARS = 4_000;
 
 const isRecord = (value: unknown): value is RecordValue => !!value && typeof value === 'object' && !Array.isArray(value);
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -178,11 +181,304 @@ async function dispatchCreatedTask(input: {
   });
 }
 
+interface TaskQuestionInput {
+  purpose: string;
+  message: string;
+  choices: Array<{ value: string; label: string }>;
+  timeoutValue: string;
+}
+
+interface TaskQuestionView {
+  requestId: string;
+  purpose: string;
+  version: number;
+  state: string;
+  question: { text: string; choices: Array<{ value: string; label: string }>; expiresAt: number | null };
+  notification: { attemptState: string; delivered: boolean; deadlineAt: number | null };
+  decision: { source: 'human' | 'timeout'; value: string; decidedAt: number | null } | null;
+  deliveryStatus?: string;
+  idempotent?: boolean;
+}
+
+function noticeConfig(requireRecipient: boolean): { token: string; recipient?: string } | undefined {
+  const token = process.env.EXMANAGER_NOTICE_PROJECT_TOKEN?.trim();
+  const recipient = process.env.NOTIFY_CENTER_RECIPIENT?.trim();
+  if (!token || requireRecipient && !recipient) return undefined;
+  return { token, ...(recipient ? { recipient } : {}) };
+}
+
+function noticeRequestId(taskId: string, purpose: string, version: number): string {
+  // Matches Notice's canonical identity serialization: compact JSON with the
+  // version normalized to a string and UTF-8 preserved.
+  return `td-${sha256(JSON.stringify([taskId, purpose, String(version)])).slice(0, 40)}`;
+}
+
+function validTaskQuestionInput(value: unknown): TaskQuestionInput | undefined {
+  if (!isRecord(value) || typeof value.purpose !== 'string' || typeof value.message !== 'string'
+      || !Array.isArray(value.choices) || typeof value.timeoutValue !== 'string') return undefined;
+  const purpose = value.purpose.trim();
+  const message = value.message.trim();
+  const timeoutValue = value.timeoutValue.trim();
+  if (!purpose || purpose.length > 128 || /[\x00-\x1f\x7f]/.test(purpose)
+      || !message || message.length > MAX_NOTICE_MESSAGE_CHARS
+      || /[\x00-\x08\x0b-\x1f\x7f]/.test(message)
+      || value.choices.length < 2 || value.choices.length > 4) return undefined;
+  const choices: Array<{ value: string; label: string }> = [];
+  for (const item of value.choices) {
+    if (!isRecord(item) || Object.keys(item).length !== 2 || typeof item.value !== 'string' || typeof item.label !== 'string') return undefined;
+    const choiceValue = item.value.trim();
+    const label = item.label.trim();
+    if (!choiceValue || choiceValue.length > 128 || /[\x00-\x1f\x7f]/.test(choiceValue)
+        || !label || label.length > 256 || /[\x00-\x1f\x7f]/.test(label)) return undefined;
+    choices.push({ value: choiceValue, label });
+  }
+  if (new Set(choices.map(choice => choice.value)).size !== choices.length
+      || !choices.some(choice => choice.value === timeoutValue)) return undefined;
+  return { purpose, message, choices, timeoutValue };
+}
+
+async function noticeFetch(
+  token: string,
+  method: 'GET' | 'POST',
+  requestId?: string,
+  mandate?: RecordValue,
+): Promise<{ status: number; payload?: RecordValue } | undefined> {
+  try {
+    const response = await fetch(requestId
+      ? `${NOTICE_TASK_DECISION_URL}/${encodeURIComponent(requestId)}`
+      : NOTICE_TASK_DECISION_URL, {
+      method,
+      redirect: 'error',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(method === 'POST' ? { body: JSON.stringify({ mandate }) } : {}),
+      signal: AbortSignal.timeout(4_000),
+    });
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > MAX_NOTICE_RESPONSE_BYTES) return { status: 502 };
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch { return { status: 502 }; }
+    return { status: response.status, ...(isRecord(payload) ? { payload } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
+function taskQuestionView(
+  payload: RecordValue,
+  taskRef: string,
+  operationId: string,
+  reference: TaskDecisionRequestReference,
+  expectedProject: string,
+  expectedRecipient: string,
+): TaskQuestionView | undefined {
+  if (payload.schema !== 'noticeplace.task_decision_view.v1'
+      || payload.request_id !== reference.requestId || payload.project !== expectedProject
+      || payload.recipient !== expectedRecipient || typeof payload.status !== 'string'
+      || !isRecord(payload.question) || typeof payload.question.text !== 'string'
+      || payload.question.text.length > MAX_NOTICE_MESSAGE_CHARS || payload.question.mode !== 'choice'
+      || !Array.isArray(payload.question.choices) || payload.question.choices.length < 2 || payload.question.choices.length > 4
+      || !isRecord(payload.question.reference) || payload.question.reference.task_ref !== taskRef
+      || payload.question.reference.purpose !== reference.purpose
+      || String(payload.question.reference.version) !== String(reference.version)
+      || payload.question.reference.mandate_ref !== operationId
+      || !isRecord(payload.notification) || typeof payload.notification.attempt_state !== 'string') return undefined;
+  const choices: Array<{ value: string; label: string }> = [];
+  for (const value of payload.question.choices) {
+    if (!isRecord(value) || typeof value.value !== 'string' || typeof value.label !== 'string'
+        || value.value.length > 128 || value.label.length > 256) return undefined;
+    choices.push({ value: value.value, label: value.label });
+  }
+  let decision: TaskQuestionView['decision'] = null;
+  if (payload.winner !== null && payload.winner !== undefined) {
+    if (!isRecord(payload.winner) || !['human', 'timeout'].includes(String(payload.winner.source))
+        || typeof payload.winner.value !== 'string') return undefined;
+    decision = {
+      source: payload.winner.source as 'human' | 'timeout',
+      value: payload.winner.value,
+      decidedAt: typeof payload.winner.decided_at === 'number' && Number.isFinite(payload.winner.decided_at)
+        ? payload.winner.decided_at : null,
+    };
+  }
+  const receipt = payload.notification.receipt;
+  const delivered = isRecord(receipt) && receipt.kind === 'successful_sender_response';
+  const rawDeadline = payload.notification.deadline_at;
+  if (rawDeadline !== null && rawDeadline !== undefined
+      && (typeof rawDeadline !== 'number' || !Number.isFinite(rawDeadline) || !delivered)) return undefined;
+  return {
+    requestId: reference.requestId,
+    purpose: reference.purpose,
+    version: reference.version,
+    state: payload.status,
+    question: {
+      text: payload.question.text,
+      choices,
+      expiresAt: typeof payload.question.expires_at === 'number' && Number.isFinite(payload.question.expires_at)
+        ? payload.question.expires_at : null,
+    },
+    notification: {
+      attemptState: payload.notification.attempt_state,
+      delivered,
+      deadlineAt: delivered && typeof rawDeadline === 'number' ? rawDeadline : null,
+    },
+    decision,
+    ...(typeof payload.delivery_status === 'string' ? { deliveryStatus: payload.delivery_status } : {}),
+    ...(typeof payload.idempotent === 'boolean' ? { idempotent: payload.idempotent } : {}),
+  };
+}
+
+function latestTaskQuestion(card: KanbanCard): { attempt: TaskExecutionReceipt; reference: TaskDecisionRequestReference } | undefined {
+  for (const attempt of [...(card.taskExecutionHistory ?? [])].reverse()) {
+    if (attempt.taskDecisionRequest) return { attempt, reference: attempt.taskDecisionRequest };
+  }
+  return undefined;
+}
+
+async function readTaskQuestion(context: Exclude<ReturnType<typeof authorizedTaskCard>, { response: NextResponse }>): Promise<NextResponse> {
+  const linked = latestTaskQuestion(context.card);
+  if (!linked) return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: null }, { headers: { 'Cache-Control': 'no-store' } });
+  const config = noticeConfig(true);
+  if (!config?.recipient) return NextResponse.json({ error: 'Notice task-decision read channel is not configured', requestId: linked.reference.requestId }, { status: 503 });
+  const result = await noticeFetch(config.token, 'GET', linked.reference.requestId);
+  if (!result) return NextResponse.json({ taskQuestion: { requestId: linked.reference.requestId, state: 'unknown' } }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+  if (result.status === 404) return NextResponse.json({ taskQuestion: { requestId: linked.reference.requestId, state: 'not_found' } }, { headers: { 'Cache-Control': 'no-store' } });
+  const view = result.payload && taskQuestionView(result.payload, context.card.id, linked.attempt.operationId,
+    linked.reference, context.card.project, config.recipient);
+  if (result.status !== 200 || !view) return NextResponse.json({ taskQuestion: { requestId: linked.reference.requestId, state: 'unknown' } }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: view }, { headers: { 'Cache-Control': 'no-store' } });
+}
+
+async function createTaskQuestion(
+  context: Exclude<ReturnType<typeof authorizedTaskCard>, { response: NextResponse }>,
+  body: RecordValue,
+): Promise<NextResponse> {
+  const allowedKeys = ['action', 'expectedVersion', 'operationId', 'purpose', 'message', 'choices', 'timeoutValue'];
+  if (Object.keys(body).length !== allowedKeys.length || Object.keys(body).some(key => !allowedKeys.includes(key))
+      || body.action !== 'create-question' || !Number.isSafeInteger(body.expectedVersion)
+      || typeof body.operationId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(body.operationId)) {
+    return NextResponse.json({ error: 'invalid task question request' }, { status: 400 });
+  }
+  const input = validTaskQuestionInput(body);
+  if (!input) return NextResponse.json({ error: 'invalid task question content' }, { status: 400 });
+  if (body.expectedVersion !== context.card.version) return NextResponse.json({ conflict: true, serverCard: context.card }, { status: 409 });
+  const operationId = operationIdFor(context.card.id, body.operationId);
+  const history = context.card.taskExecutionHistory ?? [];
+  const attempt = history.at(-1);
+  if (!attempt || attempt.operationId !== operationId || !['running', 'waiting'].includes(attempt.phase)
+      || !attempt.nativeTurnId || attempt.harness !== 'codex') {
+    return NextResponse.json({ error: 'current task execution cannot receive a question' }, { status: 409 });
+  }
+  const config = noticeConfig(true);
+  if (!config?.recipient) return NextResponse.json({ error: 'Notice task-decision channel is not configured' }, { status: 503 });
+  const existing = attempt.taskDecisionRequest;
+  if (!existing && attempt.lastBoardVersion !== context.card.version) {
+    return NextResponse.json({ error: 'task execution changed before question creation' }, { status: 409 });
+  }
+  if (existing && existing.purpose !== input.purpose) {
+    return NextResponse.json({ error: 'this execution already has a different Notice question reference' }, { status: 409 });
+  }
+  const questionVersion = existing?.version ?? context.card.version + 1;
+  const reference: TaskDecisionRequestReference = existing ?? {
+    requestId: noticeRequestId(context.card.id, input.purpose, questionVersion),
+    purpose: input.purpose,
+    version: questionVersion,
+    requestHash: sha256(JSON.stringify({ taskRef: context.card.id, operationId, project: context.card.project,
+      recipient: config.recipient, purpose: input.purpose, version: questionVersion, message: input.message,
+      choices: input.choices, timeoutValue: input.timeoutValue })),
+  };
+  const requestHash = sha256(JSON.stringify({ taskRef: context.card.id, operationId, project: context.card.project,
+    recipient: config.recipient, purpose: input.purpose, version: reference.version, message: input.message,
+    choices: input.choices, timeoutValue: input.timeoutValue }));
+  if (existing && existing.requestHash !== requestHash) {
+    return NextResponse.json({ error: 'Notice question content conflicts with its durable request reference' }, { status: 409 });
+  }
+  let saved = context.card;
+  if (!existing) {
+    const updatedAttempt: TaskExecutionReceipt = {
+      ...attempt,
+      lastBoardVersion: reference.version,
+      taskDecisionRequest: reference,
+      updatedAt: now(),
+    };
+    const nextHistory = [...history];
+    nextHistory[nextHistory.length - 1] = updatedAttempt;
+    const result = updateCard(context.card.id, { taskExecutionHistory: nextHistory }, context.card.version, context.tasksDir);
+    if ('conflict' in result) return NextResponse.json({ conflict: true, serverCard: result.serverCard }, { status: 409 });
+    saved = result;
+  }
+
+  // A stored reference after a prior attempt is reconciled by request ID first.
+  // GET is query-only; only an authoritative 404 permits the same deterministic
+  // create/reuse request to continue. UNKNOWN never triggers a blind POST.
+  if (existing) {
+    const queried = await noticeFetch(config.token, 'GET', reference.requestId);
+    if (!queried) return NextResponse.json({ ...taskExecutionSnapshot(saved), taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+    if (queried.status === 200) {
+      const view = queried.payload && taskQuestionView(queried.payload, saved.id, operationId, reference,
+        saved.project, config.recipient);
+      if (!view) return NextResponse.json({ error: 'Notice returned a mismatched task question' }, { status: 502 });
+      return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved, taskQuestion: view, replay: true }, { headers: { 'Cache-Control': 'no-store' } });
+    }
+    if (queried.status !== 404) return NextResponse.json({ ...taskExecutionSnapshot(saved), taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+    if (attempt.lastBoardVersion !== context.card.version || reference.version !== context.card.version) {
+      return NextResponse.json({ error: 'question reference is historical; creation is denied after the execution version changed' }, { status: 409 });
+    }
+  }
+
+  const mandate: RecordValue = {
+    task_ref: saved.id,
+    purpose: input.purpose,
+    version: String(reference.version),
+    mandate_ref: operationId,
+    project: saved.project,
+    recipient: config.recipient,
+    message: input.message,
+    choices: input.choices,
+    timeout_value: input.timeoutValue,
+  };
+  const created = await noticeFetch(config.token, 'POST', undefined, mandate);
+  if (!created) return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved,
+    taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+  if (![200, 201].includes(created.status)) {
+    if ([400, 401, 403, 409].includes(created.status)) return NextResponse.json({ error: 'Notice rejected the task question mandate' }, { status: 409 });
+    return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved,
+      taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+  }
+  const view = created.payload && taskQuestionView(created.payload, saved.id, operationId, reference,
+    saved.project, config.recipient);
+  if (!view || typeof created.payload?.delivery_status !== 'string' || typeof created.payload.idempotent !== 'boolean') {
+    return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved,
+      taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+  }
+  const deliveryUncertain = created.payload.delivery_status === 'unknown'
+    || created.payload.delivery_status === 'sending'
+    || view.notification.attemptState === 'unknown'
+    || view.notification.attemptState === 'sending';
+  return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved,
+    taskQuestion: { ...view, deliveryStatus: created.payload.delivery_status, idempotent: created.payload.idempotent },
+    retryable: false }, {
+    status: deliveryUncertain ? 202 : created.status,
+    headers: { 'Cache-Control': 'no-store' },
+  });
+}
+
 /** Read the execution-facing snapshot from the authenticated caller's existing Board scope. */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const identity = boardIdentityFromRequest(request);
     const { id } = await params;
+    if (request.nextUrl.searchParams.has('question')) {
+      if (request.nextUrl.searchParams.get('question') !== 'latest' || [...request.nextUrl.searchParams.keys()].some(key => key !== 'question')) {
+        return NextResponse.json({ error: 'invalid task question read request' }, { status: 400 });
+      }
+      const context = authorizedTaskCard(request, id);
+      if ('response' in context) return context.response;
+      return await readTaskQuestion(context);
+    }
+    const identity = boardIdentityFromRequest(request);
     const card = findCardById(id, tasksDirForScope(identity.scope));
     if (!card) return NextResponse.json({ error: 'not found' }, { status: 404 });
     return NextResponse.json({ ...taskExecutionSnapshot(card), ...startAvailability(card) }, { headers: { 'Cache-Control': 'no-store' } });
@@ -339,6 +635,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const context = authorizedTaskCard(request, id);
     if ('response' in context) return context.response;
     const body: unknown = await request.json();
+    if (isRecord(body) && body.action === 'create-question') return await createTaskQuestion(context, body);
     if (!isRecord(body) || body.action !== 'sync-result' || typeof body.operationId !== 'string'
       || !/^[A-Za-z0-9_-]{16,128}$/.test(body.operationId) || !Number.isSafeInteger(body.expectedVersion)) {
       return NextResponse.json({ error: 'invalid result sync request' }, { status: 400 });

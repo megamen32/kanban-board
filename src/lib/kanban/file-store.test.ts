@@ -89,6 +89,24 @@ describe('filesystem kanban contract', () => {
     expect(fs.readFileSync(path.join(root, created.fileName), 'utf8')).toContain('task_execution_history:');
   });
 
+  test('persists and reopens the opaque Notice request reference on its exact execution receipt', () => {
+    const created = store.createCard('Question-linked execution', 'Research brief', 'todo', 'medium', [], 'alpha');
+    const receipt = {
+      operationId: 'e'.repeat(64), requestHash: 'f'.repeat(64), lastBoardVersion: created.version + 1,
+      createInputId: '1'.repeat(64), messageInputId: '2'.repeat(64), phase: 'running' as const,
+      hostId: 'roomhacker-server-100', harness: 'codex' as const, nativeSessionId: 'native-session-q',
+      nativeTurnId: 'native-turn-q', startedBy: 'nikita', createdAt: '2026-10-20T12:00:00.000Z',
+      updatedAt: '2026-10-20T12:00:00.000Z',
+      taskDecisionRequest: { requestId: `td-${'a'.repeat(40)}`, requestHash: '9'.repeat(64), purpose: 'clarify-scope', version: created.version + 1 },
+    };
+    const saved = store.updateCard(created.id, { taskExecutionHistory: [receipt] }, created.version);
+    if (!saved || 'conflict' in saved) throw new Error('question reference update failed');
+    const reopened = store.readCardFile(path.join(root, created.fileName));
+    expect(reopened?.taskExecutionHistory?.[0]?.taskDecisionRequest).toEqual(receipt.taskDecisionRequest);
+    expect(fs.readFileSync(path.join(root, created.fileName), 'utf8')).toContain('taskDecisionRequest:');
+    expect(store.updateCard(created.id, { taskExecutionHistory: [receipt] }, created.version)).toMatchObject({ conflict: true });
+  });
+
   test('rejects malformed or duplicate execution operation receipts', () => {
     const created = store.createCard('Invalid execution', '', 'todo', 'medium', [], 'alpha');
     const malformed = {

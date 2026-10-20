@@ -151,6 +151,13 @@ export interface TaskReviewRecord {
   note?: string;
 }
 export type TaskExecutionPhase = 'intent' | 'create-unknown' | 'created' | 'dispatch-unknown' | 'running' | 'waiting' | 'stopped' | 'result';
+/** Opaque Notice request identity attached to the exact execution operation. */
+export interface TaskDecisionRequestReference {
+  requestId: string;
+  requestHash: string;
+  purpose: string;
+  version: number;
+}
 export interface TaskExecutionReceipt {
   operationId: string;
   requestHash: string;
@@ -163,6 +170,8 @@ export interface TaskExecutionReceipt {
   harness: 'codex' | 'zcode' | 'opencode';
   nativeSessionId?: string;
   nativeTurnId?: string;
+  /** Immutable Notice request link; the question body remains in Notice. */
+  taskDecisionRequest?: TaskDecisionRequestReference;
   createReceiptText?: string;
   dispatchReceiptText?: string;
   lastProgress?: string;
