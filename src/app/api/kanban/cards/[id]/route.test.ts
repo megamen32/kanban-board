@@ -9,7 +9,7 @@ const { findCardById, updateCard, validateTransition, dispatchCardEvent, startDu
   dispatchCardEvent: vi.fn(),
   startDueReminderScheduler: vi.fn(),
   tasksDirForScope: vi.fn(),
-  identity: { current: { username: 'nikita', scope: 'work' as const } },
+  identity: { current: { username: 'nikita', scope: 'work' as 'work' | 'personal' } },
   authenticated: { current: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' } | null },
   managerAuthorized: { current: false },
 }));
@@ -28,7 +28,7 @@ vi.mock('@/lib/notifications/scheduler', () => ({ startDueReminderScheduler }));
 
 vi.mock('@/lib/auth/board-human', () => ({ boardHumanIdentityFromRequest: async () => authenticated.current }));
 
-import { PATCH } from './route';
+import { GET, PATCH } from './route';
 
 const existingCard: KanbanCard = {
   id: 'card-1',
@@ -219,5 +219,48 @@ describe('PATCH /api/kanban/cards/[id]', () => {
       completedBy: expect.anything(),
       completedAt: expect.anything(),
     }));
+  });
+});
+
+describe('GET /api/kanban/cards/[id]', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    identity.current = { username: 'anonymous', scope: 'work' };
+    authenticated.current = null;
+    managerAuthorized.current = false;
+    tasksDirForScope.mockReturnValue('/scoped/work');
+    findCardById.mockReturnValue(existingCard);
+  });
+
+  it('preserves ordinary board reads without a manager header', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), {
+      params: Promise.resolve({ id: 'card-1' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ card: existingCard });
+    expect(findCardById).toHaveBeenCalledWith('card-1', '/scoped/work');
+  });
+
+  it('rejects an invalid supplied manager capability instead of falling back to anonymous access', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1', {
+      headers: { 'x-kanban-manager-token': 'invalid' },
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'unauthorized' });
+    expect(findCardById).not.toHaveBeenCalled();
+  });
+
+  it('returns the canonical card and version to an authorized manager caller', async () => {
+    managerAuthorized.current = true;
+    identity.current = { username: 'anonymous', scope: 'personal' };
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1', {
+      headers: { 'x-kanban-manager-token': 'valid' },
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ card: existingCard });
+    expect(findCardById).toHaveBeenCalledWith('card-1', '/scoped/work');
   });
 });

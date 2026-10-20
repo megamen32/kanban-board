@@ -10,8 +10,18 @@ import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
 import { validateTransition } from '@/lib/kanban/transition-policy';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // Human-facing reads keep their existing anonymous/UI-scope behavior. A
+  // service caller that supplies the manager capability must prove it; never
+  // let a bad token fall through to the public identity fallback.
+  const hasManagerCapability = req.headers.has('x-kanban-manager-token');
+  const managerAuthorized = hasManagerCapability && managerRequestAuthorized(req);
+  if (hasManagerCapability && !managerAuthorized) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 403 });
+  }
   startDueReminderScheduler();
-  const identity = boardIdentityFromRequest(req);
+  const identity = managerAuthorized
+    ? { username: 'manager', scope: 'work' as const }
+    : boardIdentityFromRequest(req);
   const tasksDir = tasksDirForScope(identity.scope);
   const { id } = await params;
   const card = findCardById(id, tasksDir);

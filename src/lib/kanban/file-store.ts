@@ -4,7 +4,7 @@ import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
 import { DEFAULT_COLUMNS, parseCatalogTaskLink, PLANNING_VERSION } from './types';
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
-import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskResult, TaskReviewRecord } from './types';
+import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskExecutionReceipt, TaskResult, TaskReviewRecord } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
@@ -14,7 +14,7 @@ const KNOWN_FRONTMATTER_KEYS = new Set([
   'today_rank', 'source', 'needs_review', 'suggested_assignee', 'waiting_for',
   'requires_approval_from', 'completed_by', 'completed_at', 'completion_evidence',
   'approval_evidence', 'result_history', 'review_history', 'next_action',
-  'source_admission', 'catalog_task_link',
+  'source_admission', 'catalog_task_link', 'task_execution_history',
 ]);
 const PLANNING_FRONTMATTER_KEYS = new Set([
   'planning_version', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
@@ -143,6 +143,7 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     ...planning,
     ...(data.source_admission && typeof data.source_admission === 'object' ? { sourceAdmission: data.source_admission as SourceAdmissionBinding } : {}),
     ...(catalogLink ? { catalogLink } : {}),
+    ...(data.task_execution_history !== undefined ? { taskExecutionHistory: taskExecutionHistoryField(data.task_execution_history) } : {}),
     rawFrontmatter,
   };
 }
@@ -218,6 +219,9 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
   const normalizedUpdates = Object.fromEntries(
     Object.entries(otherUpdates).map(([key, value]) => [key, value === null ? undefined : value]),
   ) as Omit<KanbanCardUpdates, 'dueAt' | 'nextAction'> & { nextAction?: string };
+  if (normalizedUpdates.taskExecutionHistory !== undefined) {
+    normalizedUpdates.taskExecutionHistory = taskExecutionHistoryField(normalizedUpdates.taskExecutionHistory);
+  }
   if (normalizedUpdates.parent !== undefined) assertAcyclicParent(id, normalizedUpdates.parent, tasksDir);
   const planningEdit = Object.entries(normalizedUpdates).some(([key, value]) =>
     PLANNING_UPDATE_KEYS.has(key) && isExplicitPlanningUpdate(key, value));
@@ -430,6 +434,7 @@ function buildFrontmatter(card: KanbanCard): string {
   }
   data.result_history = card.resultHistory ?? [];
   data.review_history = card.reviewHistory ?? [];
+  if (card.taskExecutionHistory?.length) data.task_execution_history = card.taskExecutionHistory;
   if (card.dueAt) data.dueAt = card.dueAt;
   if (card.role !== undefined) data.role = card.role;
   if (card.accountable !== undefined) data.accountable = card.accountable;
@@ -642,6 +647,61 @@ function stringArrayField(data: Record<string, unknown>, field: string): string[
     throw invalidPlanningField(field, 'expected an array of non-empty strings');
   }
   return [...value];
+}
+
+function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
+  if (!Array.isArray(value) || value.length > 32) throw invalidPlanningField('task_execution_history', 'expected at most 32 execution receipts');
+  const seen = new Set<string>();
+  return value.map((entry, index) => {
+    const field = `task_execution_history[${index}]`;
+    if (!isRecord(entry)
+      || typeof entry.operationId !== 'string' || !/^[a-f0-9]{64}$/.test(entry.operationId)
+      || seen.has(entry.operationId)
+      || typeof entry.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(entry.requestHash)
+      || !Number.isSafeInteger(entry.lastBoardVersion) || (entry.lastBoardVersion as number) < 1
+      || typeof entry.createInputId !== 'string' || !/^[a-f0-9]{64}$/.test(entry.createInputId)
+      || typeof entry.messageInputId !== 'string' || !/^[a-f0-9]{64}$/.test(entry.messageInputId)
+      || !['intent', 'create-unknown', 'created', 'dispatch-unknown', 'running', 'waiting', 'stopped', 'result'].includes(String(entry.phase))
+      || typeof entry.hostId !== 'string' || !entry.hostId.trim() || entry.hostId.length > 512
+      || !['codex', 'zcode', 'opencode'].includes(String(entry.harness))
+      || typeof entry.startedBy !== 'string' || !entry.startedBy.trim() || entry.startedBy.length > 256
+      || typeof entry.createdAt !== 'string' || Number.isNaN(Date.parse(entry.createdAt))
+      || typeof entry.updatedAt !== 'string' || Number.isNaN(Date.parse(entry.updatedAt))
+      || entry.nativeSessionId !== undefined && (typeof entry.nativeSessionId !== 'string' || !entry.nativeSessionId.trim() || entry.nativeSessionId.length > 512)
+      || entry.nativeTurnId !== undefined && (typeof entry.nativeTurnId !== 'string' || !entry.nativeTurnId.trim() || entry.nativeTurnId.length > 512)
+      || entry.createReceiptText !== undefined && (typeof entry.createReceiptText !== 'string' || entry.createReceiptText.length > 4096)
+      || entry.dispatchReceiptText !== undefined && (typeof entry.dispatchReceiptText !== 'string' || entry.dispatchReceiptText.length > 4096)
+      || entry.lastProgress !== undefined && (typeof entry.lastProgress !== 'string' || entry.lastProgress.length > 4000)
+      || entry.lastProgressAt !== undefined && (typeof entry.lastProgressAt !== 'string' || Number.isNaN(Date.parse(entry.lastProgressAt)))) {
+      throw invalidPlanningField(field, 'invalid immutable operation identity or receipt state');
+    }
+    if (['created', 'dispatch-unknown', 'running', 'waiting', 'stopped', 'result'].includes(String(entry.phase)) && !entry.nativeSessionId) {
+      throw invalidPlanningField(`${field}.nativeSessionId`, 'required after session creation');
+    }
+    if (['running', 'waiting', 'result'].includes(String(entry.phase)) && !entry.nativeTurnId) {
+      throw invalidPlanningField(`${field}.nativeTurnId`, 'required after native turn admission');
+    }
+    seen.add(entry.operationId);
+    return {
+      operationId: entry.operationId,
+      requestHash: entry.requestHash,
+      lastBoardVersion: entry.lastBoardVersion as number,
+      createInputId: entry.createInputId,
+      messageInputId: entry.messageInputId,
+      phase: entry.phase as TaskExecutionReceipt['phase'],
+      hostId: entry.hostId,
+      harness: entry.harness as TaskExecutionReceipt['harness'],
+      ...(typeof entry.nativeSessionId === 'string' ? { nativeSessionId: entry.nativeSessionId } : {}),
+      ...(typeof entry.nativeTurnId === 'string' ? { nativeTurnId: entry.nativeTurnId } : {}),
+      ...(typeof entry.createReceiptText === 'string' ? { createReceiptText: entry.createReceiptText } : {}),
+      ...(typeof entry.dispatchReceiptText === 'string' ? { dispatchReceiptText: entry.dispatchReceiptText } : {}),
+      ...(typeof entry.lastProgress === 'string' ? { lastProgress: entry.lastProgress } : {}),
+      ...(typeof entry.lastProgressAt === 'string' ? { lastProgressAt: entry.lastProgressAt } : {}),
+      startedBy: entry.startedBy,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+    };
+  });
 }
 
 function evidenceArrayField(data: Record<string, unknown>, field: string): PlanningEvidence[] {

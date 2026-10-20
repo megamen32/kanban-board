@@ -70,6 +70,35 @@ describe('filesystem kanban contract', () => {
     expect(loaded?.assignees).toEqual(['alice', 'bob']);
   });
 
+  test('persists exact execution intent and native receipt in existing Markdown with version CAS', () => {
+    const created = store.createCard('Durable execution', 'Research brief', 'todo', 'medium', [], 'alpha');
+    const intent = {
+      operationId: 'a'.repeat(64), requestHash: 'b'.repeat(64), lastBoardVersion: created.version + 1, createInputId: 'c'.repeat(64), messageInputId: 'd'.repeat(64),
+      phase: 'intent' as const, hostId: 'roomhacker-server-100', harness: 'codex' as const,
+      startedBy: 'nikita', createdAt: '2026-10-20T12:00:00.000Z', updatedAt: '2026-10-20T12:00:00.000Z',
+    };
+    const savedIntent = store.updateCard(created.id, { taskExecutionHistory: [intent] }, created.version);
+    if (!savedIntent || 'conflict' in savedIntent) throw new Error('execution intent update failed');
+    expect(store.updateCard(created.id, { taskExecutionHistory: [intent] }, created.version)).toMatchObject({ conflict: true });
+
+    const running = { ...intent, phase: 'running' as const, nativeSessionId: 'native-session-1', nativeTurnId: 'native-turn-1', updatedAt: '2026-10-20T12:01:00.000Z' };
+    const savedReceipt = store.updateCard(created.id, { taskExecutionHistory: [running] }, savedIntent.version);
+    if (!savedReceipt || 'conflict' in savedReceipt) throw new Error('execution receipt update failed');
+    const reopened = store.readCardFile(path.join(root, created.fileName));
+    expect(reopened?.taskExecutionHistory).toEqual([running]);
+    expect(fs.readFileSync(path.join(root, created.fileName), 'utf8')).toContain('task_execution_history:');
+  });
+
+  test('rejects malformed or duplicate execution operation receipts', () => {
+    const created = store.createCard('Invalid execution', '', 'todo', 'medium', [], 'alpha');
+    const malformed = {
+      operationId: 'bad', requestHash: 'b'.repeat(64), lastBoardVersion: 1, createInputId: 'c'.repeat(64), messageInputId: 'd'.repeat(64),
+      phase: 'intent' as const, hostId: 'server-100', harness: 'codex' as const,
+      startedBy: 'nikita', createdAt: '2026-10-20T12:00:00Z', updatedAt: '2026-10-20T12:00:00Z',
+    };
+    expect(() => store.updateCard(created.id, { taskExecutionHistory: [malformed] }, created.version)).toThrow('task_execution_history');
+  });
+
   test('rejects clearing the required project on update', async () => {
     const created = store.createCard('Required project', '', 'todo', 'medium', [], 'alpha');
     expect(() => store.updateCard(created.id, { project: '   ' }, created.version)).toThrow('project is required');
