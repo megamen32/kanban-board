@@ -12,6 +12,7 @@ import { DEFAULT_COLUMNS, PRIORITY_COLORS } from '@/lib/kanban/types';
 import type { KanbanCard, Priority, KanbanColumn, PlanningType, RoleDefinition } from '@/lib/kanban/types';
 import type { HumanReviewAction } from '@/lib/kanban/transition-policy';
 import { CatalogLinkPanel } from './catalog-link-panel';
+import { NoticeQuestionPanel } from './notice-question-panel';
 import { RolePicker } from './role-picker';
 import { fromDateTimeLocalValue, toDateTimeLocalValue } from '@/lib/kanban/date-input';
 import type { KanbanUpdateRequest } from '@/hooks/use-kanban';
@@ -21,6 +22,8 @@ import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
 interface Props {
   card: KanbanCard;
   open: boolean;
+  username?: string | null;
+  onRefresh?: () => Promise<unknown> | void;
   roles?: RoleDefinition[];
   projectOptions?: string[];
   relatedCards?: KanbanCard[];
@@ -69,7 +72,7 @@ export function buildPlanningMetadataUpdates(card: KanbanCard, form: PlanningMet
   return updates as KanbanUpdateRequest;
 }
 
-export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, onReviewDecision, roles, projectOptions = [], relatedCards = [] }: Props) {
+export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, onReviewDecision, roles, projectOptions = [], relatedCards = [], username, onRefresh }: Props) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
   const [column, setColumn] = useState(card.column);
@@ -202,6 +205,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               </div>
             </div>}
           </section>
+          <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />
           {catalogLink && <CatalogLinkPanel link={catalogLink} />}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Название</label>

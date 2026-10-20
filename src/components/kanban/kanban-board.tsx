@@ -168,7 +168,7 @@ export function KanbanBoard() {
   }
 
   return (
-    <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete, roles }}>
+    <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete, roles, username, refresh }}>
       <DndProvider cards={visibleCards} onMoveCard={moveCard} onReorder={reorderColumn}>
         <div className="px-3 sm:px-6 pt-3 sm:pt-4 pb-2 border-b">
           <div className="flex items-center gap-2 sm:gap-3">
@@ -268,7 +268,7 @@ export function KanbanBoard() {
           <Plus className="h-5 w-5" />
         </Button>
         <AddCardDialog projectOptions={projectOptions} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={createCard} />
-        {selectedCard && <CardEditDialog projectOptions={projectOptions} relatedCards={cards} roles={roles} card={selectedCard} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReviewDecision} />}
+        {selectedCard && <CardEditDialog projectOptions={projectOptions} relatedCards={cards} roles={roles} card={selectedCard} username={username} onRefresh={refresh} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReviewDecision} />}
         {conflict && <ConflictDialog conflict={conflict} onResolve={resolveConflict} />}
         <Dialog open={showWelcome} onOpenChange={setShowWelcome}>
           <DialogContent className="sm:max-w-md" showCloseButton={false}>

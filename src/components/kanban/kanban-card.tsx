@@ -15,6 +15,8 @@ import { useState, createContext, useContext, useRef } from 'react';
 // Context for update/delete without prop drilling
 interface CardActionsCtx {
   roles?: RoleDefinition[];
+  username: string | null;
+  refresh: () => Promise<void>;
   onUpdate: (id: string, updates: KanbanCardUpdates, version?: number) => Promise<CardType | null>;
   onDelete: (id: string) => Promise<unknown>;
 }
@@ -30,7 +32,7 @@ export function KanbanCard({ card, columnId }: Props) {
   const [editing, setEditing] = useState(false);
   const pointerStart = useRef<{ x: number; y: number } | null>(null);
   const suppressClick = useRef(false);
-  const { onUpdate, onDelete, roles } = useCardActions();
+  const { onUpdate, onDelete, roles, username, refresh } = useCardActions();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
     data: { card, columnId },
@@ -102,7 +104,7 @@ export function KanbanCard({ card, columnId }: Props) {
           </div>
         </div>
       </div>
-      {editing && <CardEditDialog card={card} roles={roles} open={editing} onOpenChange={setEditing} onUpdate={onUpdate} onDelete={() => onDelete(card.id)} />}
+      {editing && <CardEditDialog card={card} roles={roles} username={username} onRefresh={refresh} open={editing} onOpenChange={setEditing} onUpdate={onUpdate} onDelete={() => onDelete(card.id)} />}
     </>
   );
 }
