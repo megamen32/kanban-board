@@ -10,6 +10,7 @@ import { X, Plus, Trash2 } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DEFAULT_COLUMNS, PRIORITY_COLORS } from '@/lib/kanban/types';
 import type { KanbanCard, Priority, KanbanColumn, PlanningType, RoleDefinition } from '@/lib/kanban/types';
+import type { HumanReviewAction } from '@/lib/kanban/transition-policy';
 import { RolePicker } from './role-picker';
 import { fromDateTimeLocalValue, toDateTimeLocalValue } from '@/lib/kanban/date-input';
 import type { KanbanUpdateRequest } from '@/hooks/use-kanban';
@@ -21,9 +22,11 @@ interface Props {
   open: boolean;
   roles?: RoleDefinition[];
   projectOptions?: string[];
+  relatedCards?: KanbanCard[];
   onOpenChange: (open: boolean) => void;
   onDelete?: (id: string) => Promise<unknown>;
   onUpdate?: (id: string, updates: KanbanUpdateRequest, version?: number) => Promise<KanbanCard | null>;
+  onReviewDecision?: (id: string, action: HumanReviewAction, note: string, version: number) => Promise<KanbanCard | null>;
 }
 
 export interface PlanningMetadataForm {
@@ -65,7 +68,7 @@ export function buildPlanningMetadataUpdates(card: KanbanCard, form: PlanningMet
   return updates as KanbanUpdateRequest;
 }
 
-export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, roles, projectOptions = [] }: Props) {
+export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, onReviewDecision, roles, projectOptions = [], relatedCards = [] }: Props) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
   const [column, setColumn] = useState(card.column);
@@ -79,6 +82,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, r
   const [tagInput, setTagInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reviewNote, setReviewNote] = useState('');
   const [baseline, setBaseline] = useState(card);
 
   useEffect(() => {
@@ -92,6 +96,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, r
     setReassignmentConfirmed(false);
     setBaseline(card);
     setError(null);
+    setReviewNote('');
     setDueAt(toDateTimeLocalValue(card.dueAt));
     setPlanning(initialPlanningMetadata(card));
     // A remote update must not erase unsaved input or silently advance its CAS.
@@ -131,6 +136,18 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, r
     finally { setSaving(false); }
   };
 
+  const handleReview = async (action: HumanReviewAction) => {
+    if (!onReviewDecision || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = await onReviewDecision(card.id, action, reviewNote, baseline.version);
+      if (!saved) { setError('Карточка изменилась. Обновите её и повторите решение.'); return; }
+      onOpenChange(false);
+    } catch (failure) { setError(mutationErrorMessage(failure)); }
+    finally { setSaving(false); }
+  };
+
   const addTag = () => {
     const t = tagInput.trim();
     if (t && !tags.includes(t)) setTags([...tags, t]);
@@ -145,6 +162,43 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, r
         </DialogHeader>
 
         <div className="space-y-4">
+          <section className="space-y-2 rounded-md border p-3" aria-label="Жизненный цикл и результат">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">Состояние</span>
+              <Badge variant="outline">{DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column}</Badge>
+              {card.needsReview && <Badge>Требуется приёмка</Badge>}
+              <span className="text-xs text-muted-foreground">Версия {card.version}</span>
+            </div>
+            {card.parent && <p className="text-sm">Родитель: {relatedCards.find(item => item.id === card.parent)?.title ?? card.parent}</p>}
+            {relatedCards.filter(item => item.parent === card.id).length > 0 && <div className="text-sm">
+              <span className="font-medium">Подзадачи:</span>
+              <ul className="list-disc pl-5">{relatedCards.filter(item => item.parent === card.id).map(item => <li key={item.id}>{item.title} · {DEFAULT_COLUMNS.find(columnItem => columnItem.id === item.column)?.title ?? item.column}</li>)}</ul>
+            </div>}
+            {card.nextAction && <p className="text-sm"><span className="font-medium">Следующий шаг:</span> {card.nextAction}</p>}
+            {(card.resultHistory ?? []).length > 0 && <div className="space-y-2">
+              <h3 className="text-sm font-medium">Результаты исполнителя</h3>
+              {[...(card.resultHistory ?? [])].reverse().map((result, index) => <article key={`${result.submittedAt}-${index}`} className="rounded border p-2 text-sm">
+                <p>{result.summary}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{result.submittedBy} · {new Date(result.submittedAt).toLocaleString()}</p>
+                {result.runRef && <p className="break-all text-xs">Запуск: {result.runRef}</p>}
+                {result.evidenceRefs.length > 0 && <div className="mt-1 text-xs"><span className="font-medium">Ссылки на подтверждения:</span><ul className="list-disc pl-5">{result.evidenceRefs.map((ref, refIndex) => <li key={`${ref}-${refIndex}`} className="break-all">{ref}</li>)}</ul></div>}
+              </article>)}
+            </div>}
+            {(card.reviewHistory ?? []).length > 0 && <div className="space-y-1 text-xs">
+              <h3 className="font-medium">Решения по результату</h3>
+              {[...(card.reviewHistory ?? [])].reverse().map((review, index) => <p key={`${review.decidedAt}-${index}`}>
+                {review.decision === 'accepted' ? 'Принято' : 'На доработку'} · {review.actor} · {new Date(review.decidedAt).toLocaleString()}{review.note ? ` · ${review.note}` : ''}
+              </p>)}
+            </div>}
+            {card.column === 'review' && card.needsReview && onReviewDecision && <div className="space-y-2 border-t pt-3">
+              <p className="text-xs text-muted-foreground">Решение проверяется сервером по текущему списку согласующих.</p>
+              <Textarea aria-label="Комментарий к доработке" placeholder="Что нужно исправить" value={reviewNote} onChange={event => setReviewNote(event.target.value)} rows={2} />
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={saving} onClick={() => void handleReview('accept')}>Принять результат</Button>
+                <Button variant="outline" disabled={saving || !reviewNote.trim()} onClick={() => void handleReview('rework')}>Вернуть на доработку</Button>
+              </div>
+            </div>}
+          </section>
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Название</label>
             <Input value={title} onChange={e => setTitle(e.target.value)} />
@@ -199,8 +253,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, r
                   <Badge
                     key={col.id}
                     variant={column === col.id ? 'default' : 'outline'}
-                    className="cursor-pointer"
-                    onClick={() => setColumn(col.id)}
+                    className={card.column === 'review' || card.needsReview ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}
+                    onClick={() => { if (card.column !== 'review' && !card.needsReview) setColumn(col.id); }}
                   >
                     {col.title}
                   </Badge>

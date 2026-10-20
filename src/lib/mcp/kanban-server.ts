@@ -9,7 +9,7 @@ import { NIKITA_ACTOR, validateTransition } from '../kanban/transition-policy';
 import { tasksDirForScope } from '../auth/data-scope';
 import type { BoardScope } from '../auth/scopes';
 import { ROLE_IDS } from '../kanban/types';
-import type { KanbanCard, KanbanCardUpdates, KanbanColumn, PlanningEvidence, Priority } from '../kanban/types';
+import type { ExecutorResultInput, KanbanCard, KanbanCardUpdates, KanbanColumn, PlanningEvidence, Priority } from '../kanban/types';
 
 const COLUMNS = ['inbox', 'todo', 'in-progress', 'review', 'blocked', 'done', 'someday', 'archived'] as const;
 const PRIORITIES = ['low', 'medium', 'high', 'critical'] as const;
@@ -46,6 +46,11 @@ const cardInput = {
   completedAt: z.string().optional(),
   completionEvidence: z.array(z.record(z.string(), z.unknown())).max(20).optional(),
   approvalEvidence: z.array(z.record(z.string(), z.unknown())).max(20).optional(),
+  executorResult: z.object({
+    summary: z.string().trim().min(1).max(20000),
+    evidenceRefs: z.array(z.string().trim().min(1).max(2000)).max(20),
+    nextAction: z.string().trim().max(4000).optional(),
+  }).optional(),
 };
 
 type ChangeInput = {
@@ -77,6 +82,7 @@ type ChangeInput = {
   completedAt?: string;
   completionEvidence?: PlanningEvidence[];
   approvalEvidence?: PlanningEvidence[];
+  executorResult?: ExecutorResultInput;
 };
 
 /** Validate planning metadata before a new card can be written to Markdown. */

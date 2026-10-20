@@ -79,6 +79,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
             },
           }
         : authenticatedIdentity?.username === 'nikita'
+        && body.requiresApprovalFrom !== undefined
+        ? {
+            ownerAuthorization: {
+              actor: 'nikita',
+              evidence: { type: 'reviewer-assignment', origin: 'rest', actor: 'nikita' },
+            },
+          }
+        : authenticatedIdentity?.username === 'nikita'
         && body.reassignmentIntent === 'direct-owner-command'
         && body.reassignmentEvidence
         && typeof body.reassignmentEvidence === 'object'

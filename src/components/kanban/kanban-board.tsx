@@ -12,6 +12,7 @@ import { Plus, FolderSync, RotateCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { KanbanCard, KanbanCardUpdates, RoleDefinition } from '@/lib/kanban/types';
+import type { HumanReviewAction } from '@/lib/kanban/transition-policy';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { TaskListView } from './task-list-view';
 import { filterCards, filterWorkspaceCards, getAssigneeOptions, getPeople, getProjectOptions, searchCards, isClosedCard, getBoardCounts, filterAttentionCards, type AttentionFilter, type WorkspaceView } from './view-model';
@@ -130,6 +131,16 @@ export function KanbanBoard() {
   }, [updateCard]);
 
   const handleDelete = useCallback(async (id: string) => deleteCard(id), [deleteCard]);
+  const handleReviewDecision = useCallback(async (id: string, action: HumanReviewAction, note: string, version: number) => {
+    const response = await fetch(`/api/kanban/cards/${encodeURIComponent(id)}/review`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action, note, expectedVersion: version }),
+    });
+    const data = await readMutationResponse(response, true);
+    if (data.conflict) return null;
+    await refresh();
+    return data.card ?? null;
+  }, [refresh]);
   const now = new Date();
   const derivedCards = useMemo(() => getPlanningTabCards(visibleCards, planningTab, now), [planningTab, visibleCards]);
   const roleBalance = useMemo(() => getPlanningRoleBalance(visibleCards, now, roles), [visibleCards, roles]);
@@ -252,7 +263,7 @@ export function KanbanBoard() {
           <Plus className="h-5 w-5" />
         </Button>
         <AddCardDialog projectOptions={projectOptions} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={createCard} />
-        {selectedCard && <CardEditDialog projectOptions={projectOptions} roles={roles} card={selectedCard} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} />}
+        {selectedCard && <CardEditDialog projectOptions={projectOptions} relatedCards={cards} roles={roles} card={selectedCard} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReviewDecision} />}
         {conflict && <ConflictDialog conflict={conflict} onResolve={resolveConflict} />}
         <Dialog open={showWelcome} onOpenChange={setShowWelcome}>
           <DialogContent className="sm:max-w-md" showCloseButton={false}>

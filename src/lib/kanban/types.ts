@@ -39,6 +39,9 @@ export interface KanbanCard {
   completedAt?: string;
   completionEvidence?: PlanningEvidence[];
   approvalEvidence?: PlanningEvidence[];
+  resultHistory?: TaskResult[];
+  reviewHistory?: TaskReviewRecord[];
+  nextAction?: string;
   /** Immutable source admission identity; the board operation journal owns lifecycle state. */
   sourceAdmission?: SourceAdmissionBinding;
   /** Unknown frontmatter is retained internally so unrelated edits are lossless. */
@@ -77,10 +80,33 @@ export interface RoleDefinition {
   order: number;
 }
 export type PlanningEvidence = Record<string, unknown>;
+/** Reference-only executor output; evidence bodies stay in their source system. */
+export interface TaskResult {
+  summary: string;
+  evidenceRefs: string[];
+  nextAction?: string;
+  runRef?: string;
+  submittedBy: string;
+  submittedAt: string;
+}
+export interface TaskReviewRecord {
+  decision: 'accepted' | 'rework';
+  actor: string;
+  decidedAt: string;
+  note?: string;
+}
+/** Untrusted result fields accepted only by the authenticated executor MCP path. */
+export interface ExecutorResultInput {
+  summary: string;
+  evidenceRefs: string[];
+  nextAction?: string;
+}
 export const PLANNING_VERSION = 1 as const;
 
-export type KanbanCardUpdates = Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'project' | 'assignees' | 'owner' | 'shared' | 'planningVersion' | 'type' | 'role' | 'accountable' | 'assignee' | 'important' | 'urgent' | 'week' | 'bigRock' | 'parent' | 'scheduledAt' | 'todayRank' | 'source' | 'needsReview' | 'suggestedAssignee' | 'waitingFor' | 'requiresApprovalFrom' | 'completedBy' | 'completedAt' | 'completionEvidence' | 'approvalEvidence'>> & {
+export type KanbanCardUpdates = Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'project' | 'assignees' | 'owner' | 'shared' | 'planningVersion' | 'type' | 'role' | 'accountable' | 'assignee' | 'important' | 'urgent' | 'week' | 'bigRock' | 'parent' | 'scheduledAt' | 'todayRank' | 'source' | 'needsReview' | 'suggestedAssignee' | 'waitingFor' | 'requiresApprovalFrom' | 'completedBy' | 'completedAt' | 'completionEvidence' | 'approvalEvidence' | 'resultHistory' | 'reviewHistory'>> & {
   dueAt?: string | null;
+  nextAction?: string | null;
+  executorResult?: ExecutorResultInput;
 };
 
 export type KanbanColumn = 'inbox' | 'todo' | 'in-progress' | 'review' | 'blocked' | 'done' | 'someday' | 'archived';

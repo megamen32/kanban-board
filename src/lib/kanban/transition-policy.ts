@@ -2,6 +2,8 @@ import type {
   KanbanCard,
   KanbanCardUpdates,
   PlanningEvidence,
+  ExecutorResultInput,
+  TaskReviewRecord,
 } from './types';
 
 export const NIKITA_ACTOR = 'nikita' as const;
@@ -32,6 +34,11 @@ export interface TransitionContext {
   };
 }
 
+export type HumanReviewAction = 'accept' | 'rework';
+export type HumanReviewDecision =
+  | { kind: 'accepted'; patch: KanbanCardUpdates }
+  | { kind: 'rejected'; reason: 'task_not_waiting_for_review' | 'reviewer_not_authorized' | 'rework_note_required' };
+
 export type TransitionDecision =
   | {
       kind: 'accepted';
@@ -40,11 +47,13 @@ export type TransitionDecision =
   | {
       kind: 'redirected';
       patch: KanbanCardUpdates;
-      reason: 'automation_done_requires_review';
+      reason: 'automation_done_requires_review' | 'executor_result_requires_review';
     }
   | {
       kind: 'rejected';
-      reason: 'assignee_change_requires_owner_authorization' | 'deadline_change_requires_human_ui' | 'weekly_plan_requires_batch_acceptance';
+      reason: 'assignee_change_requires_owner_authorization' | 'reviewer_change_requires_owner_authorization'
+        | 'deadline_change_requires_human_ui' | 'weekly_plan_requires_batch_acceptance'
+        | 'review_requires_explicit_decision' | 'executor_result_requires_non_review_state';
     };
 
 /**
@@ -66,6 +75,18 @@ export function validateTransition(
   requested: KanbanCardUpdates,
   context: TransitionContext,
 ): TransitionDecision {
+  const waitingForHumanReview = before.column === 'review' || before.needsReview;
+  const reviewStateKeys = [
+    'column', 'needsReview', 'requiresApprovalFrom', 'completedBy', 'completedAt',
+    'completionEvidence', 'reviewHistory', 'resultHistory', 'executorResult',
+  ];
+  // Review-state decisions use the authenticated human review endpoint and its
+  // expected-version CAS. Ordinary MCP/UI updates cannot move or rewrite that
+  // state, even when the caller has a separate owner-command confirmation.
+  if (waitingForHumanReview && reviewStateKeys.some((key) => Object.hasOwn(requested, key))) {
+    return { kind: 'rejected', reason: 'review_requires_explicit_decision' };
+  }
+
   // Audit fields are policy-owned. Callers may request a state transition, but
   // cannot manufacture the evidence or actor/timestamp records proving it.
   const {
@@ -73,6 +94,10 @@ export function validateTransition(
     completedAt: _requestedCompletedAt,
     completionEvidence: _requestedCompletionEvidence,
     approvalEvidence: _requestedApprovalEvidence,
+    resultHistory: _requestedResultHistory,
+    reviewHistory: _requestedReviewHistory,
+    nextAction: _requestedNextAction,
+    executorResult,
     ...policyRequested
   } = requested;
 
@@ -92,12 +117,50 @@ export function validateTransition(
     };
   }
 
+  if (changesReviewers(before, policyRequested) && !hasOwnerAuthorization(context)) {
+    return { kind: 'rejected', reason: 'reviewer_change_requires_owner_authorization' };
+  }
+
   if (changesDeadline(before, policyRequested) && context.origin !== 'human-ui'
     && !(context.origin === 'mcp' && (hasOwnerAuthorization(context) || hasInternalTeamAuthorization(context)))) {
     return {
       kind: 'rejected',
       reason: 'deadline_change_requires_human_ui',
     };
+  }
+
+  if (executorResult !== undefined) {
+    if (context.origin === 'human-ui') {
+      return { kind: 'rejected', reason: 'executor_result_requires_non_review_state' };
+    }
+    if (before.column === 'review' || before.needsReview) {
+      return { kind: 'rejected', reason: 'executor_result_requires_non_review_state' };
+    }
+    const result = normalizeExecutorResult(executorResult);
+    if (!result) return { kind: 'rejected', reason: 'executor_result_requires_non_review_state' };
+    const submittedAt = new Date().toISOString();
+    return {
+      kind: 'redirected',
+      reason: 'executor_result_requires_review',
+      patch: {
+        ...policyRequested,
+        column: 'review',
+        needsReview: true,
+        requiresApprovalFrom: before.requiresApprovalFrom?.length
+          ? before.requiresApprovalFrom : [NIKITA_ACTOR],
+        resultHistory: [...(before.resultHistory ?? []), {
+          ...result,
+          submittedBy: context.actor,
+          submittedAt,
+        }],
+        nextAction: result.nextAction ?? null,
+      },
+    };
+  }
+
+  if ((before.column === 'review' || before.needsReview)
+    && policyRequested.column !== undefined && policyRequested.column !== before.column) {
+    return { kind: 'rejected', reason: 'review_requires_explicit_decision' };
   }
 
   let patch: KanbanCardUpdates = { ...policyRequested };
@@ -219,6 +282,70 @@ export function validateTransition(
   };
 }
 
+/** Build an explicit human decision only for a currently assigned reviewer. */
+export function decideHumanReview(
+  before: KanbanCard,
+  action: HumanReviewAction,
+  actor: string,
+  note = '',
+): HumanReviewDecision {
+  if (before.column !== 'review' || !before.needsReview) {
+    return { kind: 'rejected', reason: 'task_not_waiting_for_review' };
+  }
+  if (!actor || !(before.requiresApprovalFrom ?? []).includes(actor)) {
+    return { kind: 'rejected', reason: 'reviewer_not_authorized' };
+  }
+  if (action === 'rework' && !note.trim()) {
+    return { kind: 'rejected', reason: 'rework_note_required' };
+  }
+  const decidedAt = new Date().toISOString();
+  const review: TaskReviewRecord = {
+    decision: action === 'accept' ? 'accepted' : 'rework',
+    actor,
+    decidedAt,
+    ...(note.trim() ? { note: note.trim() } : {}),
+  };
+  if (action === 'rework') {
+    return {
+      kind: 'accepted',
+      patch: {
+        column: 'in-progress',
+        needsReview: false,
+        nextAction: note.trim(),
+        reviewHistory: [...(before.reviewHistory ?? []), review],
+      },
+    };
+  }
+  return {
+    kind: 'accepted',
+    patch: {
+      column: 'done',
+      needsReview: false,
+      completedBy: actor,
+      completedAt: decidedAt,
+      completionEvidence: appendEvidence(before.completionEvidence, undefined, {
+        type: MANUAL_CONFIRMATION,
+        actor,
+        origin: 'human-ui',
+      }),
+      reviewHistory: [...(before.reviewHistory ?? []), review],
+    },
+  };
+}
+
+function normalizeExecutorResult(value: unknown): ExecutorResultInput | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const result = value as Record<string, unknown>;
+  if (typeof result.summary !== 'string' || !result.summary.trim()
+    || !Array.isArray(result.evidenceRefs)
+    || result.evidenceRefs.some(ref => typeof ref !== 'string' || !ref.trim())) return null;
+  return {
+    summary: result.summary.trim(),
+    evidenceRefs: [...result.evidenceRefs] as string[],
+    ...(typeof result.nextAction === 'string' && result.nextAction.trim() ? { nextAction: result.nextAction.trim() } : {}),
+  };
+}
+
 function hasWeeklyPlanAcceptance(context: TransitionContext, requestedWeek?: string): boolean {
   return context.origin === 'human-ui'
     && context.actor === NIKITA_ACTOR
@@ -267,6 +394,11 @@ function changesAssignee(before: KanbanCard, requested: KanbanCardUpdates): bool
  */
 function changesDeadline(before: KanbanCard, requested: KanbanCardUpdates): boolean {
   return requested.dueAt !== undefined && requested.dueAt !== before.dueAt;
+}
+
+function changesReviewers(before: KanbanCard, requested: KanbanCardUpdates): boolean {
+  return requested.requiresApprovalFrom !== undefined
+    && !sameArray(requested.requiresApprovalFrom, before.requiresApprovalFrom ?? []);
 }
 
 /**

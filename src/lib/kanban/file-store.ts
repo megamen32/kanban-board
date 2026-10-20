@@ -4,7 +4,7 @@ import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
 import { DEFAULT_COLUMNS, PLANNING_VERSION } from './types';
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
-import type { KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding } from './types';
+import type { KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskResult, TaskReviewRecord } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
@@ -13,17 +13,19 @@ const KNOWN_FRONTMATTER_KEYS = new Set([
   'assignee', 'important', 'urgent', 'week', 'big_rock', 'parent', 'scheduled_at',
   'today_rank', 'source', 'needs_review', 'suggested_assignee', 'waiting_for',
   'requires_approval_from', 'completed_by', 'completed_at', 'completion_evidence',
-  'approval_evidence',
+  'approval_evidence', 'result_history', 'review_history', 'next_action',
   'source_admission',
 ]);
 const PLANNING_FRONTMATTER_KEYS = new Set([
   'planning_version', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
   'week', 'big_rock', 'parent', 'scheduled_at', 'today_rank', 'source', 'needs_review',
   'suggested_assignee', 'waiting_for', 'requires_approval_from', 'completed_by',
-  'completed_at', 'completion_evidence', 'approval_evidence',
+  'completed_at', 'completion_evidence', 'approval_evidence', 'result_history', 'review_history', 'next_action',
 ]);
 const LEGACY_CARD = Symbol('legacy-card');
 const RAW_UNKNOWN_FRONTMATTER = Symbol('raw-unknown-frontmatter');
+const MAX_FILENAME_COMPONENT_BYTES = 255;
+const MAX_TEMP_SUFFIX_BYTES = Buffer.byteLength(`.${Number.MAX_SAFE_INTEGER}.${'0'.repeat(36)}.tmp`, 'utf8');
 type RawFrontmatter = Record<string, unknown> & {
   [LEGACY_CARD]?: boolean;
   [RAW_UNKNOWN_FRONTMATTER]?: string;
@@ -32,7 +34,7 @@ const PLANNING_UPDATE_KEYS = new Set([
   'owner', 'shared', 'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
   'week', 'bigRock', 'parent', 'scheduledAt', 'todayRank', 'source', 'needsReview',
   'suggestedAssignee', 'waitingFor', 'requiresApprovalFrom', 'completedBy', 'completedAt',
-  'completionEvidence', 'approvalEvidence',
+  'completionEvidence', 'approvalEvidence', 'resultHistory', 'reviewHistory', 'nextAction',
 ]);
 
 function ensureDir(tasksDir = TASKS_DIR) {
@@ -51,7 +53,9 @@ function sanitizeFileName(name: string): string {
 
 function slugify(title: string, id: string): string {
   const suffix = `-${id.split('-')[0]}.md`;
-  const budget = 255 - Buffer.byteLength(suffix, 'utf8');
+  // writeCard appends .<pid>.<uuid>.tmp before rename; reserve its maximum
+  // byte budget so long UTF-8 titles work on filesystems with NAME_MAX=255.
+  const budget = MAX_FILENAME_COMPONENT_BYTES - MAX_TEMP_SUFFIX_BYTES - Buffer.byteLength(suffix, 'utf8');
   let slug = '', bytes = 0;
   for (const char of sanitizeFileName(title)) {
     const size = Buffer.byteLength(char, 'utf8');
@@ -206,7 +210,8 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
   const { dueAt: dueAtUpdate, ...otherUpdates } = updates;
   const normalizedUpdates = Object.fromEntries(
     Object.entries(otherUpdates).map(([key, value]) => [key, value === null ? undefined : value]),
-  ) as Omit<KanbanCardUpdates, 'dueAt'>;
+  ) as Omit<KanbanCardUpdates, 'dueAt' | 'nextAction'> & { nextAction?: string };
+  if (normalizedUpdates.parent !== undefined) assertAcyclicParent(id, normalizedUpdates.parent, tasksDir);
   const planningEdit = Object.entries(normalizedUpdates).some(([key, value]) =>
     PLANNING_UPDATE_KEYS.has(key) && isExplicitPlanningUpdate(key, value));
   const rawFrontmatter = card.rawFrontmatter;
@@ -234,6 +239,16 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
 
   writeCard(updated, tasksDir);
   return updated;
+}
+
+function assertAcyclicParent(cardId: string, parentId: string | undefined, tasksDir: string): void {
+  let current = parentId;
+  const visited = new Set([cardId]);
+  while (current) {
+    if (visited.has(current)) throw new Error('parent_relation_cycle');
+    visited.add(current);
+    current = findCardById(current, tasksDir)?.parent;
+  }
 }
 
 export function deleteCard(id: string, tasksDir = TASKS_DIR): boolean {
@@ -335,6 +350,8 @@ function buildFrontmatter(card: KanbanCard): string {
       approval_evidence: card.approvalEvidence ?? [],
     });
   }
+  data.result_history = card.resultHistory ?? [];
+  data.review_history = card.reviewHistory ?? [];
   if (card.dueAt) data.dueAt = card.dueAt;
   if (card.role !== undefined) data.role = card.role;
   if (card.accountable !== undefined) data.accountable = card.accountable;
@@ -347,6 +364,7 @@ function buildFrontmatter(card: KanbanCard): string {
   if (card.suggestedAssignee !== undefined) data.suggested_assignee = card.suggestedAssignee;
   if (card.completedBy !== undefined) data.completed_by = card.completedBy;
   if (card.completedAt !== undefined) data.completed_at = card.completedAt;
+  if (card.nextAction !== undefined) data.next_action = card.nextAction;
 
   const generated = matter.stringify('', data).trimEnd();
   const rawUnknown = (card.rawFrontmatter as RawFrontmatter | undefined)?.[RAW_UNKNOWN_FRONTMATTER];
@@ -399,6 +417,9 @@ interface PlanningMetadata {
   completedAt?: string;
   completionEvidence: PlanningEvidence[];
   approvalEvidence: PlanningEvidence[];
+  resultHistory: TaskResult[];
+  reviewHistory: TaskReviewRecord[];
+  nextAction?: string;
 }
 
 function defaultPlanningMetadata(): PlanningMetadata {
@@ -413,6 +434,8 @@ function defaultPlanningMetadata(): PlanningMetadata {
     requiresApprovalFrom: [],
     completionEvidence: [],
     approvalEvidence: [],
+    resultHistory: [],
+    reviewHistory: [],
   };
 }
 
@@ -552,6 +575,48 @@ function evidenceArrayField(data: Record<string, unknown>, field: string): Plann
   return value as PlanningEvidence[];
 }
 
+function resultHistoryField(data: Record<string, unknown>): TaskResult[] {
+  const value = data.result_history;
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw invalidPlanningField('result_history', 'expected an array of results');
+  return value.map((entry, index) => {
+    if (!isRecord(entry) || typeof entry.summary !== 'string' || !entry.summary.trim()
+      || typeof entry.submittedBy !== 'string' || !entry.submittedBy.trim()
+      || typeof entry.submittedAt !== 'string' || Number.isNaN(Date.parse(entry.submittedAt))
+      || !Array.isArray(entry.evidenceRefs)
+      || entry.evidenceRefs.some(ref => typeof ref !== 'string' || !ref.trim())) {
+      throw invalidPlanningField(`result_history[${index}]`, 'expected summary, references, actor and timestamp');
+    }
+    return {
+      summary: entry.summary,
+      evidenceRefs: [...entry.evidenceRefs] as string[],
+      ...(typeof entry.nextAction === 'string' ? { nextAction: entry.nextAction } : {}),
+      ...(typeof entry.runRef === 'string' ? { runRef: entry.runRef } : {}),
+      submittedBy: entry.submittedBy,
+      submittedAt: entry.submittedAt,
+    };
+  });
+}
+
+function reviewHistoryField(data: Record<string, unknown>): TaskReviewRecord[] {
+  const value = data.review_history;
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw invalidPlanningField('review_history', 'expected an array of decisions');
+  return value.map((entry, index) => {
+    if (!isRecord(entry) || !['accepted', 'rework'].includes(String(entry.decision))
+      || typeof entry.actor !== 'string' || !entry.actor.trim()
+      || typeof entry.decidedAt !== 'string' || Number.isNaN(Date.parse(entry.decidedAt))) {
+      throw invalidPlanningField(`review_history[${index}]`, 'expected decision, actor and timestamp');
+    }
+    return {
+      decision: entry.decision as TaskReviewRecord['decision'],
+      actor: entry.actor,
+      decidedAt: entry.decidedAt,
+      ...(typeof entry.note === 'string' ? { note: entry.note } : {}),
+    };
+  });
+}
+
 function rfc3339WithOffset(value: unknown, field: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) || Number.isNaN(Date.parse(value))) {
@@ -597,6 +662,9 @@ function parsePlanningMetadata(data: Record<string, unknown>): PlanningMetadata 
     completedAt: rfc3339WithOffset(data.completed_at, 'completed_at'),
     completionEvidence: evidenceArrayField(data, 'completion_evidence'),
     approvalEvidence: evidenceArrayField(data, 'approval_evidence'),
+    resultHistory: resultHistoryField(data),
+    reviewHistory: reviewHistoryField(data),
+    nextAction: optionalString(data, 'next_action'),
   };
 }
 
@@ -623,5 +691,8 @@ function validatePlanningMetadata(card: KanbanCard): void {
     completed_at: card.completedAt,
     completion_evidence: card.completionEvidence,
     approval_evidence: card.approvalEvidence,
+    result_history: card.resultHistory,
+    review_history: card.reviewHistory,
+    next_action: card.nextAction,
   });
 }

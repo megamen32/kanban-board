@@ -24,6 +24,8 @@ export async function readMutationResponse(response: Response, allowConflict = f
   if (response.ok && data && typeof data === 'object') return data;
   const reasons: Record<string, string> = {
     assignee_change_requires_owner_authorization: 'Подтвердите переназначение ответственных перед сохранением.',
+    reviewer_change_requires_owner_authorization: 'Список принимающих результат меняет только владелец доски.',
+    parent_relation_cycle: 'Такая связь создала бы цикл между родительской задачей и подзадачей.',
     deadline_change_requires_human_ui: 'Для изменения срока нужен подтверждённый вход. Обновите страницу и войдите снова.',
     weekly_plan_requires_batch_acceptance: 'План недели принимается отдельно на вкладке «Неделя».',
     weekly_plan_allows_at_most_six_big_rocks: 'На неделю можно принять не больше шести Big Rocks. Сначала пересмотрите текущий план.',

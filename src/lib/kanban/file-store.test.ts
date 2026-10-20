@@ -15,13 +15,34 @@ describe('filesystem kanban contract', () => {
   test('long Cyrillic titles keep complete content and bounded UTF-8 filenames on create and rename', () => {
     const title = 'Русская задача с подробным заголовком '.repeat(6);
     const created = store.createCard(title, 'Details', 'todo', 'medium', [], 'alpha', ['alice']);
-    expect(Buffer.byteLength(created.fileName, 'utf8')).toBeLessThanOrEqual(255);
+    expect(Buffer.byteLength(created.fileName, 'utf8')).toBeLessThanOrEqual(255 - Buffer.byteLength(`.${Number.MAX_SAFE_INTEGER}.${'0'.repeat(36)}.tmp`, 'utf8'));
     expect(store.readCardFile(path.join(root, created.fileName))?.title).toBe(title);
+    const history = [{ summary: 'Результат исполнителя', evidenceRefs: ['source:event:1'],
+      submittedBy: 'fixture', submittedAt: '2026-10-20T12:00:00Z' }];
+    const reviewHistory = [{ decision: 'rework' as const, actor: 'nikita',
+      decidedAt: '2026-10-20T12:30:00Z', note: 'Уточнить итог' }];
+    const annotated = store.updateCard(created.id, { resultHistory: history, reviewHistory }, created.version);
+    if (!annotated || 'conflict' in annotated) throw new Error('history update failed');
     const renamed = title + ' обновлено';
-    const updated = store.updateCard(created.id, { title: renamed }, created.version);
+    const updated = store.updateCard(created.id, { title: renamed }, annotated.version);
     if (!updated || 'conflict' in updated) throw new Error('rename failed');
-    expect(Buffer.byteLength(updated.fileName, 'utf8')).toBeLessThanOrEqual(255);
+    expect(updated.id).toBe(created.id);
+    expect(updated.title).toBe(renamed);
+    expect(updated.resultHistory).toEqual(history);
+    expect(updated.reviewHistory).toEqual(reviewHistory);
+    expect(Buffer.byteLength(updated.fileName, 'utf8')).toBeLessThanOrEqual(255 - Buffer.byteLength(`.${Number.MAX_SAFE_INTEGER}.${'0'.repeat(36)}.tmp`, 'utf8'));
     expect(store.readCardFile(path.join(root, updated.fileName))?.title).toBe(renamed);
+    expect(store.readCardFile(path.join(root, updated.fileName))?.id).toBe(created.id);
+  });
+
+  test('same long title keeps distinct UUID filename collision keys', () => {
+    const title = 'Повторяющийся длинный заголовок '.repeat(8);
+    const first = store.createCard(title, 'First body', 'todo', 'medium', [], 'alpha', ['alice']);
+    const second = store.createCard(title, 'Second body', 'todo', 'medium', [], 'alpha', ['alice']);
+    expect(first.id).not.toBe(second.id);
+    expect(first.fileName).not.toBe(second.fileName);
+    expect(store.readCardFile(path.join(root, first.fileName))?.description).toBe('First body');
+    expect(store.readCardFile(path.join(root, second.fileName))?.description).toBe('Second body');
   });
   test('scans markdown recursively and preserves nested relative files', async () => {
     fs.mkdirSync(path.join(root, 'projects', 'alpha'), { recursive: true });
