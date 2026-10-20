@@ -16,7 +16,7 @@ export type BoardUrlState = Readonly<{
   inboxOnly: boolean;
 }>;
 
-const TABS = new Set<PlanningTab>(['execution', 'inbox', 'week', 'today', 'balance', 'closed']);
+const TABS = new Set<PlanningTab>(['dashboard', 'execution', 'inbox', 'week', 'today', 'balance', 'closed']);
 const WORKSPACE_VIEWS = new Set<WorkspaceView>(['mine', 'shared', 'all']);
 const LAYOUTS = new Set<BoardLayout>(['kanban', 'list']);
 const ATTENTION_FILTERS = new Set<AttentionFilter>(['all', 'blocked', 'unassigned']);

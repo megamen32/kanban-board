@@ -25,6 +25,7 @@ import { PlanningCardList, RoleBalanceView, WeeklyPlanView } from './planning-vi
 import { getExecutionColumnCards } from './planning-views';
 import { RolesDialog } from './roles-dialog';
 import { InboxCapture } from './inbox-capture';
+import { IntegratorTaskDashboard } from './integrator-task-dashboard';
 import { parseBoardUrlState, serializeBoardUrlState, type BoardLayout, type ClosedKind } from './board-url-state';
 import { mutationErrorMessage, readMutationResponse } from '../../lib/kanban/mutation-response';
 
@@ -37,7 +38,7 @@ export function KanbanBoard() {
   const [assignee, setAssignee] = useState('all');
   const [inboxOnly, setInboxOnly] = useState(false);
   const [selectedCard, setSelectedCard] = useState<KanbanCard | null>(null);
-  const [planningTab, setPlanningTab] = useState<PlanningTab>('execution');
+  const [planningTab, setPlanningTab] = useState<PlanningTab>('dashboard');
   const [username, setUsername] = useState<string | null>(null);
   const [person, setPerson] = useState('nikita');
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('shared');
@@ -217,6 +218,7 @@ export function KanbanBoard() {
         <Tabs value={planningTab} onValueChange={handlePlanningTabChange} className="flex min-h-0 flex-1">
           <div className="overflow-x-auto border-b px-3 py-2 sm:px-6">
             <TabsList className="h-10 w-full min-w-max justify-start bg-transparent p-0">
+              <TabsTrigger value="dashboard">Обзор</TabsTrigger>
               <TabsTrigger value="execution">Активные</TabsTrigger>
               <TabsTrigger value="inbox">Входящие</TabsTrigger>
               <TabsTrigger value="week">Неделя</TabsTrigger>
@@ -225,6 +227,9 @@ export function KanbanBoard() {
               <TabsTrigger value="closed">Закрытые ({counts.done + counts.archived})</TabsTrigger>
             </TabsList>
           </div>
+          <TabsContent value="dashboard" className="min-h-0">
+            <IntegratorTaskDashboard cards={derivedCards} onOpen={setSelectedCard} />
+          </TabsContent>
           <TabsContent value="execution" className="min-h-0">
             {view === 'list' ? (
           <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} authoritativeCards={cards} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />

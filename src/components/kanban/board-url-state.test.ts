@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { parseBoardUrlState, serializeBoardUrlState, type BoardUrlState } from './board-url-state';
 
 describe('board URL state', () => {
+  it('round-trips the first-screen dashboard tab', () => {
+    const state: BoardUrlState = {
+      project: 'all', workspaceView: 'shared', layout: 'list', tab: 'dashboard', assignee: 'all',
+      person: 'nikita', search: '', attention: 'all', closedKind: 'all', inboxOnly: false,
+    };
+    expect(parseBoardUrlState(serializeBoardUrlState(state)).tab).toBe('dashboard');
+  });
+
   it('opens a project-scoped team view from a secretary link', () => {
     const parsed = parseBoardUrlState(new URLSearchParams(
       'project=%D0%98%D0%98-%D0%91%D0%B5%D0%BD%D1%87%D0%BC%D0%B0%D1%80%D0%BA%D0%B8&view=all&tab=execution&assignee=%D0%9E%D0%BB%D0%B5%D0%B3&person=nikita&search=canary&layout=list',

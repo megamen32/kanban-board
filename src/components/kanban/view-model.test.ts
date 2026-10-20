@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterCards, getAssigneeOptions, getProjectOptions, isSmartNotesInbox } from './view-model';
+import { filterCards, getAssigneeOptions, getPlanningTabCards, getProjectOptions, isSmartNotesInbox } from './view-model';
 import type { KanbanCard } from '@/lib/kanban/types';
 
 const card = (overrides: Partial<KanbanCard> = {}): KanbanCard => ({
@@ -51,5 +51,11 @@ describe('kanban view model', () => {
   it('keeps SmartNotes Inbox separate as a view over column inbox', () => {
     expect(isSmartNotesInbox(card())).toBe(true);
     expect(isSmartNotesInbox(card({ column: 'todo' }))).toBe(false);
+  });
+
+  it('shows active cards in the dashboard and leaves completed work in the closed view', () => {
+    const cards = [card(), card({ id: '2', column: 'review', needsReview: true }), card({ id: '3', column: 'done' })];
+    expect(getPlanningTabCards(cards, 'dashboard').map(item => item.id)).toEqual(['1', '2']);
+    expect(getPlanningTabCards(cards, 'closed').map(item => item.id)).toEqual(['3']);
   });
 });

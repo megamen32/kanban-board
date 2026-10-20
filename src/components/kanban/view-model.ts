@@ -1,7 +1,7 @@
 import type { KanbanCard, RoleDefinition } from '@/lib/kanban/types';
 import { getExecutionView, getInboxView, getRoleBalance, getTodayView, getWeekView, type RoleBalanceView } from '../../lib/kanban/planning-views';
 
-export type PlanningTab = 'execution' | 'inbox' | 'week' | 'today' | 'balance' | 'closed';
+export type PlanningTab = 'dashboard' | 'execution' | 'inbox' | 'week' | 'today' | 'balance' | 'closed';
 export type WorkspaceView = 'mine' | 'shared' | 'all';
 
 /** Limits the shared Markdown store to the selected person's useful work. */
@@ -29,6 +29,7 @@ function normalizePerson(value: string): string {
 
 /** Returns the cards shown by one planning tab, using the shared deterministic predicates. */
 export function getPlanningTabCards(cards: KanbanCard[], tab: PlanningTab, now: string | Date = new Date()): KanbanCard[] {
+  if (tab === 'dashboard') return cards.filter(card => !isClosedCard(card));
   if (tab === 'inbox') return getInboxView(cards);
   if (tab === 'closed') return cards.filter(isClosedCard);
   if (tab === 'week') return getWeekView(cards, now);
