@@ -8,6 +8,7 @@ import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import {
   canRetrySameOperation,
   canContinueTask,
+  confirmedTaskRequests,
   executionOperationStorageKey,
   executionSignalLabel,
   executionStartRequest,
@@ -287,6 +288,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
               const canRetry = retryOperation !== null && !startBusy[card.id] && !syncBusy[card.id];
               const executionReceipt = card.taskExecutionHistory?.at(-1);
               const taskFollowUp = executionReceipt?.continuations?.[0];
+              const confirmedRequests = confirmedTaskRequests(card);
               const canContinue = canContinueTask(card) && !startBusy[card.id] && !syncBusy[card.id];
               const column = DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column;
               const sourceUrl = card.source ? safeSourceUrl(card.source) : null;
@@ -325,6 +327,13 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
                     {execution?.waitReason && <p className="mt-2 text-sm"><span className="text-muted-foreground">Причина ожидания:</span> {execution.waitReason}</p>}
                     {execution?.nextAction && <p className="mt-2 text-sm"><span className="text-muted-foreground">Следующий шаг исполнителя:</span> {execution.nextAction}</p>}
                     {execution?.sessionUrl && isVerifiedSessionUrl(execution.sessionUrl) && <a className="mt-2 inline-flex items-center gap-1 text-sm underline" href={execution.sessionUrl} target="_blank" rel="noreferrer">Открыть сессию исполнителя <ArrowUpRight aria-hidden className="h-3.5 w-3.5" /></a>}
+                    {confirmedRequests.length > 0 && <div className="mt-3 space-y-2" aria-label="Подтверждённые запросы участников">
+                      {confirmedRequests.map(request => <div key={`${request.inputId}:${request.turnId}`} className="rounded-md bg-muted/40 p-3">
+                        <p className="text-xs text-muted-foreground">Подтверждённый автор: {request.actor}</p>
+                        <p className="mt-1 text-sm">{request.instruction}</p>
+                        <a className="mt-1 inline-flex items-center gap-1 text-sm underline" href={request.sessionUrl} target="_blank" rel="noreferrer">Открыть точный ход в истории <ArrowUpRight aria-hidden className="h-3.5 w-3.5" /></a>
+                      </div>)}
+                    </div>}
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <Button size="sm" disabled={!canStart} onClick={() => void startTask(card)}>
                         <Play aria-hidden className="mr-1 h-3.5 w-3.5" />

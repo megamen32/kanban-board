@@ -216,6 +216,8 @@ export interface TaskExecutionReceipt {
   projectBinding?: TaskExecutionProjectBinding;
   nativeSessionId?: string;
   nativeTurnId?: string;
+  /** Signed native actor that created this parent intent; absent on legacy receipts. */
+  requestedBy?: string;
   /** Immutable Notice request link; the question body remains in Notice. */
   taskDecisionRequest?: TaskDecisionRequestReference;
   createReceiptText?: string;

@@ -1,4 +1,5 @@
 import type { KanbanCard } from '@/lib/kanban/types';
+import { taskSessionUrl } from '../../lib/kanban/task-execution';
 
 export type ExecutionSnapshot = {
   cardId: string;
@@ -26,6 +27,35 @@ export type CatalogLinkDisplay = {
   catalogRevision: string;
   boardVersion: number;
 };
+
+export type ConfirmedTaskRequest = { actor: string; inputId: string; turnId: string; instruction: string; sessionUrl: string };
+
+/** Project only durable signed requester + exact admitted input/turn correlations. */
+export function confirmedTaskRequests(card: Pick<KanbanCard, 'title' | 'taskExecutionHistory'>): ConfirmedTaskRequest[] {
+  const candidates: ConfirmedTaskRequest[] = [];
+  for (const receipt of card.taskExecutionHistory ?? []) {
+    if (receipt.requestedBy && receipt.nativeSessionId && receipt.nativeTurnId
+      && /^[a-f0-9]{64}$/.test(receipt.messageInputId)
+      && ['running', 'waiting', 'stopped', 'result'].includes(receipt.phase)) {
+      const sessionUrl = taskSessionUrl(receipt.hostId, receipt.harness, receipt.nativeSessionId, receipt.nativeTurnId);
+      if (sessionUrl) candidates.push({ actor: receipt.requestedBy, inputId: receipt.messageInputId, turnId: receipt.nativeTurnId, instruction: `Запуск задачи «${card.title}»`, sessionUrl });
+    }
+    for (const child of receipt.continuations ?? []) {
+      if (child.requestedBy && receipt.nativeSessionId && child.nativeTurnId && /^[a-f0-9]{64}$/.test(child.inputId)
+        && ['running', 'result'].includes(child.phase)) {
+        const sessionUrl = taskSessionUrl(receipt.hostId, receipt.harness, receipt.nativeSessionId, child.nativeTurnId);
+        if (sessionUrl) candidates.push({ actor: child.requestedBy, inputId: child.inputId, turnId: child.nativeTurnId, instruction: child.instruction, sessionUrl });
+      }
+    }
+  }
+  const inputCounts = new Map<string, number>();
+  const turnCounts = new Map<string, number>();
+  for (const item of candidates) {
+    inputCounts.set(item.inputId, (inputCounts.get(item.inputId) ?? 0) + 1);
+    turnCounts.set(item.turnId, (turnCounts.get(item.turnId) ?? 0) + 1);
+  }
+  return candidates.filter(item => inputCounts.get(item.inputId) === 1 && turnCounts.get(item.turnId) === 1);
+}
 
 /** Expose only the immutable catalog link persisted on the card, not live catalog state. */
 export function getCatalogLinkDisplay(card: Pick<KanbanCard, 'catalogLink'>): CatalogLinkDisplay | null {

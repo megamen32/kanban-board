@@ -293,6 +293,7 @@ describe('task execution API', () => {
     expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('fleet_node_info', { project: baseCard.project });
     expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('fleet_create_session', expect.objectContaining({ cwd: scopedProjectRoot, model: 'gpt-6-luna', project: baseCard.project }));
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.startedBy).toBe('nikita');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).not.toHaveProperty('requestedBy');
   });
 
   it('uses current native project read membership for execution status without inventing a board username', async () => {
@@ -316,6 +317,7 @@ describe('task execution API', () => {
     if (!response) throw new Error('native execution response missing');
     expect(response.status).toBe(201);
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.startedBy).toBe('airlock-native-user-42');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.requestedBy).toBe('airlock-native-user-42');
     expect(forProject).toHaveBeenCalledWith('Demo');
     const createsAfterFirst = mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session').length;
     expect(createsAfterFirst).toBe(1);

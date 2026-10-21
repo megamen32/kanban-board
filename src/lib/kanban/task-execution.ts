@@ -19,11 +19,12 @@ const SESSION_UI_BY_HOST: Readonly<Record<string, string>> = {
   'MacBook-Pro-User.local': 'https://agent-mac-m1.bezrabotnyi.com',
 };
 
-export function taskSessionUrl(hostId: string, harness: string, nativeSessionId: string): string | undefined {
+export function taskSessionUrl(hostId: string, harness: string, nativeSessionId: string, turnId?: string): string | undefined {
   const base = SESSION_UI_BY_HOST[hostId];
   if (!base || !['codex', 'zcode', 'opencode'].includes(harness)
-    || !nativeSessionId.trim() || nativeSessionId.length > 512 || /[\x00-\x1f\x7f]/.test(nativeSessionId)) return undefined;
-  return `${base}/#/session/${encodeURIComponent(`${harness}:${nativeSessionId}`)}`;
+    || !nativeSessionId.trim() || nativeSessionId.length > 512 || /[\x00-\x1f\x7f]/.test(nativeSessionId)
+    || turnId !== undefined && (!turnId.trim() || turnId.length > 512 || /[\x00-\x1f\x7f]/.test(turnId))) return undefined;
+  return `${base}/#/session/${encodeURIComponent(`${harness}:${nativeSessionId}`)}${turnId ? `?turn=${encodeURIComponent(turnId)}` : ''}`;
 }
 
 /** Read the execution-facing view from the existing Board card and result history. */

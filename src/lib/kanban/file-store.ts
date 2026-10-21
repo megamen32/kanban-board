@@ -674,6 +674,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       || typeof entry.hostId !== 'string' || !entry.hostId.trim() || entry.hostId.length > 512
       || !['codex', 'zcode', 'opencode'].includes(String(entry.harness))
       || typeof entry.startedBy !== 'string' || !entry.startedBy.trim() || entry.startedBy.length > 256
+      || entry.requestedBy !== undefined && (typeof entry.requestedBy !== 'string' || !entry.requestedBy.trim() || entry.requestedBy.length > 256 || /[\x00-\x1f\x7f]/.test(entry.requestedBy))
       || typeof entry.createdAt !== 'string' || Number.isNaN(Date.parse(entry.createdAt))
       || typeof entry.updatedAt !== 'string' || Number.isNaN(Date.parse(entry.updatedAt))
       || entry.nativeSessionId !== undefined && (typeof entry.nativeSessionId !== 'string' || !entry.nativeSessionId.trim() || entry.nativeSessionId.length > 512)
@@ -713,6 +714,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       ...(projectBinding ? { projectBinding } : {}),
       ...(typeof entry.nativeSessionId === 'string' ? { nativeSessionId: entry.nativeSessionId } : {}),
       ...(typeof entry.nativeTurnId === 'string' ? { nativeTurnId: entry.nativeTurnId } : {}),
+      ...(typeof entry.requestedBy === 'string' ? { requestedBy: entry.requestedBy } : {}),
       ...(isRecord(entry.taskDecisionRequest) ? { taskDecisionRequest: {
         requestId: entry.taskDecisionRequest.requestId as string,
         requestHash: entry.taskDecisionRequest.requestHash as string,

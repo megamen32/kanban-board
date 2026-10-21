@@ -1060,6 +1060,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const intent: TaskExecutionReceipt = {
       operationId, requestHash, lastBoardVersion: context.card.version + 1, createInputId, messageInputId, phase: 'intent',
       hostId, harness: 'codex', projectBinding, startedBy: context.actor,
+      ...(context.native ? { requestedBy: context.actor } : {}),
       createdAt: now(), updatedAt: now(),
     };
     const intentSave = updateCard(context.card.id, {

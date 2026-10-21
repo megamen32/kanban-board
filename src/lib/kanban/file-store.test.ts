@@ -107,6 +107,20 @@ describe('filesystem kanban contract', () => {
     expect(store.updateCard(created.id, { taskExecutionHistory: [receipt] }, created.version)).toMatchObject({ conflict: true });
   });
 
+  test('round-trips a signed native requester on the parent receipt while leaving legacy receipts optional', () => {
+    const created = store.createCard('Native actor receipt', 'Research', 'todo', 'medium', [], 'alpha');
+    const receipt = {
+      operationId:'7'.repeat(64), requestHash:'8'.repeat(64), lastBoardVersion:created.version + 1,
+      createInputId:'9'.repeat(64), messageInputId:'a'.repeat(64), phase:'running' as const,
+      hostId:'roomhacker-server-100', harness:'codex' as const, nativeSessionId:'native-session', nativeTurnId:'native-turn',
+      startedBy:'native-user-42', requestedBy:'native-user-42', createdAt:'2026-10-20T12:00:00Z', updatedAt:'2026-10-20T12:01:00Z',
+    };
+    const saved = store.updateCard(created.id, {taskExecutionHistory:[receipt]}, created.version);
+    if (!saved || 'conflict' in saved) throw new Error('native actor receipt update failed');
+    const reopened = store.readCardFile(path.join(root, created.fileName));
+    expect(reopened?.taskExecutionHistory?.[0]).toMatchObject({startedBy:'native-user-42',requestedBy:'native-user-42',nativeTurnId:'native-turn'});
+  });
+
   test('persists the exact scoped project and canonical CWD binding on a new execution receipt', () => {
     const created = store.createCard('Scoped execution', 'Bounded task', 'todo', 'medium', [], 'Demo');
     const binding = {
