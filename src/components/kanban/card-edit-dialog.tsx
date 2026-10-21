@@ -18,10 +18,12 @@ import { fromDateTimeLocalValue, toDateTimeLocalValue } from '@/lib/kanban/date-
 import type { KanbanUpdateRequest } from '@/hooks/use-kanban';
 import { initialPlanningMetadata } from './initial-planning';
 import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
+import { ReviewActionGate, reviewActionAccess } from './review-action-gate';
 
 interface Props {
   card: KanbanCard;
   open: boolean;
+  /** Server-verified by /api/auth/session; never the selected person filter. */
   username?: string | null;
   onRefresh?: () => Promise<unknown> | void;
   roles?: RoleDefinition[];
@@ -152,6 +154,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     finally { setSaving(false); }
   };
 
+  const reviewAccess = reviewActionAccess(card, username);
+
   const addTag = () => {
     const t = tagInput.trim();
     if (t && !tags.includes(t)) setTags([...tags, t]);
@@ -196,13 +200,15 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
                 {review.decision === 'accepted' ? 'Принято' : 'На доработку'} · {review.actor} · {new Date(review.decidedAt).toLocaleString()}{review.note ? ` · ${review.note}` : ''}
               </p>)}
             </div>}
-            {card.column === 'review' && card.needsReview && onReviewDecision && <div className="space-y-2 border-t pt-3">
-              <p className="text-xs text-muted-foreground">Решение проверяется сервером по текущему списку согласующих.</p>
-              <Textarea aria-label="Комментарий к доработке" placeholder="Что нужно исправить" value={reviewNote} onChange={event => setReviewNote(event.target.value)} rows={2} />
-              <div className="flex flex-wrap gap-2">
-                <Button disabled={saving} onClick={() => void handleReview('accept')}>Принять результат</Button>
-                <Button variant="outline" disabled={saving || !reviewNote.trim()} onClick={() => void handleReview('rework')}>Вернуть на доработку</Button>
-              </div>
+            {reviewAccess !== 'not-awaiting-review' && onReviewDecision && <div className="space-y-2 border-t pt-3">
+              <ReviewActionGate card={card} verifiedUsername={username}>
+                <p className="text-xs text-muted-foreground">Решение проверяется сервером по текущему списку согласующих.</p>
+                <Textarea aria-label="Комментарий к доработке" placeholder="Что нужно исправить" value={reviewNote} onChange={event => setReviewNote(event.target.value)} rows={2} />
+                <div className="flex flex-wrap gap-2">
+                  <Button disabled={saving} onClick={() => void handleReview('accept')}>Принять результат</Button>
+                  <Button variant="outline" disabled={saving || !reviewNote.trim()} onClick={() => void handleReview('rework')}>Вернуть на доработку</Button>
+                </div>
+              </ReviewActionGate>
             </div>}
           </section>
           <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />
