@@ -181,20 +181,20 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
     const parent = card.taskExecutionHistory?.at(-1);
     if (!parent) return;
     setStartBusy(previous => ({ ...previous, [card.id]: true }));
-    setStartMessages(previous => ({ ...previous, [card.id]: 'Передаю уточнение в ту же сессию…' }));
+    setStartMessages(previous => ({ ...previous, [card.id]: 'Передаю дополнительное задание тому же исполнителю…' }));
     try {
       const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(taskFollowUpRequest(parent.operationId, card.version, instruction)),
       });
       setStartMessages(previous => ({ ...previous, [card.id]: response.status === 202
-        ? 'Продолжение записано; состояние проверяется без повторной отправки.'
+        ? 'Запрос принят. Проверяю результат; повторно отправлять его не нужно.'
         : response.status === 409
-          ? 'Карточка изменилась или исходный turn устарел; обновите данные перед следующим действием.'
-          : response.ok ? 'Продолжение привязано к исходной задаче и ожидает результата.'
-            : 'Продолжение не подтверждено; новая сессия не создавалась.' }));
+          ? 'Карточка изменилась или предыдущий запуск больше не подходит для продолжения. Обновите данные перед следующим действием.'
+          : response.ok ? 'Продолжение связано с исходной задачей; ожидается результат.'
+            : 'Не удалось подтвердить запрос. Новая сессия не создавалась.' }));
     } catch {
-      setStartMessages(previous => ({ ...previous, [card.id]: 'Ответ продолжения не подтверждён. После обновления проверьте сохранённую квитанцию; повторная отправка не выполняется автоматически.' }));
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Не удалось подтвердить отправку. Обновите карточку и проверьте статус; автоматического повтора не будет.' }));
     } finally {
       await Promise.resolve(onRefresh()).catch(() => undefined);
       setStartBusy(previous => ({ ...previous, [card.id]: false }));
@@ -206,19 +206,19 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
     const parent = card.taskExecutionHistory?.at(-1);
     if (!parent) return;
     setSyncBusy(previous => ({ ...previous, [card.id]: true }));
-    setStartMessages(previous => ({ ...previous, [card.id]: 'Проверяю только точный child turn этой задачи…' }));
+    setStartMessages(previous => ({ ...previous, [card.id]: 'Проверяю завершение именно этого продолжения…' }));
     try {
       const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(taskFollowUpSyncRequest(parent.operationId, continuationId, card.version)),
       });
       setStartMessages(previous => ({ ...previous, [card.id]: response.status === 200
-        ? 'Результат продолжения сохранён; решение человека не менялось.'
-        : response.status === 202 ? 'Точный child turn ещё не подтверждён; квитанция сохранена без повтора.'
-          : response.status === 409 ? 'Версия карточки изменилась; автоматического повтора нет.'
-            : 'Сверка результата не подтверждена.' }));
+        ? 'Результат продолжения сохранён. Решение человека не менялось.'
+        : response.status === 202 ? 'Результат ещё не получен. Сохранённое продолжение не отправлялось повторно.'
+          : response.status === 409 ? 'Карточка изменилась во время проверки. Повторного запроса не будет.'
+            : 'Не удалось подтвердить результат. Обновите карточку и проверьте статус.' }));
     } catch {
-      setStartMessages(previous => ({ ...previous, [card.id]: 'Ответ сверки неизвестен; операция не повторяется автоматически.' }));
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Подтверждение не получено. Обновите карточку и проверьте статус; запрос автоматически не повторяется.' }));
     } finally {
       await Promise.resolve(onRefresh()).catch(() => undefined);
       setSyncBusy(previous => ({ ...previous, [card.id]: false }));
@@ -361,7 +361,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
                         </Button>
                       </div>}
                       {taskFollowUp && <div className="w-full rounded-md bg-muted/40 p-3" data-continuation-id={taskFollowUp.id}>
-                        <p className="text-xs font-medium text-muted-foreground">Уточнение: {taskFollowUp.instruction} · {taskFollowUp.phase === 'result' ? 'результат сохранён' : taskFollowUp.phase === 'running' ? 'выполняется' : taskFollowUp.phase === 'intent' ? 'передача начата; повтор запрещён' : 'исход передачи неизвестен; повтор запрещён'}</p>
+                        <p className="text-xs font-medium text-muted-foreground">Уточнение: {taskFollowUp.instruction} · {taskFollowUp.phase === 'result' ? 'результат сохранён' : taskFollowUp.phase === 'running' ? 'выполняется' : taskFollowUp.phase === 'intent' ? 'запрос отправляется; повторная отправка отключена' : 'не удалось подтвердить, принят ли запрос; повторять его нельзя'}</p>
                         {taskFollowUp.summary && <p className="mt-2 whitespace-pre-wrap text-sm">{taskFollowUp.summary}</p>}
                         {taskFollowUp.evidenceRefs?.map(url => <a key={url} href={safeSourceUrl(url) ?? undefined} className="mt-1 block break-all text-xs underline" target="_blank" rel="noreferrer">{url}</a>)}
                         {taskFollowUp.phase === 'running' && taskFollowUp.nativeTurnId && <Button size="sm" variant="outline" className="mt-2" disabled={syncBusy[card.id] || startBusy[card.id]} onClick={() => void syncTaskFollowUp(card, taskFollowUp.id)}>

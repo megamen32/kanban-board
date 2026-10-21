@@ -52,9 +52,9 @@ function postRequest(body: Record<string, unknown> = { operationId, expectedVers
 }
 
 const parentOperationId = 'a'.repeat(64);
-function researchCard(): KanbanCard {
+function researchCard(description = baseCard.description): KanbanCard {
   const card: KanbanCard = {
-    ...baseCard, column: 'review', needsReview: true, version: 8,
+    ...baseCard, description, column: 'review', needsReview: true, version: 8,
     resultHistory: [{ summary: 'Original result', evidenceRefs: ['https://original.example'], submittedBy: 'nikita', submittedAt: '2026-10-20T10:06:00.000Z' }],
     reviewHistory: [],
   };
@@ -562,6 +562,31 @@ describe('task execution API', () => {
     if (!replay) throw new Error('research continuation replay response missing');
     expect(replay.status).toBe(202);
     expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+  });
+
+  it('keeps the complete owner instruction and fixed rules when long card context must be shortened', async () => {
+    const longDescription = `CARD-CONTEXT-START ${'Карточный контекст '.repeat(3_000)} CARD-CONTEXT-END`;
+    const instruction = 'Use official public sources only; do not contact anyone. OWNER-INSTRUCTION-END-MARKER';
+    mocks.currentCard.value = researchCard(longDescription);
+    mocks.sessionInfo.value = {
+      ...mocks.sessionInfo.value,
+      meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } },
+    };
+
+    const response = await PATCH(followUpRequest('continue-task', 8, undefined, instruction), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('long-card continuation response missing');
+    expect(response.status).toBe(202);
+
+    const send = mocks.callOwnerHerderTool.mock.calls.find(([tool]) => tool === 'send_message');
+    const prompt = send?.[1].message;
+    if (typeof prompt !== 'string') throw new Error('long-card continuation prompt missing');
+    expect(prompt).toContain(JSON.stringify(instruction));
+    expect(prompt).toContain('Выполни только это ограниченное продолжение. Используй доступные надёжные источники');
+    expect(prompt).toContain('Не пиши людям, не звони, не отправляй формы и не меняй внешние данные.');
+    expect(prompt).toContain('Не отмечай карточку выполненной и не утверждай, что человек принял результат. Верни результат и источники для обычной проверки человеком.');
+    expect(prompt).toContain('… [контекст сокращён]');
+    expect(prompt).not.toContain('CARD-CONTEXT-END');
+    expect(prompt.length).toBeLessThanOrEqual(48_000);
   });
 
   it('keeps an unknown continuation query-only after uncertain dispatch', async () => {
