@@ -107,6 +107,61 @@ describe('filesystem kanban contract', () => {
     expect(store.updateCard(created.id, { taskExecutionHistory: [receipt] }, created.version)).toMatchObject({ conflict: true });
   });
 
+  test('persists a same-session continuation through Markdown CAS and reopen without changing review decisions', () => {
+    const created = store.createCard('Same task follow-up', 'Find two integrators', 'review', 'medium', [], 'alpha');
+    const originalResult = [{ summary: 'Original result remains', evidenceRefs: ['https://original.example'],
+      submittedBy: 'nikita', submittedAt: '2026-10-20T12:00:00.000Z' }];
+    const parent = {
+      operationId: 'a'.repeat(64), requestHash: 'b'.repeat(64), lastBoardVersion: created.version + 1,
+      createInputId: 'c'.repeat(64), messageInputId: 'd'.repeat(64), phase: 'result' as const,
+      hostId: 'roomhacker-server-100', harness: 'codex' as const, nativeSessionId: 'native-session-1',
+      nativeTurnId: 'original-turn', startedBy: 'nikita', createdAt: '2026-10-20T12:00:00.000Z',
+      updatedAt: '2026-10-20T12:00:00.000Z',
+    };
+    const reviewReady = store.updateCard(created.id, {
+      column: 'review', needsReview: true, resultHistory: originalResult, reviewHistory: [], taskExecutionHistory: [parent],
+    }, created.version);
+    if (!reviewReady || 'conflict' in reviewReady) throw new Error('initial review receipt save failed');
+    const child = {
+      id: 'e'.repeat(64), kind: 'task-follow-up-v1' as const, instruction: 'Find two integrators from official public sources; no outreach.', inputId: 'f'.repeat(64),
+      requestHash: '1'.repeat(64), phase: 'intent' as const,
+      createdAt: '2026-10-20T12:01:00.000Z', updatedAt: '2026-10-20T12:01:00.000Z',
+    };
+    const intent = { ...parent, lastBoardVersion: reviewReady.version + 1, continuations: [child] };
+    const persistedIntent = store.updateCard(created.id, { taskExecutionHistory: [intent] }, reviewReady.version);
+    if (!persistedIntent || 'conflict' in persistedIntent) throw new Error('continuation intent CAS failed');
+    expect(store.updateCard(created.id, { taskExecutionHistory: [intent] }, reviewReady.version)).toMatchObject({ conflict: true });
+
+    const running = { ...intent, lastBoardVersion: persistedIntent.version + 1, continuations: [{
+      ...child, phase: 'running' as const, nativeTurnId: 'child-turn', updatedAt: '2026-10-20T12:02:00.000Z',
+    }] };
+    const persistedRunning = store.updateCard(created.id, { taskExecutionHistory: [running] }, persistedIntent.version);
+    if (!persistedRunning || 'conflict' in persistedRunning) throw new Error('continuation admission CAS failed');
+    const finalReceipt = { ...running, lastBoardVersion: persistedRunning.version + 1, continuations: [{
+      ...running.continuations[0]!, phase: 'result' as const,
+      summary: 'Two researched candidates with source links', evidenceRefs: ['https://one.example', 'https://two.example'],
+      updatedAt: '2026-10-20T12:03:00.000Z',
+    }] };
+    const saved = store.updateCard(created.id, {
+      taskExecutionHistory: [finalReceipt],
+      resultHistory: [...originalResult, { summary: 'Two researched candidates with source links',
+        evidenceRefs: ['https://one.example', 'https://two.example'], runRef: `task-continuation:${child.id}`,
+        submittedBy: 'nikita', submittedAt: '2026-10-20T12:03:00.000Z' }],
+    }, persistedRunning.version);
+    if (!saved || 'conflict' in saved) throw new Error('continuation result append failed');
+
+    const reopened = store.readCardFile(path.join(root, created.fileName));
+    expect(reopened).toMatchObject({ column: 'review', needsReview: true,
+      resultHistory: [...originalResult, { summary: 'Two researched candidates with source links',
+        evidenceRefs: ['https://one.example', 'https://two.example'], runRef: `task-continuation:${child.id}`,
+        submittedBy: 'nikita', submittedAt: '2026-10-20T12:03:00.000Z' }], reviewHistory: [] });
+    expect(reopened?.taskExecutionHistory?.[0]).toMatchObject({
+      operationId: parent.operationId, phase: 'result', nativeTurnId: 'original-turn', lastBoardVersion: saved.version,
+      continuations: [{ id: child.id, phase: 'result', nativeTurnId: 'child-turn', summary: 'Two researched candidates with source links' }],
+    });
+    expect(fs.readFileSync(path.join(root, created.fileName), 'utf8')).toContain('continuations:');
+  });
+
   test('rejects malformed or duplicate execution operation receipts', () => {
     const created = store.createCard('Invalid execution', '', 'todo', 'medium', [], 'alpha');
     const malformed = {

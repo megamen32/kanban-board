@@ -4,7 +4,7 @@ import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
 import { DEFAULT_COLUMNS, parseCatalogTaskLink, PLANNING_VERSION } from './types';
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
-import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskExecutionReceipt, TaskResult, TaskReviewRecord } from './types';
+import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskExecutionContinuation, TaskExecutionReceipt, TaskResult, TaskReviewRecord } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
@@ -654,6 +654,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
   const seen = new Set<string>();
   return value.map((entry, index) => {
     const field = `task_execution_history[${index}]`;
+    const continuations = taskExecutionContinuationsField(entry, field);
     if (!isRecord(entry)
       || typeof entry.operationId !== 'string' || !/^[a-f0-9]{64}$/.test(entry.operationId)
       || seen.has(entry.operationId)
@@ -711,9 +712,54 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       ...(typeof entry.dispatchReceiptText === 'string' ? { dispatchReceiptText: entry.dispatchReceiptText } : {}),
       ...(typeof entry.lastProgress === 'string' ? { lastProgress: entry.lastProgress } : {}),
       ...(typeof entry.lastProgressAt === 'string' ? { lastProgressAt: entry.lastProgressAt } : {}),
+      ...(continuations ? { continuations } : {}),
       startedBy: entry.startedBy,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
+    };
+  });
+}
+
+function taskExecutionContinuationsField(entry: unknown, field: string): TaskExecutionContinuation[] | undefined {
+  if (!isRecord(entry) || entry.continuations === undefined) return undefined;
+  const value = entry.continuations;
+  if (!Array.isArray(value) || value.length > 1) throw invalidPlanningField(`${field}.continuations`, 'expected at most one child turn');
+  const ids = new Set<string>();
+  const inputs = new Set<string>();
+  return value.map((item, index) => {
+    const childField = `${field}.continuations[${index}]`;
+    if (!isRecord(item)
+      || Object.keys(item).some(key => !['id', 'kind', 'instruction', 'inputId', 'requestHash', 'phase', 'nativeTurnId', 'summary', 'evidenceRefs', 'createdAt', 'updatedAt'].includes(key))
+      || typeof item.id !== 'string' || !/^[a-f0-9]{64}$/.test(item.id) || ids.has(item.id)
+      || typeof item.inputId !== 'string' || !/^[a-f0-9]{64}$/.test(item.inputId) || inputs.has(item.inputId)
+      || typeof item.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(item.requestHash)
+      || item.kind !== 'task-follow-up-v1'
+      || typeof item.instruction !== 'string' || !item.instruction.trim() || item.instruction.length > 4000
+      || !['intent', 'unknown', 'running', 'result'].includes(String(item.phase))
+      || item.nativeTurnId !== undefined && (typeof item.nativeTurnId !== 'string' || !item.nativeTurnId.trim() || item.nativeTurnId.length > 512)
+      || item.summary !== undefined && (typeof item.summary !== 'string' || !item.summary.trim() || item.summary.length > 40_000)
+      || item.evidenceRefs !== undefined && (!Array.isArray(item.evidenceRefs) || item.evidenceRefs.length > 50
+        || item.evidenceRefs.some(ref => typeof ref !== 'string' || ref.length > 2048))
+      || typeof item.createdAt !== 'string' || Number.isNaN(Date.parse(item.createdAt))
+      || typeof item.updatedAt !== 'string' || Number.isNaN(Date.parse(item.updatedAt))
+      || ['running', 'result'].includes(String(item.phase)) && !item.nativeTurnId
+      || item.phase === 'result' && !item.summary) {
+      throw invalidPlanningField(childField, 'invalid task continuation receipt');
+    }
+    ids.add(item.id);
+    inputs.add(item.inputId);
+    return {
+      id: item.id,
+      kind: item.kind,
+      instruction: item.instruction,
+      inputId: item.inputId,
+      requestHash: item.requestHash,
+      phase: item.phase as TaskExecutionContinuation['phase'],
+      ...(typeof item.nativeTurnId === 'string' ? { nativeTurnId: item.nativeTurnId } : {}),
+      ...(typeof item.summary === 'string' ? { summary: item.summary } : {}),
+      ...(Array.isArray(item.evidenceRefs) ? { evidenceRefs: item.evidenceRefs as string[] } : {}),
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
     };
   });
 }

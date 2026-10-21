@@ -84,6 +84,22 @@ export function executionSyncRequest(operationId: string, expectedVersion: numbe
   return { action: 'sync-result' as const, operationId, expectedVersion };
 }
 
+export function taskFollowUpRequest(operationId: string, expectedVersion: number, continuationText: string) {
+  return { action: 'continue-task' as const, operationId, expectedVersion, continuationText };
+}
+
+export function taskFollowUpSyncRequest(operationId: string, continuationId: string, expectedVersion: number) {
+  return { action: 'sync-task-continuation' as const, operationId, continuationId, expectedVersion };
+}
+
+export function canContinueTask(card: KanbanCard): boolean {
+  const parent = card.taskExecutionHistory?.at(-1);
+  return card.column === 'review' && card.needsReview === true
+    && parent?.phase === 'result' && !!parent.nativeSessionId && !!parent.nativeTurnId
+    && parent.lastBoardVersion === card.version
+    && !parent.continuations?.length;
+}
+
 export function executionSignalLabel(state: ExecutionSnapshot['state']): string {
   return {
     'not-started': 'В карточке нет сохранённого запуска',

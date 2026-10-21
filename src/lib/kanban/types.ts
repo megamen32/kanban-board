@@ -151,6 +151,21 @@ export interface TaskReviewRecord {
   note?: string;
 }
 export type TaskExecutionPhase = 'intent' | 'create-unknown' | 'created' | 'dispatch-unknown' | 'running' | 'waiting' | 'stopped' | 'result';
+export type TaskExecutionContinuationPhase = 'intent' | 'unknown' | 'running' | 'result';
+/** A task-bound follow-up turn in the same already-created native session. */
+export interface TaskExecutionContinuation {
+  readonly id: string;
+  readonly kind: 'task-follow-up-v1';
+  readonly instruction: string;
+  readonly inputId: string;
+  readonly requestHash: string;
+  readonly phase: TaskExecutionContinuationPhase;
+  readonly nativeTurnId?: string;
+  readonly summary?: string;
+  readonly evidenceRefs?: readonly string[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
 /** Opaque Notice request identity attached to the exact execution operation. */
 export interface TaskDecisionRequestReference {
   requestId: string;
@@ -176,6 +191,8 @@ export interface TaskExecutionReceipt {
   dispatchReceiptText?: string;
   lastProgress?: string;
   lastProgressAt?: string;
+  /** Append-only task-scoped follow-up turns; never replaces the initial receipt. */
+  continuations?: readonly TaskExecutionContinuation[];
   startedBy: string;
   createdAt: string;
   updatedAt: string;

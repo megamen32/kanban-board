@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   taskExecutionSnapshot: vi.fn(),
   sessionInfo: { value: undefined as Record<string, unknown> | undefined },
   turnChangesAfterView: { value: false },
+  cardChangesAfterView: { value: false },
 }));
 
 vi.mock('@/lib/kanban/file-store', () => ({ findCardById: mocks.findCardById, updateCard: mocks.updateCard }));
@@ -47,6 +48,39 @@ const canonicalQuestionOperationId = createHash('sha256').update(`${baseCard.id}
 function postRequest(body: Record<string, unknown> = { operationId, expectedVersion: 4 }) {
   return new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+}
+
+const parentOperationId = 'a'.repeat(64);
+function researchCard(): KanbanCard {
+  const card: KanbanCard = {
+    ...baseCard, column: 'review', needsReview: true, version: 8,
+    resultHistory: [{ summary: 'Original result', evidenceRefs: ['https://original.example'], submittedBy: 'nikita', submittedAt: '2026-10-20T10:06:00.000Z' }],
+    reviewHistory: [],
+  };
+  const requestHash = createHash('sha256').update(JSON.stringify({
+    id: card.id, title: card.title, description: card.description, project: card.project,
+    owner: card.owner ?? 'nikita', assignee: card.assignee ?? null, assignees: card.assignees,
+    actor: 'nikita', hostId: 'roomhacker-server-100', harness: 'codex', cwd, model: 'gpt-6-luna',
+  })).digest('hex');
+  card.taskExecutionHistory = [{
+    operationId: parentOperationId, requestHash, lastBoardVersion: card.version,
+    createInputId: '1'.repeat(64), messageInputId: '2'.repeat(64), phase: 'result',
+    hostId: 'roomhacker-server-100', harness: 'codex', nativeSessionId: sessionId,
+    nativeTurnId: 'parent-turn', startedBy: 'nikita', createdAt: card.created, updatedAt: card.updated,
+  }];
+  return card;
+}
+
+const continuationText = 'Research two relevant SMB integrators using official public sources; state hypotheses separately and do not contact them.';
+function followUpRequest(action: 'continue-task' | 'sync-task-continuation', expectedVersion: number,
+  continuationId?: string, text = continuationText) {
+  return new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+    method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+      action, operationId: parentOperationId, expectedVersion,
+      ...(action === 'continue-task' ? { continuationText: text } : {}),
+      ...(continuationId ? { continuationId } : {}),
+    }),
   });
 }
 
@@ -126,6 +160,11 @@ function toolResult(tool: string, args: Record<string, unknown>) {
         meta: { nativeLastTurn: { turnId: 'new-turn-started-during-read', status: 'inProgress' } },
       };
     }
+    if (mocks.cardChangesAfterView.value && mocks.currentCard.value) {
+      mocks.cardChangesAfterView.value = false;
+      mocks.currentCard.value = { ...mocks.currentCard.value, version: mocks.currentCard.value.version + 1,
+        tags: ['edited during transcript read'] };
+    }
     return result;
   }
   if (tool === 'agent_info') return { structuredContent: { session: mocks.sessionInfo.value }, content: [] };
@@ -157,6 +196,7 @@ describe('task execution API', () => {
       meta: { nativeLastTurn: { turnId: 'turn-1', status: 'completed' } },
     };
     mocks.turnChangesAfterView.value = false;
+    mocks.cardChangesAfterView.value = false;
     mocks.callOwnerHerderTool.mockImplementation(toolResult);
     mocks.validateTransition.mockReturnValue({ kind: 'accepted', patch: { column: 'in-progress' } });
     mocks.taskExecutionSnapshot.mockImplementation((card: KanbanCard) => ({
@@ -494,6 +534,165 @@ describe('task execution API', () => {
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
       phase: 'result', nativeTurnId: 'turn-1', lastBoardVersion: mocks.currentCard.value?.version,
     });
+  });
+
+  it('admits one owner-instructed generic continuation in the same session and preserves the existing human review result', async () => {
+    mocks.currentCard.value = researchCard();
+    mocks.sessionInfo.value = {
+      ...mocks.sessionInfo.value,
+      meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } },
+    };
+    const first = await PATCH(followUpRequest('continue-task', 8), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!first) throw new Error('task continuation response missing');
+    expect(first.status).toBe(202);
+    const child = mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0];
+    expect(child).toMatchObject({ kind: 'task-follow-up-v1', instruction: continuationText, phase: 'running', nativeTurnId: 'turn-1' });
+    expect(mocks.currentCard.value).toMatchObject({ column: 'review', needsReview: true, reviewHistory: [] });
+    expect(mocks.currentCard.value?.resultHistory?.[0]?.summary).toBe('Original result');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({ phase: 'result', nativeTurnId: 'parent-turn' });
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(0);
+    const send = mocks.callOwnerHerderTool.mock.calls.find(([tool]) => tool === 'send_message');
+    expect(send?.[1]).toMatchObject({ sessionId, harness: 'codex', inputId: child?.inputId, mode: 'steer', humanRequested: true });
+    expect(send?.[1].message).toContain(continuationText);
+    expect(send?.[1].message).toContain('Не пиши людям, не звони');
+    expect(send?.[1].message).not.toContain('внедрение Airlock для малого и среднего бизнеса');
+
+    const current = mocks.currentCard.value!;
+    const replay = await PATCH(followUpRequest('continue-task', current.version), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!replay) throw new Error('research continuation replay response missing');
+    expect(replay.status).toBe(202);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+  });
+
+  it('keeps an unknown continuation query-only after uncertain dispatch', async () => {
+    mocks.currentCard.value = researchCard();
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } } };
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'send_message') throw new Error('ambiguous dispatch');
+      return toolResult(tool, args);
+    });
+    const first = await PATCH(followUpRequest('continue-task', 8), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!first) throw new Error('unknown continuation response missing');
+    expect(first.status).toBe(202);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]?.phase).toBe('unknown');
+    const current = mocks.currentCard.value!;
+    const replay = await PATCH(followUpRequest('continue-task', current.version), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!replay) throw new Error('unknown continuation query response missing');
+    expect(replay.status).toBe(202);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+    const changedText = await PATCH(followUpRequest('continue-task', current.version, undefined, 'A different instruction'), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!changedText) throw new Error('changed instruction response missing');
+    expect(changedText.status).toBe(409);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+  });
+
+  it('keeps a late native admission receipt when the card is edited during send', async () => {
+    mocks.currentCard.value = researchCard();
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } } };
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'send_message') {
+        mocks.currentCard.value = { ...mocks.currentCard.value!, version: mocks.currentCard.value!.version + 1,
+          tags: ['edited while send was in flight'] };
+      }
+      return toolResult(tool, args);
+    });
+    const response = await PATCH(followUpRequest('continue-task', 8), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('late admission response missing');
+    expect(response.status).toBe(202);
+    expect(mocks.currentCard.value?.tags).toEqual(['edited while send was in flight']);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]).toMatchObject({
+      phase: 'running', inputId: expect.any(String), nativeTurnId: 'turn-1',
+    });
+    expect(mocks.currentCard.value?.column).toBe('review');
+    expect(mocks.currentCard.value?.needsReview).toBe(true);
+  });
+
+  it('serializes concurrent duplicate continuation requests to one durable intent and one dispatch', async () => {
+    mocks.currentCard.value = researchCard();
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } } };
+    const [first, duplicate] = await Promise.all([
+      PATCH(followUpRequest('continue-task', 8), { params: Promise.resolve({ id: baseCard.id }) }),
+      PATCH(followUpRequest('continue-task', 8), { params: Promise.resolve({ id: baseCard.id }) }),
+    ]);
+    if (!first || !duplicate) throw new Error('concurrent continuation response missing');
+    expect([first.status, duplicate.status].sort()).toEqual([202, 409]);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations).toHaveLength(1);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+  });
+
+  it('denies continuation for stale version, changed card, or non-owner before dispatch', async () => {
+    mocks.currentCard.value = researchCard();
+    const stale = await PATCH(followUpRequest('continue-task', 7), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!stale) throw new Error('stale continuation response missing');
+    expect(stale.status).toBe(409);
+    mocks.currentCard.value = { ...researchCard(), version: 9, tags: ['changed'] };
+    const changed = await PATCH(followUpRequest('continue-task', 9), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!changed) throw new Error('changed continuation response missing');
+    expect(changed.status).toBe(409);
+    mocks.currentCard.value = researchCard();
+    mocks.identity.value = { username: 'other', scope: 'work' };
+    const unauthorized = await PATCH(followUpRequest('continue-task', 8), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!unauthorized) throw new Error('unauthorized continuation response missing');
+    expect(unauthorized.status).toBe(403);
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+    expect(mocks.updateCard).not.toHaveBeenCalled();
+  });
+
+  it('appends only the exact completed child turn without changing human review history', async () => {
+    mocks.currentCard.value = researchCard();
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } } };
+    const first = await PATCH(followUpRequest('continue-task', 8), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!first) throw new Error('research continuation admission missing');
+    const admitted = mocks.currentCard.value!;
+    const continuationId = admitted.taskExecutionHistory?.[0]?.continuations?.[0]?.id;
+    if (!continuationId) throw new Error('persisted continuation ID missing');
+    const writeCount = mocks.updateCard.mock.calls.length;
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'idle', meta: { nativeLastTurn: { turnId: 'other-turn', status: 'completed' } } };
+    const mismatched = await PATCH(followUpRequest('sync-task-continuation', admitted.version, continuationId), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!mismatched) throw new Error('mismatched child turn response missing');
+    expect(mismatched.status).toBe(202);
+    expect(mocks.currentCard.value?.version).toBe(admitted.version);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]?.phase).toBe('running');
+    expect(mocks.updateCard).toHaveBeenCalledTimes(writeCount);
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'idle', meta: { nativeLastTurn: { turnId: 'turn-1', status: 'completed' } } };
+    const response = await PATCH(followUpRequest('sync-task-continuation', admitted.version, continuationId), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('research continuation sync missing');
+    expect(response.status).toBe(200);
+    expect(mocks.currentCard.value).toMatchObject({ column: 'review', needsReview: true, reviewHistory: [] });
+    expect(mocks.currentCard.value?.resultHistory?.map(item => item.summary)).toEqual(['Original result', 'Found two candidates']);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.phase).toBe('result');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]).toMatchObject({
+      phase: 'result', nativeTurnId: 'turn-1', summary: 'Found two candidates',
+    });
+    expect(mocks.validateTransition).not.toHaveBeenCalled();
+    const savedVersion = mocks.currentCard.value!.version;
+    const duplicateSync = await PATCH(followUpRequest('sync-task-continuation', savedVersion, continuationId), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!duplicateSync) throw new Error('duplicate child result readback missing');
+    expect(duplicateSync.status).toBe(200);
+    expect(mocks.currentCard.value?.resultHistory?.map(item => item.summary)).toEqual(['Original result', 'Found two candidates']);
+  });
+
+  it('does not commit a child result if the card version changes during transcript read', async () => {
+    mocks.currentCard.value = researchCard();
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } } };
+    const first = await PATCH(followUpRequest('continue-task', 8), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!first) throw new Error('task continuation admission missing');
+    const admitted = mocks.currentCard.value!;
+    const continuationId = admitted.taskExecutionHistory?.[0]?.continuations?.[0]?.id;
+    if (!continuationId) throw new Error('persisted continuation ID missing');
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'idle', meta: { nativeLastTurn: { turnId: 'turn-1', status: 'completed' } } };
+    mocks.cardChangesAfterView.value = true;
+    const writeCount = mocks.updateCard.mock.calls.length;
+    const response = await PATCH(followUpRequest('sync-task-continuation', admitted.version, continuationId), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('stale child sync response missing');
+    expect(response.status).toBe(409);
+    expect(mocks.currentCard.value?.tags).toEqual(['edited during transcript read']);
+    expect(mocks.currentCard.value?.column).toBe('review');
+    expect(mocks.currentCard.value?.needsReview).toBe(true);
+    expect(mocks.currentCard.value?.reviewHistory).toEqual([]);
+    expect(mocks.currentCard.value?.resultHistory?.map(item => item.summary)).toEqual(['Original result']);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]?.phase).toBe('running');
+    expect(mocks.updateCard).toHaveBeenCalledTimes(writeCount);
   });
 
   it('creates a Notice question only by explicit authenticated CAS action and stores its deterministic reference', async () => {

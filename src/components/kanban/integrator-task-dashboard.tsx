@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import {
   canRetrySameOperation,
+  canContinueTask,
   executionOperationStorageKey,
   executionSignalLabel,
   executionStartRequest,
@@ -15,6 +16,8 @@ import {
   isVerifiedSessionUrl,
   parseExecutionSnapshot,
   parseStoredStartOperation,
+  taskFollowUpRequest,
+  taskFollowUpSyncRequest,
   type ExecutionSnapshot,
   type StoredStartOperation,
 } from './integrator-dashboard-model';
@@ -36,6 +39,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
   const [startBusy, setStartBusy] = useState<Record<string, boolean>>({});
   const [syncBusy, setSyncBusy] = useState<Record<string, boolean>>({});
   const [startMessages, setStartMessages] = useState<Record<string, string>>({});
+  const [followUpText, setFollowUpText] = useState<Record<string, string>>({});
   const inFlightStarts = useRef(new Set<string>());
   const inFlightSyncs = useRef(new Set<string>());
   const counts = getDashboardCounts(cards);
@@ -171,6 +175,56 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
     }
   }
 
+  async function continueTask(card: KanbanCard) {
+    const instruction = followUpText[card.id]?.trim();
+    if (startBusy[card.id] || syncBusy[card.id] || !canContinueTask(card) || !instruction) return;
+    const parent = card.taskExecutionHistory?.at(-1);
+    if (!parent) return;
+    setStartBusy(previous => ({ ...previous, [card.id]: true }));
+    setStartMessages(previous => ({ ...previous, [card.id]: 'Передаю уточнение в ту же сессию…' }));
+    try {
+      const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(taskFollowUpRequest(parent.operationId, card.version, instruction)),
+      });
+      setStartMessages(previous => ({ ...previous, [card.id]: response.status === 202
+        ? 'Продолжение записано; состояние проверяется без повторной отправки.'
+        : response.status === 409
+          ? 'Карточка изменилась или исходный turn устарел; обновите данные перед следующим действием.'
+          : response.ok ? 'Продолжение привязано к исходной задаче и ожидает результата.'
+            : 'Продолжение не подтверждено; новая сессия не создавалась.' }));
+    } catch {
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Ответ продолжения не подтверждён. После обновления проверьте сохранённую квитанцию; повторная отправка не выполняется автоматически.' }));
+    } finally {
+      await Promise.resolve(onRefresh()).catch(() => undefined);
+      setStartBusy(previous => ({ ...previous, [card.id]: false }));
+    }
+  }
+
+  async function syncTaskFollowUp(card: KanbanCard, continuationId: string) {
+    if (syncBusy[card.id] || startBusy[card.id]) return;
+    const parent = card.taskExecutionHistory?.at(-1);
+    if (!parent) return;
+    setSyncBusy(previous => ({ ...previous, [card.id]: true }));
+    setStartMessages(previous => ({ ...previous, [card.id]: 'Проверяю только точный child turn этой задачи…' }));
+    try {
+      const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(taskFollowUpSyncRequest(parent.operationId, continuationId, card.version)),
+      });
+      setStartMessages(previous => ({ ...previous, [card.id]: response.status === 200
+        ? 'Результат продолжения сохранён; решение человека не менялось.'
+        : response.status === 202 ? 'Точный child turn ещё не подтверждён; квитанция сохранена без повтора.'
+          : response.status === 409 ? 'Версия карточки изменилась; автоматического повтора нет.'
+            : 'Сверка результата не подтверждена.' }));
+    } catch {
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Ответ сверки неизвестен; операция не повторяется автоматически.' }));
+    } finally {
+      await Promise.resolve(onRefresh()).catch(() => undefined);
+      setSyncBusy(previous => ({ ...previous, [card.id]: false }));
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     const candidates = cards.filter(card => !['done', 'archived'].includes(card.column));
@@ -231,6 +285,9 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
               const canStart = storageReady && storedOperation === null && execution?.startAvailable === true && !startBusy[card.id];
               const retryOperation = storageReady && canRetrySameOperation(storedOperation, execution) ? storedOperation : null;
               const canRetry = retryOperation !== null && !startBusy[card.id] && !syncBusy[card.id];
+              const executionReceipt = card.taskExecutionHistory?.at(-1);
+              const taskFollowUp = executionReceipt?.continuations?.[0];
+              const canContinue = canContinueTask(card) && !startBusy[card.id] && !syncBusy[card.id];
               const column = DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column;
               const sourceUrl = card.source ? safeSourceUrl(card.source) : null;
               return (
@@ -293,6 +350,24 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
                       {!storedOperation && execution && execution.startAvailable === undefined && <p className="text-sm text-muted-foreground">Готовность к запуску пока не подтверждена.</p>}
                       {!storedOperation && !execution && <p className="text-sm text-muted-foreground">Проверяем доступность запуска…</p>}
                       {!storedOperation && startMessages[card.id] && <p role="status" className="text-sm text-muted-foreground">{startMessages[card.id]}</p>}
+                      {canContinue && <div className="w-full rounded-md border p-3">
+                        <label htmlFor={`task-follow-up-${card.id}`} className="text-sm font-medium">Уточнение исполнителю</label>
+                        <textarea id={`task-follow-up-${card.id}`} className="mt-2 min-h-24 w-full rounded-md border bg-background p-2 text-sm"
+                          maxLength={4000} value={followUpText[card.id] ?? ''} disabled={startBusy[card.id] || syncBusy[card.id]}
+                          onChange={event => setFollowUpText(previous => ({ ...previous, [card.id]: event.target.value }))}
+                          placeholder="Добавьте конкретное продолжение этой задачи" />
+                        <Button size="sm" variant="outline" className="mt-2" disabled={!canContinue || !followUpText[card.id]?.trim()} onClick={() => void continueTask(card)}>
+                          {startBusy[card.id] ? 'Передаю…' : 'Продолжить'}
+                        </Button>
+                      </div>}
+                      {taskFollowUp && <div className="w-full rounded-md bg-muted/40 p-3" data-continuation-id={taskFollowUp.id}>
+                        <p className="text-xs font-medium text-muted-foreground">Уточнение: {taskFollowUp.instruction} · {taskFollowUp.phase === 'result' ? 'результат сохранён' : taskFollowUp.phase === 'running' ? 'выполняется' : taskFollowUp.phase === 'intent' ? 'передача начата; повтор запрещён' : 'исход передачи неизвестен; повтор запрещён'}</p>
+                        {taskFollowUp.summary && <p className="mt-2 whitespace-pre-wrap text-sm">{taskFollowUp.summary}</p>}
+                        {taskFollowUp.evidenceRefs?.map(url => <a key={url} href={safeSourceUrl(url) ?? undefined} className="mt-1 block break-all text-xs underline" target="_blank" rel="noreferrer">{url}</a>)}
+                        {taskFollowUp.phase === 'running' && taskFollowUp.nativeTurnId && <Button size="sm" variant="outline" className="mt-2" disabled={syncBusy[card.id] || startBusy[card.id]} onClick={() => void syncTaskFollowUp(card, taskFollowUp.id)}>
+                          {syncBusy[card.id] ? 'Проверяю…' : 'Проверить продолжение'}
+                        </Button>}
+                      </div>}
                     </div>
                   </div>
 

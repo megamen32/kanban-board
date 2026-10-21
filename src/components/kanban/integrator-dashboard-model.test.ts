@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   executionOperationStorageKey,
   canRetrySameOperation,
+  canContinueTask,
   executionSignalLabel,
   executionStartRequest,
   executionSyncRequest,
@@ -11,6 +12,8 @@ import {
   isVerifiedSessionUrl,
   parseExecutionSnapshot,
   parseStoredStartOperation,
+  taskFollowUpRequest,
+  taskFollowUpSyncRequest,
 } from './integrator-dashboard-model';
 import type { KanbanCard } from '@/lib/kanban/types';
 
@@ -34,6 +37,31 @@ describe('integrator dashboard model', () => {
     expect(executionStartRequest(7, 'a'.repeat(32))).toEqual({ expectedVersion: 7, operationId: 'a'.repeat(32) });
     expect(Object.keys(executionStartRequest(7, 'a'.repeat(32))).sort()).toEqual(['expectedVersion', 'operationId']);
     expect(executionSyncRequest('a'.repeat(32), 8)).toEqual({ action: 'sync-result', operationId: 'a'.repeat(32), expectedVersion: 8 });
+  });
+
+  it('offers one generic task continuation only for the unchanged result awaiting review', () => {
+    const receipt = {
+      operationId: 'a'.repeat(64), requestHash: 'b'.repeat(64), lastBoardVersion: 8,
+      createInputId: 'c'.repeat(64), messageInputId: 'd'.repeat(64), phase: 'result' as const,
+      hostId: 'roomhacker-server-100', harness: 'codex' as const, nativeSessionId: 'session-1', nativeTurnId: 'turn-1',
+      startedBy: 'nikita', createdAt: '2026-10-20T00:00:00Z', updatedAt: '2026-10-20T00:00:00Z',
+    };
+    const reviewCard = card({ column: 'review', needsReview: true, version: 8, taskExecutionHistory: [receipt] });
+    expect(canContinueTask(reviewCard)).toBe(true);
+    expect(taskFollowUpRequest(receipt.operationId, 8, 'find public sources')).toEqual({
+      action: 'continue-task', operationId: receipt.operationId, expectedVersion: 8, continuationText: 'find public sources',
+    });
+    expect(taskFollowUpSyncRequest(receipt.operationId, 'e'.repeat(64), 9)).toEqual({
+      action: 'sync-task-continuation', operationId: receipt.operationId,
+      continuationId: 'e'.repeat(64), expectedVersion: 9,
+    });
+    expect(canContinueTask(card({ ...reviewCard, version: 9 }))).toBe(false);
+    expect(canContinueTask(card({ ...reviewCard, column: 'todo' }))).toBe(false);
+    expect(canContinueTask(card({ ...reviewCard, needsReview: false }))).toBe(false);
+    expect(canContinueTask(card({ ...reviewCard, taskExecutionHistory: [{
+      ...receipt, continuations: [{ id: 'e'.repeat(64), kind: 'task-follow-up-v1', instruction: 'follow up', inputId: 'f'.repeat(64),
+        requestHash: '1'.repeat(64), phase: 'unknown' as const, createdAt: receipt.createdAt, updatedAt: receipt.updatedAt }],
+    }] }))).toBe(false);
   });
 
   it('persists a valid per-card operation identity and rejects malformed stored data', () => {
