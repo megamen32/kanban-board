@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
+import { boardHumanIdentityFromRequest } from '../../../../../../lib/auth/board-human';
 import { boardIdentityFromRequest, identityFromRequest, type RequestIdentity } from '@/lib/auth/request';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { findCardById, updateCard } from '@/lib/kanban/file-store';
@@ -85,8 +86,17 @@ function operationIdFor(cardId: string, rawOperationId: string): string {
 type AuthorizedTaskCard = { identity: RequestIdentity; tasksDir: string; card: KanbanCard };
 type AuthorizedTaskCardResult = AuthorizedTaskCard | { response: NextResponse };
 
-function authorizedTaskCard(request: NextRequest, id: string): AuthorizedTaskCardResult {
-  const identity = identityFromRequest(request);
+async function executionIdentityFromRequest(request: NextRequest): Promise<RequestIdentity | null> {
+  // Preserve existing native Kanban session and OAuth identity semantics.
+  // When neither applies, accept only the existing server-verified human login
+  // used by review and other Board transition routes.
+  const existing = identityFromRequest(request);
+  if (existing) return existing;
+  return boardHumanIdentityFromRequest(request);
+}
+
+async function authorizedTaskCard(request: NextRequest, id: string): Promise<AuthorizedTaskCardResult> {
+  const identity = await executionIdentityFromRequest(request);
   if (!identity) return { response: NextResponse.json({ error: 'authenticated operator required' }, { status: 401 }) };
   if (identity.scope !== 'work') return { response: NextResponse.json({ error: 'work board required' }, { status: 403 }) };
   const tasksDir = tasksDirForScope(identity.scope);
@@ -486,11 +496,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       if (request.nextUrl.searchParams.get('question') !== 'latest' || [...request.nextUrl.searchParams.keys()].some(key => key !== 'question')) {
         return NextResponse.json({ error: 'invalid task question read request' }, { status: 400 });
       }
-      const context = authorizedTaskCard(request, id);
+      const context = await authorizedTaskCard(request, id);
       if ('response' in context) return context.response;
       return await readTaskQuestion(context);
     }
-    const identity = identityFromRequest(request);
+    const identity = await executionIdentityFromRequest(request);
     const readIdentity = identity ?? boardIdentityFromRequest(request);
     const card = findCardById(id, tasksDirForScope(readIdentity.scope));
     if (!card) return NextResponse.json({ error: 'not found' }, { status: 404 });
@@ -505,7 +515,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   let context: AuthorizedTaskCardResult;
   try {
     const { id } = await params;
-    context = authorizedTaskCard(request, id);
+    context = await authorizedTaskCard(request, id);
   } catch {
     return NextResponse.json({ error: 'task execution identity unavailable' }, { status: 400 });
   }
@@ -645,7 +655,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const context = authorizedTaskCard(request, id);
+    const context = await authorizedTaskCard(request, id);
     if ('response' in context) return context.response;
     const body: unknown = await request.json();
     if (isRecord(body) && body.action === 'create-question') return await createTaskQuestion(context, body);

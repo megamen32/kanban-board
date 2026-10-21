@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   updateCard: vi.fn(),
   tasksDirForScope: vi.fn(),
   identity: { value: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' } | null },
+  humanIdentity: { value: undefined as { username: string; scope: 'work' } | null | undefined },
+  boardHumanIdentityFromRequest: vi.fn(),
   callOwnerHerderTool: vi.fn(),
   validateTransition: vi.fn(),
   taskExecutionSnapshot: vi.fn(),
@@ -20,6 +22,9 @@ vi.mock('@/lib/kanban/file-store', () => ({ findCardById: mocks.findCardById, up
 vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => mocks.identity.value ?? { username: 'anonymous', scope: 'work' },
   identityFromRequest: () => mocks.identity.value,
+}));
+vi.mock('../../../../../../lib/auth/board-human', () => ({
+  boardHumanIdentityFromRequest: mocks.boardHumanIdentityFromRequest,
 }));
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope: mocks.tasksDirForScope }));
 vi.mock('@/lib/kanban/task-execution', () => ({ taskExecutionSnapshot: mocks.taskExecutionSnapshot }));
@@ -133,6 +138,9 @@ function toolResult(tool: string, args: Record<string, unknown>) {
 describe('task execution API', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.humanIdentity.value = undefined;
+    mocks.boardHumanIdentityFromRequest.mockImplementation(async () =>
+      mocks.humanIdentity.value === undefined ? mocks.identity.value : mocks.humanIdentity.value);
     mocks.currentCard.value = { ...baseCard };
     mocks.findCardById.mockImplementation(() => mocks.currentCard.value);
     mocks.updateCard.mockImplementation((_id: string, patch: Partial<KanbanCard>, expectedVersion: number) => {
@@ -187,6 +195,36 @@ describe('task execution API', () => {
     });
     expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
     expect(mocks.updateCard).not.toHaveBeenCalled();
+  });
+
+  it('uses the verified shared board login for readiness and start', async () => {
+    mocks.identity.value = null;
+    mocks.humanIdentity.value = { username: 'nikita', scope: 'work' };
+
+    const ready = await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution'), {
+      params: Promise.resolve({ id: baseCard.id }),
+    });
+    if (!ready) throw new Error('execution readiness response missing');
+    expect(await ready.json()).toMatchObject({ startAvailable: true });
+
+    const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('task execution response missing');
+    expect(response.status).toBe(201);
+    expect(mocks.updateCard).toHaveBeenCalled();
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('fleet_node_info', {});
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('fleet_create_session', expect.objectContaining({ cwd, model: 'gpt-6-luna' }));
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.startedBy).toBe('nikita');
+  });
+
+  it('preserves an existing Board OAuth identity without re-resolving it as a human login', async () => {
+    mocks.identity.value = { username: 'nikita', scope: 'work', accessToken: { clientId: 'board-client' } } as never;
+    mocks.humanIdentity.value = null;
+    const response = await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      headers: { authorization: 'Bearer valid-board-oauth-token' },
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('execution readiness response missing');
+    expect(await response.json()).toMatchObject({ startAvailable: true });
+    expect(mocks.boardHumanIdentityFromRequest).not.toHaveBeenCalled();
   });
 
   it('does not advertise start readiness to a verified non-owner', async () => {
