@@ -167,7 +167,9 @@ describe('Kanban MCP transport', () => {
     const ordinaryToken = token;
     token = serviceToken;
     const tools = await POST(request({ jsonrpc: '2.0', id: 20, method: 'tools/list', params: {} }));
-    expect((await tools.json()).result.tools.map((item: { name: string }) => item.name)).toContain('kanban.source.admit');
+    const toolNames = (await tools.json()).result.tools.map((item: { name: string }) => item.name);
+    expect(toolNames).toContain('kanban.source.admit');
+    expect(toolNames).toContain('kanban.catalog.link');
     expect((await tool('kanban.change', { mode: 'new', project: 'alpha', title: 'Raw service mutation' })).isError).toBe(true);
 
     async function admit(envelope: unknown) {
