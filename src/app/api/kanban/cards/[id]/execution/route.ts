@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
-import { boardIdentityFromRequest, identityFromRequest } from '@/lib/auth/request';
+import { boardIdentityFromRequest, identityFromRequest, type RequestIdentity } from '@/lib/auth/request';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { findCardById, updateCard } from '@/lib/kanban/file-store';
 import { taskExecutionSnapshot } from '@/lib/kanban/task-execution';
@@ -69,11 +69,23 @@ function startAvailability(card: KanbanCard) {
   return { startAvailable: true as const };
 }
 
+function taskStartAvailability(card: KanbanCard, identity: RequestIdentity | null) {
+  if (!identity) return { startAvailable: false, unavailableReason: 'Войдите в доску, чтобы запускать задачи.' };
+  if (identity.scope !== 'work') return { startAvailable: false, unavailableReason: 'Запуск доступен только для задач рабочего проекта.' };
+  if (!taskOwner(card, identity.username)) {
+    return { startAvailable: false, unavailableReason: 'Запуск доступен только ответственному или исполнителю задачи.' };
+  }
+  return startAvailability(card);
+}
+
 function operationIdFor(cardId: string, rawOperationId: string): string {
   return sha256(`${cardId}\0${rawOperationId}`);
 }
 
-function authorizedTaskCard(request: NextRequest, id: string) {
+type AuthorizedTaskCard = { identity: RequestIdentity; tasksDir: string; card: KanbanCard };
+type AuthorizedTaskCardResult = AuthorizedTaskCard | { response: NextResponse };
+
+function authorizedTaskCard(request: NextRequest, id: string): AuthorizedTaskCardResult {
   const identity = identityFromRequest(request);
   if (!identity) return { response: NextResponse.json({ error: 'authenticated operator required' }, { status: 401 }) };
   if (identity.scope !== 'work') return { response: NextResponse.json({ error: 'work board required' }, { status: 403 }) };
@@ -338,7 +350,7 @@ function latestTaskQuestion(card: KanbanCard): { attempt: TaskExecutionReceipt; 
   return undefined;
 }
 
-async function readTaskQuestion(context: Exclude<ReturnType<typeof authorizedTaskCard>, { response: NextResponse }>): Promise<NextResponse> {
+async function readTaskQuestion(context: AuthorizedTaskCard): Promise<NextResponse> {
   const linked = latestTaskQuestion(context.card);
   if (!linked) return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: null }, { headers: { 'Cache-Control': 'no-store' } });
   const config = noticeConfig(true);
@@ -353,7 +365,7 @@ async function readTaskQuestion(context: Exclude<ReturnType<typeof authorizedTas
 }
 
 async function createTaskQuestion(
-  context: Exclude<ReturnType<typeof authorizedTaskCard>, { response: NextResponse }>,
+  context: AuthorizedTaskCard,
   body: RecordValue,
 ): Promise<NextResponse> {
   const allowedKeys = ['action', 'expectedVersion', 'operationId', 'purpose', 'message', 'choices', 'timeoutValue'];
@@ -478,10 +490,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       if ('response' in context) return context.response;
       return await readTaskQuestion(context);
     }
-    const identity = boardIdentityFromRequest(request);
-    const card = findCardById(id, tasksDirForScope(identity.scope));
+    const identity = identityFromRequest(request);
+    const readIdentity = identity ?? boardIdentityFromRequest(request);
+    const card = findCardById(id, tasksDirForScope(readIdentity.scope));
     if (!card) return NextResponse.json({ error: 'not found' }, { status: 404 });
-    return NextResponse.json({ ...taskExecutionSnapshot(card), ...startAvailability(card) }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ ...taskExecutionSnapshot(card), ...taskStartAvailability(card, identity) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch {
     return NextResponse.json({ error: 'execution status could not be read' }, { status: 400 });
   }
@@ -489,7 +502,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
 /** Start one task through the existing protected owner MCP; every native action has a persisted ID first. */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  let context: ReturnType<typeof authorizedTaskCard>;
+  let context: AuthorizedTaskCardResult;
   try {
     const { id } = await params;
     context = authorizedTaskCard(request, id);

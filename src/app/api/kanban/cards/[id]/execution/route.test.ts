@@ -175,6 +175,41 @@ describe('task execution API', () => {
     expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
   });
 
+  it('does not advertise start readiness to an anonymous board visitor', async () => {
+    mocks.identity.value = null;
+    const response = await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution'), {
+      params: Promise.resolve({ id: baseCard.id }),
+    });
+    if (!response) throw new Error('execution response missing');
+    expect(await response.json()).toMatchObject({
+      cardId: baseCard.id, state: 'not-started', startAvailable: false,
+      unavailableReason: expect.stringMatching(/войдите|авториз/i),
+    });
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+    expect(mocks.updateCard).not.toHaveBeenCalled();
+  });
+
+  it('does not advertise start readiness to a verified non-owner', async () => {
+    mocks.identity.value = { username: 'oleg', scope: 'work' };
+    const response = await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution'), {
+      params: Promise.resolve({ id: baseCard.id }),
+    });
+    if (!response) throw new Error('execution response missing');
+    expect(await response.json()).toMatchObject({
+      startAvailable: false, unavailableReason: expect.stringMatching(/ответствен|исполнитель|доступ/i),
+    });
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+  });
+
+  it('does not start a task from the anonymous display persona alone', async () => {
+    mocks.identity.value = null;
+    const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('task execution response missing');
+    expect(response.status).toBe(401);
+    expect(mocks.updateCard).not.toHaveBeenCalled();
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+  });
+
   it('marks start unavailable when the protected owner channel is missing', async () => {
     delete process.env.AGENT_HERDER_HTTP_TOKEN;
     const response = await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution'), {
