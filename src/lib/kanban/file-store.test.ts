@@ -107,6 +107,30 @@ describe('filesystem kanban contract', () => {
     expect(store.updateCard(created.id, { taskExecutionHistory: [receipt] }, created.version)).toMatchObject({ conflict: true });
   });
 
+  test('persists the exact scoped project and canonical CWD binding on a new execution receipt', () => {
+    const created = store.createCard('Scoped execution', 'Bounded task', 'todo', 'medium', [], 'Demo');
+    const binding = {
+      contract: 'integrator-host-readiness-v1' as const, projectId: 'Demo',
+      projectRoot: '/workspace/exmanager-task-workspace', rootIdentity: 'exmanager-workspace-root-v1',
+      policyRevision: 'scope-policy-7', observedAtMs: 1792550000000, runtimeInstanceId: 'runtime-readiness-1',
+      hostId: 'roomhacker-server-100', harness: 'codex' as const, harnessVersion: 'codex-1',
+      model: 'gpt-6-luna' as const, requiredTools: ['web_search'], availableTools: ['web_search'],
+      availableModels: ['gpt-6-luna'], resourceReady: true as const,
+      cwd: '/workspace/exmanager-task-workspace',
+      pathResolution: { requestedCwd: '/workspace/exmanager-task-workspace', canonicalCwd: '/workspace/exmanager-task-workspace',
+        rootPath: '/workspace/exmanager-task-workspace', contained: true as const, identityMatches: true as const },
+    };
+    const receipt = {
+      operationId: 'a'.repeat(64), requestHash: 'b'.repeat(64), lastBoardVersion: created.version + 1,
+      createInputId: 'c'.repeat(64), messageInputId: 'd'.repeat(64), phase: 'intent' as const,
+      hostId: 'roomhacker-server-100', harness: 'codex' as const, projectBinding: binding,
+      startedBy: 'nikita', createdAt: '2026-10-20T12:00:00.000Z', updatedAt: '2026-10-20T12:00:00.000Z',
+    };
+    const saved = store.updateCard(created.id, { taskExecutionHistory: [receipt] }, created.version);
+    if (!saved || 'conflict' in saved) throw new Error('scoped execution receipt save failed');
+    expect(store.readCardFile(path.join(root, created.fileName))?.taskExecutionHistory?.[0]?.projectBinding).toEqual(binding);
+  });
+
   test('persists a same-session continuation through Markdown CAS and reopen without changing review decisions', () => {
     const created = store.createCard('Same task follow-up', 'Find two integrators', 'review', 'medium', [], 'alpha');
     const originalResult = [{ summary: 'Original result remains', evidenceRefs: ['https://original.example'],
@@ -124,7 +148,7 @@ describe('filesystem kanban contract', () => {
     if (!reviewReady || 'conflict' in reviewReady) throw new Error('initial review receipt save failed');
     const child = {
       id: 'e'.repeat(64), kind: 'task-follow-up-v1' as const, instruction: 'Find two integrators from official public sources; no outreach.', inputId: 'f'.repeat(64),
-      requestHash: '1'.repeat(64), phase: 'intent' as const,
+      requestHash: '1'.repeat(64), requestedBy: 'native-manager-b', phase: 'intent' as const,
       createdAt: '2026-10-20T12:01:00.000Z', updatedAt: '2026-10-20T12:01:00.000Z',
     };
     const intent = { ...parent, lastBoardVersion: reviewReady.version + 1, continuations: [child] };
@@ -157,7 +181,7 @@ describe('filesystem kanban contract', () => {
         submittedBy: 'nikita', submittedAt: '2026-10-20T12:03:00.000Z' }], reviewHistory: [] });
     expect(reopened?.taskExecutionHistory?.[0]).toMatchObject({
       operationId: parent.operationId, phase: 'result', nativeTurnId: 'original-turn', lastBoardVersion: saved.version,
-      continuations: [{ id: child.id, phase: 'result', nativeTurnId: 'child-turn', summary: 'Two researched candidates with source links' }],
+      continuations: [{ id: child.id, phase: 'result', requestedBy: 'native-manager-b', nativeTurnId: 'child-turn', summary: 'Two researched candidates with source links' }],
     });
     expect(fs.readFileSync(path.join(root, created.fileName), 'utf8')).toContain('continuations:');
   });

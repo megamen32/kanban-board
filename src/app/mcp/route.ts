@@ -2,6 +2,12 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { NextRequest, NextResponse } from 'next/server';
 import { identityFromRequest } from '../../lib/auth/request';
 import { createKanbanMcpServer } from '../../lib/mcp/kanban-server';
+import { configuredSourceAdmissionVerifier } from '../../lib/mcp/source-resolver';
+import {
+  configuredTodoMcpProjectEnsureVerifier,
+  configuredTodoMcpReadScopeVerifier,
+  configuredTodoMcpWriteScopeVerifier,
+} from '../../lib/mcp/todo-caller-scope';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,9 +29,31 @@ export async function POST(request: NextRequest) {
   const service = identity.accessToken;
   const trustedWorkService = service?.clientId === 'exmanager-airlock-service'
     && service.username === 'exmanager-service' && service.scope === 'work';
+  const verifySourceAdmission = trustedWorkService && identity.scope === 'work'
+    ? configuredSourceAdmissionVerifier()
+    : undefined;
+  const requireExManagerReadScope = trustedWorkService && identity.scope === 'work';
+  const verifyExManagerReadScope = requireExManagerReadScope
+    ? configuredTodoMcpReadScopeVerifier()
+    : undefined;
+  const requireExManagerWriteScope = trustedWorkService && identity.scope === 'work';
+  const verifyExManagerWriteScope = requireExManagerWriteScope
+    ? configuredTodoMcpWriteScopeVerifier()
+    : undefined;
+  const requireExManagerProjectEnsureScope = trustedWorkService && identity.scope === 'work';
+  const verifyExManagerProjectEnsureScope = requireExManagerProjectEnsureScope
+    ? configuredTodoMcpProjectEnsureVerifier()
+    : undefined;
   const server = createKanbanMcpServer(identity.scope, {
     allowConfirmedOwnerCommands: trustedWorkService,
     allowInternalTeamCommands: trustedWorkService,
+    requireExManagerReadScope,
+    ...(verifyExManagerReadScope ? { verifyExManagerReadScope } : {}),
+    requireExManagerWriteScope,
+    ...(verifyExManagerWriteScope ? { verifyExManagerWriteScope } : {}),
+    requireExManagerProjectEnsureScope,
+    ...(verifyExManagerProjectEnsureScope ? { verifyExManagerProjectEnsureScope } : {}),
+    ...(verifySourceAdmission ? { verifySourceAdmission } : {}),
   });
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,

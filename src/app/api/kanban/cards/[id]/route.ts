@@ -1,15 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { findCardById, updateCard, deleteCard } from '@/lib/kanban/file-store';
 import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
-import { boardIdentityFromRequest, managerRequestAuthorized } from '@/lib/auth/request';
+import { boardIdentityFromRequest, managerRequestAuthorized, nativeProjectAccessContextFromRequest } from '@/lib/auth/request';
 import { boardHumanIdentityFromRequest } from '@/lib/auth/board-human';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
+import type { NativeProjectAccessContext } from '@/lib/kanban/native-project-access';
 import { normalizeDueAt } from '@/lib/kanban/due-at';
 import { dispatchCardEvent } from '@/lib/notifications/push';
 import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
 import { validateTransition } from '@/lib/kanban/transition-policy';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let nativeContext: NativeProjectAccessContext | null;
+  try {
+    nativeContext = await nativeProjectAccessContextFromRequest(req);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : '';
+    return NextResponse.json({ error: 'native identity could not be verified' }, {
+      status: reason === 'native_identity_unconfigured' ? 503 : 403,
+    });
+  }
   // Human-facing reads keep their existing anonymous/UI-scope behavior. A
   // service caller that supplies the manager capability must prove it; never
   // let a bad token fall through to the public identity fallback.
@@ -17,6 +27,21 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const managerAuthorized = hasManagerCapability && managerRequestAuthorized(req);
   if (hasManagerCapability && !managerAuthorized) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 403 });
+  }
+  if (nativeContext) {
+    const { id } = await params;
+    const tasksDir = tasksDirForScope('work');
+    const card = findCardById(id, tasksDir);
+    if (!card) return NextResponse.json({ error: 'not found' }, { status: 404 });
+    try {
+      const access = await nativeContext.forProject(card.project);
+      if (!access.readAllowed) return NextResponse.json({ error: 'not found' }, { status: 404 });
+      return NextResponse.json({ card });
+    } catch (error) {
+      return NextResponse.json({ error: 'project access could not be verified' }, {
+        status: error instanceof Error && error.message === 'native_project_access_denied' ? 404 : 503,
+      });
+    }
   }
   startDueReminderScheduler();
   const identity = managerAuthorized

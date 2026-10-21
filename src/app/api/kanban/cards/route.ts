@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllCards, createCard, updateCard } from '@/lib/kanban/file-store';
 import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
-import { boardIdentityFromRequest, managerRequestAuthorized } from '@/lib/auth/request';
+import { boardIdentityFromRequest, managerRequestAuthorized, nativeProjectAccessContextFromRequest } from '@/lib/auth/request';
 import { boardHumanIdentityFromRequest } from '@/lib/auth/board-human';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { listProjects } from '../../../../lib/kanban/project-store';
@@ -13,12 +13,41 @@ import { NIKITA_ACTOR } from '@/lib/kanban/transition-policy';
 
 export async function GET(req: NextRequest) {
   try {
+    const nativeContext = await nativeProjectAccessContextFromRequest(req);
     startDueReminderScheduler();
+    if (nativeContext) {
+      const tasksDir = tasksDirForScope('work');
+      const cards = getAllCards(tasksDir);
+      const projects = listProjects(tasksDir);
+      const hint = req.nextUrl.searchParams.get('project')?.trim() ?? '';
+      const candidates = [...new Set([
+        ...cards.map(card => card.project.trim()),
+        ...projects.map(project => project.name.trim()),
+      ].filter(Boolean))];
+      const readable = new Set<string>();
+      for (const project of candidates) {
+        if (hint && project !== hint) continue;
+        try {
+          if ((await nativeContext.forProject(project)).readAllowed) readable.add(project);
+        } catch (error) {
+          if (error instanceof Error && error.message === 'native_project_access_denied') continue;
+          return NextResponse.json({ error: 'project access could not be verified' }, { status: 503 });
+        }
+      }
+      return NextResponse.json({
+        cards: cards.filter(card => readable.has(card.project.trim())),
+        projects: projects.filter(project => readable.has(project.name.trim())),
+      });
+    }
     const identity = boardIdentityFromRequest(req);
     const cards = getAllCards(tasksDirForScope(identity.scope));
     return NextResponse.json({ cards, projects: listProjects(tasksDirForScope(identity.scope)) });
   } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    const reason = e instanceof Error ? e.message : '';
+    const status = reason === 'native_identity_unconfigured' ? 503
+      : reason === 'native_identity_invalid' || reason === 'native_project_hint_invalid' ? 403
+        : reason.startsWith('native_') ? 503 : 500;
+    return NextResponse.json({ error: status === 403 ? 'native identity could not be verified' : 'cards could not be read' }, { status });
   }
 }
 

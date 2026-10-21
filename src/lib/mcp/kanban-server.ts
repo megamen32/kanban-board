@@ -4,6 +4,8 @@ import { ensureProject, listProjects, projectInput } from '../kanban/project-sto
 import { createAdmittedCard, createCard, deleteCard, findCardById, getAllCards, updateCard } from '../kanban/file-store';
 import { admitSourceTask } from '../kanban/source-operation';
 import type { SourceAdmissionRequest } from '../kanban/source-operation';
+import type { SignedSourceAdmissionEnvelope } from './source-resolver';
+import type { SignedTodoMcpReadScope, TodoMcpProjectEnsureClaims, TodoMcpReadScopeClaims, TodoMcpWriteScopeClaims } from './todo-caller-scope';
 import { normalizeDueAt } from '../kanban/due-at';
 import { NIKITA_ACTOR, validateTransition } from '../kanban/transition-policy';
 import { tasksDirForScope } from '../auth/data-scope';
@@ -183,8 +185,57 @@ function filterCards(cards: KanbanCard[], filters: {
 export interface KanbanMcpOptions {
   allowConfirmedOwnerCommands?: boolean;
   allowInternalTeamCommands?: boolean;
-  /** Must resolve a reference through a server-side canonical source and principal check. */
-  resolveSourceAdmission?: (sourceRef: string) => Promise<SourceAdmissionRequest>;
+  /** Verifies an ExManager server-signed source request; never trust service bearer input alone. */
+  verifySourceAdmission?: (envelope: SignedSourceAdmissionEnvelope) => SourceAdmissionRequest;
+  /** Requires per-call current ExManager user/project authority on the shared service MCP. */
+  requireExManagerReadScope?: boolean;
+  verifyExManagerReadScope?: (
+    envelope: SignedTodoMcpReadScope,
+    tool: TodoMcpReadScopeClaims['tool'],
+    args: Record<string, unknown>,
+  ) => TodoMcpReadScopeClaims;
+  /** Requires a purpose-separated, exact-argument current writer capability. */
+  requireExManagerWriteScope?: boolean;
+  verifyExManagerWriteScope?: (
+    envelope: SignedTodoMcpReadScope,
+    args: Record<string, unknown>,
+  ) => TodoMcpWriteScopeClaims;
+  requireExManagerProjectEnsureScope?: boolean;
+  verifyExManagerProjectEnsureScope?: (
+    envelope: SignedTodoMcpReadScope,
+    args: Record<string, unknown>,
+  ) => TodoMcpProjectEnsureClaims;
+}
+
+function verifyReadScope(
+  options: KanbanMcpOptions,
+  envelope: SignedTodoMcpReadScope | undefined,
+  tool: TodoMcpReadScopeClaims['tool'],
+  args: Record<string, unknown>,
+) {
+  if (!options.requireExManagerReadScope) return undefined;
+  if (!envelope || !options.verifyExManagerReadScope) throw new Error('current ExManager caller scope required');
+  return options.verifyExManagerReadScope(envelope, tool, args);
+}
+
+function verifyWriteScope(
+  options: KanbanMcpOptions,
+  envelope: SignedTodoMcpReadScope | undefined,
+  args: Record<string, unknown>,
+) {
+  if (!options.requireExManagerWriteScope) return undefined;
+  if (!envelope || !options.verifyExManagerWriteScope) throw new Error('current ExManager writer scope required');
+  return options.verifyExManagerWriteScope(envelope, args);
+}
+
+function verifyProjectEnsureScope(
+  options: KanbanMcpOptions,
+  envelope: SignedTodoMcpReadScope | undefined,
+  args: Record<string, unknown>,
+) {
+  if (!options.requireExManagerProjectEnsureScope) return undefined;
+  if (!envelope || !options.verifyExManagerProjectEnsureScope) throw new Error('current ExManager project-admin scope required');
+  return options.verifyExManagerProjectEnsureScope(envelope, args);
 }
 
 export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptions = {}): McpServer {
@@ -205,21 +256,38 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
       tag: z.string().optional(),
       dueWithinHours: z.number().optional(),
       limit: z.number().int().min(1).max(1000).optional(),
+      exmanagerScope: z.object({ payload: z.string().min(1).max(24_000), signature: z.string().min(1).max(128) }).strict().optional(),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async ({ project, column, tag, dueWithinHours, limit }) => {
-    const cards = filterCards(getAllCards(tasksDir), { project, column, tag, dueWithinHours, limit });
+  }, async ({ project, column, tag, dueWithinHours, limit, exmanagerScope }) => {
+    const args = Object.fromEntries(Object.entries({ project, column, tag, dueWithinHours, limit }).filter(([, value]) => value !== undefined));
+    const callerScope = verifyReadScope(options, exmanagerScope, 'kanban.list', args);
+    if (callerScope && project && !callerScope.owner && !callerScope.projects.includes(project)) {
+      throw new Error('Todo project is outside the caller scope');
+    }
+    const allCards = getAllCards(tasksDir);
+    const authorizedCards = callerScope && !callerScope.owner
+      ? allCards.filter(card => callerScope.projects.includes(card.project))
+      : allCards;
+    const cards = filterCards(authorizedCards, { project, column, tag, dueWithinHours, limit });
     return textResult({ cards, count: cards.length, scope });
   });
 
   server.registerTool('kanban.read', {
     title: 'Read a Kanban card',
     description: 'Read one card from the authorized board by id.',
-    inputSchema: { cardId: z.string().min(1) },
+    inputSchema: {
+      cardId: z.string().min(1),
+      exmanagerScope: z.object({ payload: z.string().min(1).max(24_000), signature: z.string().min(1).max(128) }).strict().optional(),
+    },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async ({ cardId }) => {
+  }, async ({ cardId, exmanagerScope }) => {
+    const callerScope = verifyReadScope(options, exmanagerScope, 'kanban.read', { cardId });
     const card = findCardById(cardId, tasksDir);
     if (!card) throw new Error(`Card ${cardId} not found`);
+    if (callerScope && !callerScope.owner && !callerScope.projects.includes(card.project)) {
+      throw new Error(`Card ${cardId} not found`);
+    }
     return textResult({ card, scope });
   });
 
@@ -229,6 +297,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     inputSchema: { transcript: z.string().min(1), owner: z.string().min(1).optional() },
     annotations: { openWorldHint: false },
   }, async ({ transcript, owner }) => {
+    if (options.requireExManagerReadScope) throw new Error('raw shared service Inbox capture is disabled');
     const clean = transcript.trim();
     const basic = createCard(clean.replace(/\s+/g, ' ').slice(0, 96), clean, 'inbox', 'medium', ['inbox-capture'], 'Inbox', [], tasksDir);
     const result = updateCard(basic.id, {
@@ -247,6 +316,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
       expectedVersion: z.number().int().optional(),
       ownerCommandConfirmed: z.boolean().optional(),
       ownerCompletionConfirmed: z.boolean().optional(),
+      exmanagerScope: z.object({ payload: z.string().min(1).max(24_000), signature: z.string().min(1).max(128) }).strict().optional(),
       ...cardInput,
     },
     annotations: { openWorldHint: false },
@@ -257,6 +327,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
       expectedVersion,
       ownerCommandConfirmed,
       ownerCompletionConfirmed,
+      exmanagerScope,
       title,
       description,
       project,
@@ -267,7 +338,9 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
       dueAt,
       ...planningInput
     } = input as typeof input & ChangeInput;
-    const internalTeamAuthorization = options.allowInternalTeamCommands
+    const scopeArgs = Object.fromEntries(Object.entries(input).filter(([key, value]) => key !== 'exmanagerScope' && value !== undefined));
+    const callerScope = verifyWriteScope(options, exmanagerScope, scopeArgs);
+    const internalTeamAuthorization = options.allowInternalTeamCommands && (!options.requireExManagerWriteScope || callerScope)
       ? { actor: 'exmanager-service', evidence: { type: 'authenticated_internal_team_command', service: 'exmanager-airlock-service' } }
       : undefined;
     if (internalTeamAuthorization && mode === 'edit' && (!Number.isSafeInteger(expectedVersion) || expectedVersion! < 1)) {
@@ -275,6 +348,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     }
     // Trust comes from the authenticated service principal, never the payload.
     const ownerAuthorization = options.allowConfirmedOwnerCommands && ownerCommandConfirmed === true
+      && (!options.requireExManagerWriteScope || callerScope?.owner === true)
       ? { actor: NIKITA_ACTOR, evidence: { type: 'airlock_confirmed_command', service: 'exmanager-airlock-service' } }
       : undefined;
     const requested = requestedUpdates({
@@ -301,6 +375,9 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     if (mode === 'new') {
       if (!title) throw new Error('title is required for mode=new');
       if (!project) throw new Error('project is required for mode=new');
+      if (callerScope && !callerScope.owner && !callerScope.projects.includes(project)) {
+        throw new Error('Todo destination project is outside the caller write scope');
+      }
       validatePlanningInput({ ...planningInput, column, title, project });
       const decision = validateTransition(creationBaseline(), requested, {
         origin: 'mcp',
@@ -336,6 +413,10 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     if (!cardId) throw new Error('cardId is required for mode=edit');
     const before = findCardById(cardId, tasksDir);
     if (!before) throw new Error(`Card ${cardId} not found`);
+    if (callerScope && !callerScope.owner
+        && (!callerScope.projects.includes(before.project) || (project && !callerScope.projects.includes(project)))) {
+      throw new Error(`Card ${cardId} not found`);
+    }
     if (ownerCompletionAuthorization && (before.owner !== NIKITA_ACTOR
       || (before.requiresApprovalFrom ?? []).some(actor => actor !== NIKITA_ACTOR))) {
       throw new Error('owner completion is outside the exact owner review scope');
@@ -347,14 +428,22 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     return textResult({ card: result, scope, transition: decision });
   });
 
-  if (options.resolveSourceAdmission) {
+  if (options.verifySourceAdmission) {
     server.registerTool('kanban.source.admit', {
-      title: 'Admit a task from a verified source',
-      description: 'Resolve one canonical source reference server-side and reserve its single primary task. Caller-supplied source identity, task text, and principal are not accepted.',
-      inputSchema: { sourceRef: z.string().uuid() },
+      title: 'Admit a classified source outcome',
+      description: 'Verify the signed ExManager source envelope and persist its explicit task, backlog idea, or review-needed Inbox outcome under one immutable source identity. Only explicit tasks create an automatic execution intent. A service bearer without a valid signature cannot assert source identity, task text, or grants.',
+      inputSchema: {
+        envelope: z.object({
+          payload: z.string().min(1).max(90_000),
+          purpose: z.literal('source-admission'),
+          issuedAtMs: z.number().int().safe(),
+          expiresAtMs: z.number().int().safe(),
+          signature: z.string().min(1).max(128),
+        }).strict(),
+      },
       annotations: { idempotentHint: true, openWorldHint: false },
-    }, async ({ sourceRef }) => {
-      const request = await options.resolveSourceAdmission!(sourceRef);
+    }, async ({ envelope }) => {
+      const request = options.verifySourceAdmission!(envelope);
       const result = admitSourceTask(
         request,
         tasksDir,
@@ -368,16 +457,25 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
   server.registerTool('kanban.project.ensure', {
     title: 'Ensure a persistent Kanban project',
     description: 'Create an empty project or return the same immutable project for the external key. A different name for an existing key conflicts.',
-    inputSchema: projectInput,
+    inputSchema: {
+      ...projectInput,
+      exmanagerScope: z.object({ payload: z.string().min(1).max(24_000), signature: z.string().min(1).max(128) }).strict().optional(),
+    },
     annotations: { idempotentHint: true, destructiveHint: false, openWorldHint: false },
-  }, async input => textResult(ensureProject(tasksDir, input)));
+  }, async ({ externalKey, name, exmanagerScope }) => {
+    verifyProjectEnsureScope(options, exmanagerScope, { externalKey, name });
+    return textResult(ensureProject(tasksDir, { externalKey, name }));
+  });
 
   server.registerTool('kanban.project.list', {
     title: 'List persistent Kanban projects',
     description: 'List registered projects including projects with zero cards.',
     inputSchema: {},
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async () => textResult({ projects: listProjects(tasksDir) }));
+  }, async () => {
+    if (options.requireExManagerReadScope) throw new Error('raw shared service project listing is disabled');
+    return textResult({ projects: listProjects(tasksDir) });
+  });
 
   server.registerTool('kanban.delete', {
     title: 'Delete a Kanban card',
@@ -385,6 +483,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     inputSchema: { cardId: z.string().min(1) },
     annotations: { openWorldHint: false },
   }, async ({ cardId }) => {
+    if (options.requireExManagerWriteScope) throw new Error('raw shared service deletion is disabled');
     const deleted = deleteCard(cardId, tasksDir);
     if (!deleted) throw new Error(`Card ${cardId} not found`);
     return textResult({ cardId, deleted: true, scope });

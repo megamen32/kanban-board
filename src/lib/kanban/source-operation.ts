@@ -4,6 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { KanbanCard, SourceAdmissionBinding } from './types';
 
+export type SourceClassification = 'explicit-task' | 'idea' | 'ambiguous';
+
 export interface SourceOperationIdentity {
   tenant: string;
   sourceOwner: string;
@@ -19,7 +21,7 @@ export interface SourceAdmissionRequest extends SourceOperationIdentity {
   priority: 'low' | 'medium' | 'high' | 'critical';
   assignees: string[];
   dueAt?: string;
-  classification: 'explicit-task';
+  classification: SourceClassification;
   evidenceRefs: string[];
 }
 
@@ -28,8 +30,10 @@ export interface SourceOperationRecord {
   requestHash: string;
   provenanceHash: string;
   cardId: string;
-  intentId: string;
-  intentState: 'WAITING_FOR_COMMIT' | 'PENDING' | 'CANCELLED';
+  /** Old version-1 records without classification/intent fields are explicit tasks. */
+  classification?: SourceClassification;
+  intentId?: string;
+  intentState: 'WAITING_FOR_COMMIT' | 'PENDING' | 'CANCELLED' | 'NOT_APPLICABLE';
   state: 'PREPARED' | 'COMMITTED' | 'CANCELLED';
   publication: 'NOT_STARTED' | 'ATTEMPTED';
   updatedAt: string;
@@ -41,10 +45,10 @@ interface Journal {
 }
 
 export type SourceAdmissionResult =
-  | { status: 'committed' | 'replayed'; cardId: string; intentId: string; requestHash: string }
-  | { status: 'pending'; reason: 'publication_outcome_unknown' | 'committed_card_missing' | 'card_binding_mismatch'; cardId: string; intentId: string; requestHash: string }
-  | { status: 'cancelled'; cardId: string; intentId: string; requestHash: string }
-  | { status: 'conflict'; reason: 'same_identity_different_request' | 'card_id_collision'; cardId: string; intentId: string; requestHash: string };
+  | { status: 'committed' | 'replayed'; cardId: string; classification: SourceClassification; intentId?: string; requestHash: string }
+  | { status: 'pending'; reason: 'publication_outcome_unknown' | 'committed_card_missing' | 'card_binding_mismatch'; cardId: string; classification: SourceClassification; intentId?: string; requestHash: string }
+  | { status: 'cancelled'; cardId: string; classification: SourceClassification; intentId?: string; requestHash: string }
+  | { status: 'conflict'; reason: 'same_identity_different_request' | 'card_id_collision'; cardId: string; intentId?: string; requestHash: string };
 
 const JOURNAL_NAME = 'source-operations.json';
 const LOCK_NAME = '.source-operations.writer.lock';
@@ -164,12 +168,12 @@ function provenanceHash(request: SourceAdmissionRequest): string {
   return crypto.createHash('sha256').update(canonical(provenanceFields(request))).digest('hex');
 }
 
-function validateRequest(request: SourceAdmissionRequest): void {
+export function validateSourceAdmissionRequest(request: SourceAdmissionRequest): void {
   const allowed = new Set(['tenant', 'sourceOwner', 'sourceEvent', 'primaryItem', 'sourceRevision', 'project', 'title', 'description', 'priority', 'assignees', 'dueAt', 'classification', 'evidenceRefs']);
   if (Object.keys(request).some(key => !allowed.has(key))) throw new Error('unknown source admission field');
   if (request.primaryItem !== 'primary') throw new Error('only the fixed primary source item is supported');
   if (!['low', 'medium', 'high', 'critical'].includes(request.priority)) throw new Error('invalid source admission priority');
-  if (request.classification !== 'explicit-task') throw new Error('only a trusted explicit-task decision can be admitted');
+  if (!['explicit-task', 'idea', 'ambiguous'].includes(request.classification)) throw new Error('invalid source admission classification');
   for (const key of ['tenant', 'sourceOwner', 'sourceEvent', 'sourceRevision', 'project', 'title'] as const) {
     if (typeof request[key] !== 'string' || !request[key].trim()) throw new Error(`invalid source admission ${key}`);
   }
@@ -197,7 +201,7 @@ export function sourceAdmissionBinding(record: Pick<SourceOperationRecord, 'requ
     operationKey: record.operationKey,
     requestHash: record.requestHash,
     provenanceHash: record.provenanceHash,
-    intentId: record.intentId,
+    ...(record.intentId ? { intentId: record.intentId } : {}),
     ...provenanceFields(request),
   };
 }
@@ -206,19 +210,31 @@ export function sourceAdmissionMatches(card: KanbanCard | null, record: SourceOp
   const binding = card?.sourceAdmission;
   if (!card || card.id !== record.cardId || !binding || typeof binding !== 'object'
       || typeof binding.operationKey !== 'string' || typeof binding.requestHash !== 'string'
-      || typeof binding.provenanceHash !== 'string' || typeof binding.intentId !== 'string'
+      || typeof binding.provenanceHash !== 'string'
       || typeof binding.tenantId !== 'string' || typeof binding.sourceOwnerId !== 'string'
       || typeof binding.sourceEventId !== 'string' || binding.primaryItem !== 'primary'
       || typeof binding.sourceRevision !== 'string' || typeof binding.requestedProject !== 'string'
-      || binding.classification !== 'explicit-task' || !Array.isArray(binding.evidenceRefs)
+      || !['explicit-task', 'idea', 'ambiguous'].includes(binding.classification) || !Array.isArray(binding.evidenceRefs)
       || binding.evidenceRefs.some(ref => typeof ref !== 'string')) return false;
+  const classification = record.classification ?? 'explicit-task';
+  const intentMatches = classification === 'explicit-task'
+    ? typeof binding.intentId === 'string' && typeof record.intentId === 'string' && binding.intentId === record.intentId
+    : binding.intentId === undefined && record.intentId === undefined;
   if (!(binding
     && binding.operationKey === record.operationKey
     && binding.requestHash === record.requestHash
     && binding.provenanceHash === record.provenanceHash
-    && binding.intentId === record.intentId
+    && binding.classification === classification
+    && intentMatches
     && crypto.createHash('sha256').update(canonical(provenanceFields(binding))).digest('hex') === record.provenanceHash)) return false;
   return !request || canonical(provenanceFields(binding)) === canonical(provenanceFields(request));
+}
+
+/** Verify the initial projection while the source-operation writer lock is held. */
+function sourceOutcomePlacementMatches(card: KanbanCard, classification: SourceClassification): boolean {
+  if (classification === 'idea') return card.column === 'someday' && card.needsReview !== true;
+  if (classification === 'ambiguous') return card.column === 'inbox' && card.needsReview === true;
+  return true;
 }
 
 export interface AdmissionHooks {
@@ -226,6 +242,13 @@ export interface AdmissionHooks {
   beforePublish?: () => void;
   afterPublish?: () => void;
   afterCommit?: () => void;
+}
+
+function outcomeFields(record: SourceOperationRecord) {
+  return {
+    classification: record.classification ?? 'explicit-task' as const,
+    ...(record.intentId ? { intentId: record.intentId } : {}),
+  };
 }
 
 /**
@@ -239,7 +262,7 @@ export function admitSourceTask(
   publishCard: (input: SourceAdmissionRequest & { id: string; sourceAdmission: SourceAdmissionBinding }) => KanbanCard,
   hooks: AdmissionHooks = {},
 ): SourceAdmissionResult {
-  validateRequest(request);
+  validateSourceAdmissionRequest(request);
   return withSourceOperationLock(tasksDir, () => {
     const key = operationKey(request);
     const hash = requestHash(request);
@@ -249,12 +272,12 @@ export function admitSourceTask(
     if (record && record.requestHash !== hash) {
       return { status: 'conflict', reason: 'same_identity_different_request', cardId: record.cardId, intentId: record.intentId, requestHash: record.requestHash };
     }
-    if (record?.state === 'CANCELLED') return { status: 'cancelled', cardId: record.cardId, intentId: record.intentId, requestHash: record.requestHash };
+    if (record?.state === 'CANCELLED') return { status: 'cancelled', cardId: record.cardId, ...outcomeFields(record), requestHash: record.requestHash };
     if (record?.state === 'COMMITTED') {
       const card = findCard(record.cardId);
       return sourceAdmissionMatches(card, record, request)
-        ? { status: 'replayed', cardId: record.cardId, intentId: record.intentId, requestHash: record.requestHash }
-        : { status: 'pending', reason: 'committed_card_missing', cardId: record.cardId, intentId: record.intentId, requestHash: record.requestHash };
+        ? { status: 'replayed', cardId: record.cardId, ...outcomeFields(record), requestHash: record.requestHash }
+        : { status: 'pending', reason: 'committed_card_missing', cardId: record.cardId, ...outcomeFields(record), requestHash: record.requestHash };
     }
     if (!record) {
       record = {
@@ -262,8 +285,9 @@ export function admitSourceTask(
         requestHash: hash,
         provenanceHash: frozenProvenanceHash,
         cardId: crypto.randomUUID(),
-        intentId: crypto.randomUUID(),
-        intentState: 'WAITING_FOR_COMMIT',
+        ...(request.classification !== 'explicit-task' ? { classification: request.classification } : {}),
+        ...(request.classification === 'explicit-task' ? { intentId: crypto.randomUUID() } : {}),
+        intentState: request.classification === 'explicit-task' ? 'WAITING_FOR_COMMIT' : 'NOT_APPLICABLE',
         state: 'PREPARED',
         publication: 'NOT_STARTED',
         updatedAt: new Date().toISOString(),
@@ -276,16 +300,16 @@ export function admitSourceTask(
     const card = findCard(record.cardId);
     if (card) {
       if (!sourceAdmissionMatches(card, record, request)) {
-        return { status: 'pending', reason: 'card_binding_mismatch', cardId: record.cardId, intentId: record.intentId, requestHash: record.requestHash };
+        return { status: 'pending', reason: 'card_binding_mismatch', cardId: record.cardId, ...outcomeFields(record), requestHash: record.requestHash };
       }
       record.state = 'COMMITTED';
-      record.intentState = 'PENDING';
+      if (record.intentId) record.intentState = 'PENDING';
       record.updatedAt = new Date().toISOString();
       writeJournal(tasksDir, journal);
-      return { status: 'replayed', cardId: record.cardId, intentId: record.intentId, requestHash: record.requestHash };
+      return { status: 'replayed', cardId: record.cardId, ...outcomeFields(record), requestHash: record.requestHash };
     }
     if (record.publication === 'ATTEMPTED') {
-      return { status: 'pending', reason: 'publication_outcome_unknown', cardId: record.cardId, intentId: record.intentId, requestHash: record.requestHash };
+      return { status: 'pending', reason: 'publication_outcome_unknown', cardId: record.cardId, ...outcomeFields(record), requestHash: record.requestHash };
     }
 
     // ATTEMPTED is durable before the Markdown publication. If a crash leaves
@@ -295,16 +319,22 @@ export function admitSourceTask(
     writeJournal(tasksDir, journal);
     hooks.beforePublish?.();
     const created = publishCard({ ...request, id: record.cardId, sourceAdmission: sourceAdmissionBinding(record, request) });
-    if (!sourceAdmissionMatches(created, record, request)) throw new Error('published card did not retain its reserved source binding');
+    if (!sourceAdmissionMatches(created, record, request)
+        || !sourceOutcomePlacementMatches(created, request.classification)) {
+      throw new Error('published card did not retain its reserved source outcome');
+    }
     hooks.afterPublish?.();
     const verified = findCard(record.cardId);
-    if (!sourceAdmissionMatches(verified, record, request)) throw new Error('published source card readback failed; operation remains pending');
+    if (!verified || !sourceAdmissionMatches(verified, record, request)
+        || !sourceOutcomePlacementMatches(verified, request.classification)) {
+      throw new Error('published source card readback failed; operation remains pending');
+    }
     record.state = 'COMMITTED';
-    record.intentState = 'PENDING';
+    if (record.intentId) record.intentState = 'PENDING';
     record.updatedAt = new Date().toISOString();
     writeJournal(tasksDir, journal);
     hooks.afterCommit?.();
-    return { status: 'committed', cardId: record.cardId, intentId: record.intentId, requestHash: record.requestHash };
+    return { status: 'committed', cardId: record.cardId, ...outcomeFields(record), requestHash: record.requestHash };
   });
 }
 /** Persist terminal cancellation before any bound card is physically removed. Caller holds the writer lock. */
@@ -317,7 +347,7 @@ export function cancelSourceOperationForCardLocked(card: KanbanCard, tasksDir: s
   }
   if (record.state !== 'CANCELLED') {
     record.state = 'CANCELLED';
-    record.intentState = 'CANCELLED';
+    if (record.intentId) record.intentState = 'CANCELLED';
     record.updatedAt = new Date().toISOString();
     writeJournal(tasksDir, journal);
   }
@@ -328,7 +358,9 @@ export function listPendingSourceIntents(tasksDir: string, findCard: (id: string
   return withSourceOperationLock(tasksDir, () => {
     const journal = readJournal(tasksDir);
     return Object.values(journal.operations)
-      .filter(record => record.state === 'COMMITTED' && record.intentState === 'PENDING' && sourceAdmissionMatches(findCard(record.cardId), record))
+      .filter(record => (record.classification ?? 'explicit-task') === 'explicit-task'
+        && typeof record.intentId === 'string' && record.state === 'COMMITTED'
+        && record.intentState === 'PENDING' && sourceAdmissionMatches(findCard(record.cardId), record))
       .map(({ operationKey, requestHash, cardId, intentId }) => ({ operationKey, requestHash, cardId, intentId }));
   });
 }

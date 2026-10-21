@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server';
+import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KanbanCard } from '@/lib/kanban/types';
+import { nativeProjectAccessForRequest } from '../../../../../lib/kanban/native-project-access';
 
-const { findCardById, updateCard, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated, managerAuthorized } = vi.hoisted(() => ({
+const { findCardById, updateCard, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated, managerAuthorized, nativeAccess, nativeProjectAccessContextFromRequest } = vi.hoisted(() => ({
   findCardById: vi.fn(),
   updateCard: vi.fn(),
   validateTransition: vi.fn(),
@@ -12,6 +14,8 @@ const { findCardById, updateCard, validateTransition, dispatchCardEvent, startDu
   identity: { current: { username: 'nikita', scope: 'work' as 'work' | 'personal' } },
   authenticated: { current: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' } | null },
   managerAuthorized: { current: false },
+  nativeAccess: { current: null as null | { userId: string; forProject: (project: string) => Promise<{ project: string; team: string; readAllowed: true; writeAllowed: boolean }> } },
+  nativeProjectAccessContextFromRequest: vi.fn(async (_request?: Request) => nativeAccess.current),
 }));
 
 vi.mock('@/lib/kanban/file-store', () => ({ findCardById, updateCard, deleteCard: vi.fn() }));
@@ -21,6 +25,7 @@ vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => identity.current,
   identityFromRequest: () => authenticated.current,
   managerRequestAuthorized: () => managerAuthorized.current,
+  nativeProjectAccessContextFromRequest,
 }));
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope }));
 vi.mock('@/lib/notifications/push', () => ({ dispatchCardEvent }));
@@ -46,12 +51,30 @@ const existingCard: KanbanCard = {
   assignees: ['marina'],
 };
 
+function signedNativeCardGet(privateKey: KeyObject, cardId: string, userId: string, issuedAtMs: number): string {
+  const payload = Buffer.from(JSON.stringify({
+    v: 1,
+    userId,
+    method: 'GET',
+    path: `/api/kanban/cards/${cardId}`,
+    bodySha256: createHash('sha256').update('').digest('base64url'),
+    project: '',
+    issuedAtMs,
+    expiresAtMs: issuedAtMs + 60_000,
+  }));
+  const signature = sign(null, Buffer.concat([Buffer.from('airlock-todo-native-identity-v1\n'), payload]), privateKey);
+  return `${payload.toString('base64url')}.${signature.toString('base64url')}`;
+}
+
 describe('PATCH /api/kanban/cards/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    nativeAccess.current = null;
     identity.current = { username: 'nikita', scope: 'work' };
     authenticated.current = { username: 'nikita', scope: 'work' };
     managerAuthorized.current = false;
+    nativeAccess.current = null;
+    nativeProjectAccessContextFromRequest.mockImplementation(async () => nativeAccess.current);
     tasksDirForScope.mockReturnValue('/scoped/work');
     findCardById.mockReturnValue(existingCard);
     updateCard.mockReturnValue({ ...existingCard, version: 3 });
@@ -262,5 +285,104 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ card: existingCard });
     expect(findCardById).toHaveBeenCalledWith('card-1', '/scoped/work');
+  });
+
+  it('checks the canonical project with the verified native member before returning a card', async () => {
+    const cardId = '550e8400-e29b-41d4-a716-446655440000';
+    const nativeCard = { ...existingCard, id: cardId, project: 'Integrators' };
+    findCardById.mockReturnValue(nativeCard);
+    const forProject = vi.fn(async () => ({ project: 'Integrators', team: 'integrator', readAllowed: true as const, writeAllowed: false }));
+    nativeAccess.current = { userId: 'sdk-user-17', forProject };
+    nativeProjectAccessContextFromRequest.mockResolvedValue(nativeAccess.current);
+    const response = await GET(new NextRequest(`https://todo.example/api/kanban/cards/${cardId}`, {
+      headers: { 'X-Airlock-Todo-Native-Identity': 'verified-by-resolver' },
+    }), { params: Promise.resolve({ id: cardId }) });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ card: nativeCard });
+    expect(tasksDirForScope).toHaveBeenCalledWith('work');
+    expect(forProject).toHaveBeenCalledWith('Integrators');
+    expect(findCardById).toHaveBeenCalledWith(cardId, '/scoped/work');
+  });
+
+  it('verifies a signed native header through the real request resolver before reading a saved card', async () => {
+    const cardId = '550e8400-e29b-41d4-a716-446655440000';
+    const savedCard = { ...existingCard, id: cardId, project: 'Integrators' };
+    findCardById.mockReturnValue(savedCard);
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const now = Date.now();
+    const scopeCalls: Array<{ url: string; project: string; userId: string; forwardedAssertion: string | null }> = [];
+    const fetcher: typeof fetch = vi.fn(async (input, init) => {
+      const assertion = new Headers(init?.headers).get('X-Airlock-Todo-Native-Identity');
+      if (!assertion) throw new Error('scope request did not forward the verified assertion');
+      const [encodedPayload] = assertion.split('.');
+      const claims = JSON.parse(Buffer.from(encodedPayload!, 'base64url').toString('utf8')) as { userId: string };
+      const body = JSON.parse(String(init?.body)) as { project: string };
+      scopeCalls.push({ url: String(input), project: body.project, userId: claims.userId, forwardedAssertion: assertion });
+      if (claims.userId !== 'sdk-native-member') return new Response('denied', { status: 403 });
+      return new Response(JSON.stringify({ project: body.project, team: 'integrators-team', readAllowed: true, writeAllowed: false }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    nativeProjectAccessContextFromRequest.mockImplementation(async (request?: Request) => {
+      if (!request) throw new Error('signed route request was not passed to the resolver');
+      return nativeProjectAccessForRequest(request, {
+        endpoint: 'https://exmanager.test/internal/todo/project-scope', publicKey, fetcher,
+      });
+    });
+
+    const readAs = async (userId: string) => GET(new NextRequest(`https://todo.example/api/kanban/cards/${cardId}`, {
+      headers: { 'X-Airlock-Todo-Native-Identity': signedNativeCardGet(privateKey, cardId, userId, now) },
+    }), { params: Promise.resolve({ id: cardId }) });
+
+    const member = await readAs('sdk-native-member');
+    expect(member.status).toBe(200);
+    expect(await member.json()).toEqual({ card: savedCard });
+    expect(findCardById).toHaveBeenCalledWith(cardId, '/scoped/work');
+
+    const outsider = await readAs('sdk-native-outsider');
+    expect(outsider.status).toBe(404);
+    expect(findCardById).toHaveBeenCalledTimes(2);
+    expect(scopeCalls).toEqual([
+      { url: 'https://exmanager.test/internal/todo/project-scope', project: 'Integrators', userId: 'sdk-native-member', forwardedAssertion: expect.any(String) },
+      { url: 'https://exmanager.test/internal/todo/project-scope', project: 'Integrators', userId: 'sdk-native-outsider', forwardedAssertion: expect.any(String) },
+    ]);
+    expect(scopeCalls[0]?.forwardedAssertion).not.toBe(scopeCalls[1]?.forwardedAssertion);
+    expect(tasksDirForScope).toHaveBeenCalledWith('work');
+    expect(nativeProjectAccessContextFromRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('hides a native card without current project read access', async () => {
+    const cardId = '550e8400-e29b-41d4-a716-446655440000';
+    findCardById.mockReturnValue({ ...existingCard, id: cardId, project: 'Integrators' });
+    const forProject = vi.fn(async () => { throw new Error('native_project_access_denied'); });
+    nativeAccess.current = { userId: 'sdk-user-outsider', forProject };
+    nativeProjectAccessContextFromRequest.mockResolvedValue(nativeAccess.current);
+    const response = await GET(new NextRequest(`https://todo.example/api/kanban/cards/${cardId}`, {
+      headers: { 'X-Airlock-Todo-Native-Identity': 'verified-by-resolver' },
+    }), { params: Promise.resolve({ id: cardId }) });
+
+    expect(response.status).toBe(404);
+    expect(findCardById).toHaveBeenCalledTimes(1);
+    expect(forProject).toHaveBeenCalledWith('Integrators');
+  });
+
+  it('fails closed on a present invalid native assertion, while preserving the anonymous legacy GET path', async () => {
+    const cardId = '550e8400-e29b-41d4-a716-446655440000';
+    nativeAccess.current = null;
+    nativeProjectAccessContextFromRequest.mockRejectedValueOnce(new Error('native_identity_invalid'));
+    const invalid = await GET(new NextRequest(`https://todo.example/api/kanban/cards/${cardId}`, {
+      headers: { 'X-Airlock-Todo-Native-Identity': 'tampered' },
+    }), { params: Promise.resolve({ id: cardId }) });
+    expect(invalid.status).toBe(403);
+    expect(findCardById).not.toHaveBeenCalled();
+
+    nativeProjectAccessContextFromRequest.mockResolvedValue(null);
+    const legacy = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), {
+      params: Promise.resolve({ id: 'card-1' }),
+    });
+    expect(legacy.status).toBe(200);
+    expect(await legacy.json()).toEqual({ card: existingCard });
   });
 });

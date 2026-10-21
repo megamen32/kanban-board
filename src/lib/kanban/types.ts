@@ -56,14 +56,15 @@ export interface SourceAdmissionBinding {
   readonly operationKey: string;
   readonly requestHash: string;
   readonly provenanceHash: string;
-  readonly intentId: string;
+  /** Present only for explicit tasks that may enter the execution queue. */
+  readonly intentId?: string;
   readonly tenantId: string;
   readonly sourceOwnerId: string;
   readonly sourceEventId: string;
   readonly primaryItem: 'primary';
   readonly sourceRevision: string;
   readonly requestedProject: string;
-  readonly classification: 'explicit-task';
+  readonly classification: 'explicit-task' | 'idea' | 'ambiguous';
   readonly evidenceRefs: readonly string[];
 }
 
@@ -159,6 +160,8 @@ export interface TaskExecutionContinuation {
   readonly instruction: string;
   readonly inputId: string;
   readonly requestHash: string;
+  /** Signed native actor that created this child intent; absent on legacy continuations. */
+  readonly requestedBy?: string;
   readonly phase: TaskExecutionContinuationPhase;
   readonly nativeTurnId?: string;
   readonly summary?: string;
@@ -173,6 +176,32 @@ export interface TaskDecisionRequestReference {
   purpose: string;
   version: number;
 }
+/** Server-observed H33 binding for newly scoped execution receipts; legacy receipts omit it. */
+export interface TaskExecutionProjectBinding {
+  contract: 'integrator-host-readiness-v1';
+  projectId: string;
+  projectRoot: string;
+  rootIdentity: string;
+  policyRevision: string;
+  observedAtMs: number;
+  runtimeInstanceId: string;
+  hostId: string;
+  harness: 'codex';
+  harnessVersion: string;
+  model: 'gpt-6-luna';
+  requiredTools: string[];
+  availableTools: string[];
+  availableModels: string[];
+  resourceReady: true;
+  cwd: string;
+  pathResolution: {
+    requestedCwd: string;
+    canonicalCwd: string;
+    rootPath: string;
+    contained: true;
+    identityMatches: true;
+  };
+}
 export interface TaskExecutionReceipt {
   operationId: string;
   requestHash: string;
@@ -183,6 +212,8 @@ export interface TaskExecutionReceipt {
   phase: TaskExecutionPhase;
   hostId: string;
   harness: 'codex' | 'zcode' | 'opencode';
+  /** New scoped launches persist their exact H33 project/root/CWD binding; older receipts remain legacy. */
+  projectBinding?: TaskExecutionProjectBinding;
   nativeSessionId?: string;
   nativeTurnId?: string;
   /** Immutable Notice request link; the question body remains in Notice. */

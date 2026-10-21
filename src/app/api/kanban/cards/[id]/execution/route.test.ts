@@ -11,10 +11,12 @@ const mocks = vi.hoisted(() => ({
   identity: { value: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' } | null },
   humanIdentity: { value: undefined as { username: string; scope: 'work' } | null | undefined },
   boardHumanIdentityFromRequest: vi.fn(),
+  nativeProjectAccess: { value: null as null | { userId: string; forProject: ReturnType<typeof vi.fn> } },
   callOwnerHerderTool: vi.fn(),
   validateTransition: vi.fn(),
   taskExecutionSnapshot: vi.fn(),
   sessionInfo: { value: undefined as Record<string, unknown> | undefined },
+  projectReadinessOverride: { value: undefined as Record<string, unknown> | undefined },
   turnChangesAfterView: { value: false },
   cardChangesAfterView: { value: false },
 }));
@@ -23,6 +25,7 @@ vi.mock('@/lib/kanban/file-store', () => ({ findCardById: mocks.findCardById, up
 vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => mocks.identity.value ?? { username: 'anonymous', scope: 'work' },
   identityFromRequest: () => mocks.identity.value,
+  nativeProjectAccessContextFromRequest: vi.fn(async () => mocks.nativeProjectAccess.value),
 }));
 vi.mock('../../../../../../lib/auth/board-human', () => ({
   boardHumanIdentityFromRequest: mocks.boardHumanIdentityFromRequest,
@@ -42,13 +45,34 @@ const baseCard: KanbanCard = {
 const operationId = 'ui-operation-1234567890';
 const sessionId = 'native-session-1';
 const cwd = '/srv/excode';
+const scopedProjectRoot = '/workspace/exmanager-task-workspace';
 const questionOperationId = 'question-operation-1234567890';
 const canonicalQuestionOperationId = createHash('sha256').update(`${baseCard.id}\0${questionOperationId}`).digest('hex');
 
-function postRequest(body: Record<string, unknown> = { operationId, expectedVersion: 4 }) {
+function postRequest(body: Record<string, unknown> = { operationId, expectedVersion: 4 }, headers: Record<string, string> = {}) {
   return new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
   });
+}
+
+function scopedReadiness(project = 'Demo', overrides: Record<string, unknown> = {}) {
+  const pathResolution = {
+    requestedCwd: scopedProjectRoot, canonicalCwd: scopedProjectRoot, rootPath: scopedProjectRoot,
+    contained: true, identityMatches: true,
+  };
+  return {
+    hostId: 'roomhacker-server-100', nativeUser: 'operator',
+    projectReadinessContract: 'integrator-host-readiness-v1',
+    projectReadiness: {
+      state: 'ready', projectId: project, projectRoot: scopedProjectRoot,
+      rootIdentity: 'exmanager-workspace-root-v1', policyRevision: 'scope-policy-7',
+      observedAtMs: Date.now(), runtimeInstanceId: 'herder-runtime-12', hostId: 'roomhacker-server-100',
+      harness: 'codex', harnessVersion: 'codex-test-1', model: 'gpt-6-luna',
+      requiredTools: ['web_search'], availableTools: ['web_search', 'shell_exec'],
+      availableModels: ['gpt-6-luna'], resourceReady: true, cwd: scopedProjectRoot, pathResolution,
+      ...overrides,
+    },
+  };
 }
 
 const parentOperationId = 'a'.repeat(64);
@@ -74,9 +98,9 @@ function researchCard(description = baseCard.description): KanbanCard {
 
 const continuationText = 'Research two relevant SMB integrators using official public sources; state hypotheses separately and do not contact them.';
 function followUpRequest(action: 'continue-task' | 'sync-task-continuation', expectedVersion: number,
-  continuationId?: string, text = continuationText) {
+  continuationId?: string, text = continuationText, native = false) {
   return new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
-    method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+    method: 'PATCH', headers: { 'content-type': 'application/json', ...(native ? { 'X-Airlock-Todo-Native-Identity': 'verified-test-assertion' } : {}) }, body: JSON.stringify({
       action, operationId: parentOperationId, expectedVersion,
       ...(action === 'continue-task' ? { continuationText: text } : {}),
       ...(continuationId ? { continuationId } : {}),
@@ -139,17 +163,30 @@ function noticeResponse(body: unknown, status = 201): Response {
 
 function toolResult(tool: string, args: Record<string, unknown>) {
   if (tool === 'fleet_node_info') {
-    return { structuredContent: { hostId: 'roomhacker-server-100', nativeUser: 'operator' }, content: [] };
+    const info = typeof args.project === 'string' ? (mocks.projectReadinessOverride.value ?? scopedReadiness(args.project)) : { hostId: 'roomhacker-server-100', nativeUser: 'operator' };
+    return { structuredContent: info, content: [{ type: 'text', text: JSON.stringify(info) }] };
   }
   if (tool === 'fleet_create_session') {
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, cwd: args.cwd };
+    const readiness = args.projectReadiness as Record<string, unknown> | undefined;
+    const requiredTools = readiness?.requiredTools ?? [];
+    const projectExecution = readiness ? {
+      projectId: readiness.projectId, projectRoot: readiness.projectRoot,
+      rootIdentity: readiness.rootIdentity, policyRevision: readiness.policyRevision,
+      hostId: readiness.hostId, harness: readiness.harness, model: readiness.model,
+      requiredTools, address: { hostId: readiness.hostId, harness: readiness.harness, nativeSessionId: sessionId },
+      launchCwd: readiness.cwd,
+    } : undefined;
     return { structuredContent: {
       ok: true, created: true, inputId: args.inputId, harness: 'codex', sessionId, cwd: args.cwd,
+      ...(projectExecution ? { projectReadinessContract: args.projectReadinessContract, projectExecution } : {}),
     }, content: [] };
   }
   if (tool === 'fleet_session_view') {
+    const receiptCwd = mocks.currentCard.value?.taskExecutionHistory?.at(-1)?.projectBinding?.cwd ?? cwd;
     const result = { structuredContent: {
       hostId: 'roomhacker-server-100', details: {
-        session: { id: sessionId, harness: 'codex', cwd, model: 'gpt-6-luna' },
+        session: { id: sessionId, harness: 'codex', cwd: receiptCwd, model: 'gpt-6-luna' },
         historyUnavailable: false, messages: [{ role: 'assistant', text: 'Found two candidates' }],
       },
     }, content: [] };
@@ -190,6 +227,7 @@ describe('task execution API', () => {
     });
     mocks.tasksDirForScope.mockReturnValue('/tasks/work');
     mocks.identity.value = { username: 'nikita', scope: 'work' };
+    mocks.nativeProjectAccess.value = null;
     mocks.sessionInfo.value = {
       id: sessionId, harness: 'codex', cwd, model: 'gpt-6-luna', status: 'idle',
       lastActivity: '2026-10-20T10:05:00.000Z', lastMessage: 'Found two candidates',
@@ -197,6 +235,7 @@ describe('task execution API', () => {
     };
     mocks.turnChangesAfterView.value = false;
     mocks.cardChangesAfterView.value = false;
+    mocks.projectReadinessOverride.value = undefined;
     mocks.callOwnerHerderTool.mockImplementation(toolResult);
     mocks.validateTransition.mockReturnValue({ kind: 'accepted', patch: { column: 'in-progress' } });
     mocks.taskExecutionSnapshot.mockImplementation((card: KanbanCard) => ({
@@ -251,9 +290,84 @@ describe('task execution API', () => {
     if (!response) throw new Error('task execution response missing');
     expect(response.status).toBe(201);
     expect(mocks.updateCard).toHaveBeenCalled();
-    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('fleet_node_info', {});
-    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('fleet_create_session', expect.objectContaining({ cwd, model: 'gpt-6-luna' }));
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('fleet_node_info', { project: baseCard.project });
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('fleet_create_session', expect.objectContaining({ cwd: scopedProjectRoot, model: 'gpt-6-luna', project: baseCard.project }));
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.startedBy).toBe('nikita');
+  });
+
+  it('uses current native project read membership for execution status without inventing a board username', async () => {
+    const forProject = vi.fn(async () => ({ project: 'Demo', team: 'integrator', readAllowed: true as const, writeAllowed: false }));
+    mocks.nativeProjectAccess.value = { userId: 'airlock-native-user-42', forProject };
+    const response = await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      headers: { 'X-Airlock-Todo-Native-Identity': 'verified-test-assertion' },
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('native execution read response missing');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ startAvailable: false, unavailableReason: expect.stringMatching(/только для чтения/i) });
+    expect(forProject).toHaveBeenCalledWith('Demo');
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+  });
+
+  it('starts and exactly replays one native-manager task with the signed user id as receipt actor', async () => {
+    const forProject = vi.fn(async () => ({ project: 'Demo', team: 'integrator', readAllowed: true as const, writeAllowed: true }));
+    mocks.nativeProjectAccess.value = { userId: 'airlock-native-user-42', forProject };
+    const request = () => postRequest(undefined, { 'X-Airlock-Todo-Native-Identity': 'verified-test-assertion' });
+    const response = await POST(request(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('native execution response missing');
+    expect(response.status).toBe(201);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.startedBy).toBe('airlock-native-user-42');
+    expect(forProject).toHaveBeenCalledWith('Demo');
+    const createsAfterFirst = mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session').length;
+    expect(createsAfterFirst).toBe(1);
+
+    const replay = await POST(request(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!replay) throw new Error('native execution replay response missing');
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({ replay: true });
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(1);
+  });
+
+  it('denies native execution without current write grant and never falls back from an invalid present assertion', async () => {
+    const forProject = vi.fn(async () => ({ project: 'Demo', team: 'integrator', readAllowed: true as const, writeAllowed: false }));
+    mocks.nativeProjectAccess.value = { userId: 'airlock-native-user-42', forProject };
+    const denied = await POST(postRequest(undefined, { 'X-Airlock-Todo-Native-Identity': 'verified-test-assertion' }), {
+      params: Promise.resolve({ id: baseCard.id }),
+    });
+    if (!denied) throw new Error('native denied response missing');
+    expect(denied.status).toBe(404);
+    expect(mocks.updateCard).not.toHaveBeenCalled();
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+
+    mocks.nativeProjectAccess.value = null;
+    const requestModule = await import('@/lib/auth/request');
+    vi.mocked(requestModule.nativeProjectAccessContextFromRequest).mockRejectedValueOnce(new Error('native_identity_invalid'));
+    const invalid = await POST(postRequest(undefined, { 'X-Airlock-Todo-Native-Identity': 'tampered' }), {
+      params: Promise.resolve({ id: baseCard.id }),
+    });
+    if (!invalid) throw new Error('invalid native assertion response missing');
+    expect(invalid.status).toBe(403);
+    expect(mocks.updateCard).not.toHaveBeenCalled();
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+    expect(mocks.boardHumanIdentityFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('does not map a legacy username receipt onto a native user id during PATCH recovery', async () => {
+    const forProject = vi.fn(async () => ({ project: 'Demo', team: 'integrator', readAllowed: true as const, writeAllowed: true }));
+    mocks.nativeProjectAccess.value = { userId: 'airlock-native-user-42', forProject };
+    mocks.currentCard.value = { ...baseCard, taskExecutionHistory: [{
+      operationId: canonicalQuestionOperationId, requestHash: 'f'.repeat(64), lastBoardVersion: baseCard.version,
+      createInputId: 'create-input', messageInputId: 'message-input', phase: 'running', hostId: 'roomhacker-server-100',
+      harness: 'codex', startedBy: 'nikita', createdAt: baseCard.created, updatedAt: baseCard.updated,
+    }] };
+    const response = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json', 'X-Airlock-Todo-Native-Identity': 'verified-test-assertion' },
+      body: JSON.stringify({ action: 'sync-result', operationId: questionOperationId, expectedVersion: baseCard.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('native legacy receipt response missing');
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: expect.stringMatching(/receipt owner does not match native identity/i) });
+    expect(mocks.updateCard).not.toHaveBeenCalled();
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
   });
 
   it('preserves an existing Board OAuth identity without re-resolving it as a human login', async () => {
@@ -329,6 +443,7 @@ describe('task execution API', () => {
   });
 
   it('accepts only stable operation and expected version; host, CWD and project are server derived', async () => {
+    mocks.currentCard.value = { ...baseCard, project: 'canonical-project-from-card' };
     const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
     if (!response) throw new Error('task execution response missing');
     expect(response.status).toBe(201);
@@ -337,7 +452,9 @@ describe('task execution API', () => {
       'fleet_node_info', 'fleet_create_session', 'fleet_session_view', 'send_message',
     ]);
     expect(mocks.callOwnerHerderTool.mock.calls[1]?.[1]).toMatchObject({
-      harness: 'codex', cwd, model: 'gpt-6-luna',
+      harness: 'codex', cwd: scopedProjectRoot, model: 'gpt-6-luna', project: 'canonical-project-from-card',
+      projectReadinessContract: 'integrator-host-readiness-v1',
+      projectReadiness: expect.objectContaining({ projectId: 'canonical-project-from-card', projectRoot: scopedProjectRoot, rootIdentity: 'exmanager-workspace-root-v1' }),
     });
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
       hostId: 'roomhacker-server-100', phase: 'running', nativeTurnId: 'turn-1',
@@ -347,12 +464,40 @@ describe('task execution API', () => {
     expect(mocks.updateCard).toHaveBeenCalledTimes(3);
   });
 
+  it('does not persist intent or create when project-scoped readiness is absent, stale, or mismatched', async () => {
+    const invalid = [
+      { hostId: 'roomhacker-server-100', nativeUser: 'operator' },
+      scopedReadiness('Demo', { state: 'not_ready' }),
+      scopedReadiness('another-project'),
+      scopedReadiness('Demo', { observedAtMs: Date.now() - 31_000 }),
+      scopedReadiness('Demo', { availableTools: [] }),
+      scopedReadiness('Demo', { cwd: '/other/root' }),
+      scopedReadiness('Demo', { pathResolution: { requestedCwd: '/other/absolute/path', canonicalCwd: scopedProjectRoot, rootPath: scopedProjectRoot, contained: true, identityMatches: true } }),
+    ];
+    for (const readiness of invalid) {
+      mocks.projectReadinessOverride.value = readiness;
+      mocks.updateCard.mockClear();
+      mocks.callOwnerHerderTool.mockClear();
+      const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+      if (!response) throw new Error('readiness response missing');
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ state: 'not_attempted' });
+      expect(mocks.updateCard).not.toHaveBeenCalled();
+      expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(0);
+    }
+  });
+
   it('rejects extra browser-supplied execution configuration before any write', async () => {
-    const response = await POST(postRequest({ operationId, expectedVersion: 4, hostId: 'forged', cwd }), {
-      params: Promise.resolve({ id: baseCard.id }),
-    });
-    if (!response) throw new Error('task execution response missing');
-    expect(response.status).toBe(400);
+    for (const extra of [
+      { hostId: 'forged', cwd },
+      { project: 'attacker-controlled-project' },
+    ]) {
+      const response = await POST(postRequest({ operationId, expectedVersion: 4, ...extra }), {
+        params: Promise.resolve({ id: baseCard.id }),
+      });
+      if (!response) throw new Error('task execution response missing');
+      expect(response.status).toBe(400);
+    }
     expect(mocks.updateCard).not.toHaveBeenCalled();
     expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
   });
@@ -388,6 +533,27 @@ describe('task execution API', () => {
     if (!staleReplay) throw new Error('stale task execution response missing');
     expect(staleReplay.status).toBe(409);
     expect(mocks.updateCard).toHaveBeenCalledTimes(writeCount);
+  });
+
+  it('does not relaunch an existing UNKNOWN receipt to add project scope retroactively', async () => {
+    const canonicalOperationId = createHash('sha256').update(`${baseCard.id}\0${operationId}`).digest('hex');
+    const requestHash = createHash('sha256').update(JSON.stringify({
+      id: baseCard.id, title: baseCard.title, description: baseCard.description, project: baseCard.project,
+      owner: baseCard.owner ?? 'nikita', assignee: baseCard.assignee ?? null, assignees: baseCard.assignees,
+      actor: 'nikita', hostId: 'roomhacker-server-100', harness: 'codex', cwd, model: 'gpt-6-luna',
+    })).digest('hex');
+    mocks.currentCard.value = { ...baseCard, taskExecutionHistory: [{
+      operationId: canonicalOperationId, requestHash, lastBoardVersion: baseCard.version, createInputId: 'create-input',
+      messageInputId: 'dispatch-input', phase: 'create-unknown', hostId: 'roomhacker-server-100',
+      harness: 'codex', startedBy: 'nikita', createdAt: baseCard.created, updatedAt: baseCard.updated,
+    }] };
+
+    const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('UNKNOWN replay response missing');
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ replay: true, operationId: canonicalOperationId });
+    expect(mocks.updateCard).not.toHaveBeenCalled();
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(0);
   });
 
   it('keeps a created receipt recoverable after transient view failure and resumes the same operation explicitly', async () => {
@@ -564,6 +730,54 @@ describe('task execution API', () => {
     expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
   });
 
+  it('lets a current project manager append one child to another actor legacy parent without remapping or cross-actor replay', async () => {
+    const forProject = vi.fn(async () => ({ project: 'Demo', team: 'integrator', readAllowed: true as const, writeAllowed: true }));
+    mocks.nativeProjectAccess.value = { userId: 'native-manager-b', forProject };
+    mocks.currentCard.value = researchCard();
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } } };
+
+    const first = await PATCH(followUpRequest('continue-task', 8, undefined, continuationText, true), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!first) throw new Error('shared-project continuation response missing');
+    expect(first.status).toBe(202);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({ startedBy: 'nikita', nativeSessionId: sessionId });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]).toMatchObject({ requestedBy: 'native-manager-b', phase: 'running' });
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+
+    const current = mocks.currentCard.value!;
+    mocks.nativeProjectAccess.value = null;
+    const legacyReplay = await PATCH(followUpRequest('continue-task', current.version), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!legacyReplay) throw new Error('legacy cross-actor replay response missing');
+    expect(legacyReplay.status).toBe(409);
+    mocks.nativeProjectAccess.value = { userId: 'native-manager-c', forProject };
+    const replay = await PATCH(followUpRequest('continue-task', current.version, undefined, continuationText, true), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!replay) throw new Error('cross-actor replay response missing');
+    expect(replay.status).toBe(409);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.startedBy).toBe('nikita');
+  });
+
+  it('keeps an unknown child non-replayable by a different current project manager', async () => {
+    const forProject = vi.fn(async () => ({ project: 'Demo', team: 'integrator', readAllowed: true as const, writeAllowed: true }));
+    mocks.nativeProjectAccess.value = { userId: 'native-manager-b', forProject };
+    mocks.currentCard.value = researchCard();
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } } };
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'send_message') throw new Error('ambiguous dispatch');
+      return toolResult(tool, args);
+    });
+    const first = await PATCH(followUpRequest('continue-task', 8, undefined, continuationText, true), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!first) throw new Error('native unknown child response missing');
+    expect(first.status).toBe(202);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]).toMatchObject({ requestedBy: 'native-manager-b', phase: 'unknown' });
+
+    mocks.nativeProjectAccess.value = { userId: 'native-manager-c', forProject };
+    const current = mocks.currentCard.value!;
+    const replay = await PATCH(followUpRequest('continue-task', current.version, undefined, continuationText, true), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!replay) throw new Error('cross-actor unknown replay response missing');
+    expect(replay.status).toBe(409);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+  });
+
   it('keeps the complete owner instruction and fixed rules when long card context must be shortened', async () => {
     const longDescription = `CARD-CONTEXT-START ${'Карточный контекст '.repeat(3_000)} CARD-CONTEXT-END`;
     const instruction = 'Use official public sources only; do not contact anyone. OWNER-INSTRUCTION-END-MARKER';
@@ -663,12 +877,16 @@ describe('task execution API', () => {
     expect(mocks.updateCard).not.toHaveBeenCalled();
   });
 
-  it('appends only the exact completed child turn without changing human review history', async () => {
+  it('lets a second current manager reconcile the exact child result without changing parent actor or review history', async () => {
+    const projectWrite = (userId: string) => ({ userId, forProject: vi.fn(async () => ({ project: 'Demo', team: 'integrator', readAllowed: true as const, writeAllowed: true })) });
+    mocks.nativeProjectAccess.value = projectWrite('native-manager-b');
     mocks.currentCard.value = researchCard();
     mocks.sessionInfo.value = { ...mocks.sessionInfo.value, meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } } };
-    const first = await PATCH(followUpRequest('continue-task', 8), { params: Promise.resolve({ id: baseCard.id }) });
+    const first = await PATCH(followUpRequest('continue-task', 8, undefined, continuationText, true), { params: Promise.resolve({ id: baseCard.id }) });
     if (!first) throw new Error('research continuation admission missing');
     const admitted = mocks.currentCard.value!;
+    expect(admitted.taskExecutionHistory?.[0]?.startedBy).toBe('nikita');
+    expect(admitted.taskExecutionHistory?.[0]?.continuations?.[0]?.requestedBy).toBe('native-manager-b');
     const continuationId = admitted.taskExecutionHistory?.[0]?.continuations?.[0]?.id;
     if (!continuationId) throw new Error('persisted continuation ID missing');
     const writeCount = mocks.updateCard.mock.calls.length;
@@ -680,18 +898,20 @@ describe('task execution API', () => {
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]?.phase).toBe('running');
     expect(mocks.updateCard).toHaveBeenCalledTimes(writeCount);
     mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'idle', meta: { nativeLastTurn: { turnId: 'turn-1', status: 'completed' } } };
-    const response = await PATCH(followUpRequest('sync-task-continuation', admitted.version, continuationId), { params: Promise.resolve({ id: baseCard.id }) });
+    mocks.nativeProjectAccess.value = projectWrite('native-manager-c');
+    const response = await PATCH(followUpRequest('sync-task-continuation', admitted.version, continuationId, continuationText, true), { params: Promise.resolve({ id: baseCard.id }) });
     if (!response) throw new Error('research continuation sync missing');
     expect(response.status).toBe(200);
     expect(mocks.currentCard.value).toMatchObject({ column: 'review', needsReview: true, reviewHistory: [] });
     expect(mocks.currentCard.value?.resultHistory?.map(item => item.summary)).toEqual(['Original result', 'Found two candidates']);
+    expect(mocks.currentCard.value?.resultHistory?.[1]?.submittedBy).toBe('native-manager-c');
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.phase).toBe('result');
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]).toMatchObject({
       phase: 'result', nativeTurnId: 'turn-1', summary: 'Found two candidates',
     });
     expect(mocks.validateTransition).not.toHaveBeenCalled();
     const savedVersion = mocks.currentCard.value!.version;
-    const duplicateSync = await PATCH(followUpRequest('sync-task-continuation', savedVersion, continuationId), { params: Promise.resolve({ id: baseCard.id }) });
+    const duplicateSync = await PATCH(followUpRequest('sync-task-continuation', savedVersion, continuationId, continuationText, true), { params: Promise.resolve({ id: baseCard.id }) });
     if (!duplicateSync) throw new Error('duplicate child result readback missing');
     expect(duplicateSync.status).toBe(200);
     expect(mocks.currentCard.value?.resultHistory?.map(item => item.summary)).toEqual(['Original result', 'Found two candidates']);

@@ -3,6 +3,8 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { AuthStore, type OAuthAccess } from './store';
 import { uiScope } from './config';
 import type { BoardScope } from './scopes';
+import { AIRLOCK_TODO_NATIVE_IDENTITY_HEADER } from './airlock-native-identity';
+import { nativeProjectAccessForRequest, type NativeProjectAccessContext } from '../kanban/native-project-access';
 
 export const SESSION_COOKIE = 'kanban_session';
 
@@ -46,4 +48,17 @@ export function managerRequestAuthorized(request: NextRequest): boolean {
   const expectedHash = createHash('sha256').update(expected).digest();
   const providedHash = createHash('sha256').update(provided).digest();
   return timingSafeEqual(expectedHash, providedHash);
+}
+
+/**
+ * Resolve only the signed native caller on this exact request. With no
+ * assertion this preserves the existing Board identity path; a present bad
+ * assertion or missing trusted server configuration never falls back.
+ */
+export async function nativeProjectAccessContextFromRequest(request: Request): Promise<NativeProjectAccessContext | null> {
+  if (!request.headers.has(AIRLOCK_TODO_NATIVE_IDENTITY_HEADER)) return null;
+  const publicKey = process.env.AIRLOCK_TODO_NATIVE_IDENTITY_PUBLIC_KEY?.trim();
+  const endpoint = process.env.EXMANAGER_TODO_PROJECT_SCOPE_URL?.trim();
+  if (!publicKey || !endpoint) throw new Error('native_identity_unconfigured');
+  return nativeProjectAccessForRequest(request, { endpoint, publicKey });
 }

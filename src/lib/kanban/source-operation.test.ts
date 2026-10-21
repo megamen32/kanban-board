@@ -23,6 +23,10 @@ function request(overrides: Partial<SourceAdmissionRequest> = {}): SourceAdmissi
   };
 }
 
+function classifiedRequest(classification: string): SourceAdmissionRequest {
+  return request({ classification } as unknown as Partial<SourceAdmissionRequest>);
+}
+
 function admit(dir: string, input = request(), hooks = {}) {
   return admitSourceTask(input, dir, id => findCardById(id, dir), card => createAdmittedCard(card, dir), hooks);
 }
@@ -220,11 +224,105 @@ describe('board source admission journal', () => {
 
   it('rejects caller-shaped or incomplete source decisions before reserving anything', () => {
     const dir = fixture();
-    expect(() => admit(dir, request({ classification: 'maybe-task' } as never))).toThrow('only a trusted explicit-task decision can be admitted');
+    expect(() => admit(dir, request({ classification: 'maybe-task' } as never))).toThrow('invalid source admission classification');
     expect(() => admit(dir, request({ evidenceRefs: [] }))).toThrow('canonical source evidence is required');
     expect(() => admit(dir, { ...request(), sourceIdentity: 'model-authored' } as SourceAdmissionRequest & { sourceIdentity: string })).toThrow('unknown source admission field');
     expect(fs.existsSync(path.join(dir, '.source-operations', 'source-operations.json'))).toBe(false);
     expect(getAllCards(dir)).toHaveLength(0);
+  });
+
+  it('persists an idea in the backlog with the same source identity and no launch intent', () => {
+    const dir = fixture();
+    const idea = classifiedRequest('idea');
+    const [a, b] = [runChild(dir, idea), runChild(dir, classifiedRequest('idea'))];
+    return Promise.all([a, b]).then(results => {
+      expect(results.map(result => result.status)).toEqual([0, 0]);
+      const outcomes = results.map(result => JSON.parse(result.stdout));
+      expect(outcomes.map(result => result.status).sort()).toEqual(['committed', 'replayed']);
+      expect(outcomes.every(result => result.classification === 'idea' && !('intentId' in result))).toBe(true);
+      expect(new Set(outcomes.map(result => result.cardId)).size).toBe(1);
+      const card = findCardById(outcomes[0].cardId, dir)!;
+      expect(card).toMatchObject({ column: 'someday', needsReview: false, sourceAdmission: { classification: 'idea' } });
+      expect(listPendingSourceIntents(dir, id => findCardById(id, dir))).toEqual([]);
+      expect(getAllCards(dir)).toHaveLength(1);
+      const journal = fs.readFileSync(path.join(dir, '.source-operations', 'source-operations.json'), 'utf8');
+      const record = Object.values(JSON.parse(journal).operations)[0] as Record<string, unknown>;
+      expect(record).toMatchObject({ classification: 'idea', intentState: 'NOT_APPLICABLE' });
+      expect(record).not.toHaveProperty('intentId');
+      expect(journal).not.toContain('Check supplier quote');
+    });
+  });
+
+  it('persists an ambiguous source in Inbox for review without making it launchable', async () => {
+    const dir = fixture();
+    const results = await Promise.all([
+      runChild(dir, classifiedRequest('ambiguous')),
+      runChild(dir, classifiedRequest('ambiguous')),
+    ]);
+    expect(results.map(result => result.status)).toEqual([0, 0]);
+    const outcomes = results.map(result => JSON.parse(result.stdout));
+    expect(outcomes.map(result => result.status).sort()).toEqual(['committed', 'replayed']);
+    expect(outcomes.every(result => result.classification === 'ambiguous' && !('intentId' in result))).toBe(true);
+    expect(new Set(outcomes.map(result => result.cardId)).size).toBe(1);
+    expect(findCardById(outcomes[0].cardId, dir)).toMatchObject({
+      column: 'inbox', needsReview: true, sourceAdmission: { classification: 'ambiguous' },
+    });
+    expect(listPendingSourceIntents(dir, id => findCardById(id, dir))).toEqual([]);
+    expect(getAllCards(dir)).toHaveLength(1);
+    const record = Object.values(JSON.parse(fs.readFileSync(path.join(dir, '.source-operations', 'source-operations.json'), 'utf8')).operations)[0] as Record<string, unknown>;
+    expect(record).toMatchObject({ classification: 'ambiguous', intentState: 'NOT_APPLICABLE' });
+    expect(record).not.toHaveProperty('intentId');
+  });
+
+  it('conflicts if the same source identity is reclassified after its outcome was committed', () => {
+    const dir = fixture();
+    const first = admit(dir, classifiedRequest('idea'));
+    expect(admit(dir, request())).toMatchObject({
+      status: 'conflict', reason: 'same_identity_different_request', cardId: first.cardId,
+    });
+    expect(getAllCards(dir)).toHaveLength(1);
+    expect(listPendingSourceIntents(dir, id => findCardById(id, dir))).toEqual([]);
+  });
+
+  it('keeps uncertain idea publication query-only across an identical retry', () => {
+    const dir = fixture();
+    expect(() => admit(dir, classifiedRequest('idea'), {
+      beforePublish: () => { throw new Error('simulated lost publication'); },
+    })).toThrow('simulated lost publication');
+    const retry = admit(dir, classifiedRequest('idea'));
+    expect(retry).toMatchObject({ status: 'pending', reason: 'publication_outcome_unknown', classification: 'idea' });
+    expect(retry).not.toHaveProperty('intentId');
+    expect(getAllCards(dir)).toHaveLength(0);
+    expect(listPendingSourceIntents(dir, id => findCardById(id, dir))).toEqual([]);
+  });
+
+  it.each([
+    ['idea', 'inbox'],
+    ['ambiguous', 'review'],
+  ] as const)('allows normal %s movement, edit, replay, and deletion without creating a launch', (classification, nextColumn) => {
+    const dir = fixture();
+    const admitted = admit(dir, classifiedRequest(classification));
+    const original = findCardById(admitted.cardId, dir)!;
+    const updated = updateCard(original.id, { column: nextColumn, title: 'Human refined outcome', needsReview: false }, original.version, dir);
+    if ('conflict' in updated) throw new Error('unexpected fixture version conflict');
+    expect(updated).toMatchObject({ column: nextColumn, title: 'Human refined outcome', sourceAdmission: original.sourceAdmission });
+
+    const replay = admit(dir, classifiedRequest(classification));
+    expect(replay).toMatchObject({ status: 'replayed', classification, cardId: original.id });
+    expect(replay).not.toHaveProperty('intentId');
+    expect(findCardById(original.id, dir)?.title).toBe('Human refined outcome');
+    expect(listPendingSourceIntents(dir, id => findCardById(id, dir))).toEqual([]);
+
+    expect(deleteCard(original.id, dir)).toBe(true);
+    expect(admit(dir, classifiedRequest(classification))).toMatchObject({
+      status: 'cancelled', classification, cardId: original.id,
+    });
+    expect(getAllCards(dir)).toHaveLength(0);
+    expect(listPendingSourceIntents(dir, id => findCardById(id, dir))).toEqual([]);
+    const operations = Object.values(JSON.parse(fs.readFileSync(path.join(dir, '.source-operations', 'source-operations.json'), 'utf8')).operations) as Array<Record<string, unknown>>;
+    expect(operations).toHaveLength(1);
+    expect(operations[0]).toMatchObject({ classification, state: 'CANCELLED', intentState: 'NOT_APPLICABLE' });
+    expect(operations[0]).not.toHaveProperty('intentId');
   });
 
   it('cancels a published PREPARED card before ordinary deletion and replay', () => {

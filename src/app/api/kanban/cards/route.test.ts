@@ -2,9 +2,11 @@ import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KanbanCard } from '@/lib/kanban/types';
 
-const { createCard, updateCard, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated, managerAuthorized } = vi.hoisted(() => ({
+const { createCard, updateCard, getAllCards, listProjects, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated, managerAuthorized, nativeAccess, nativeProjectAccessContextFromRequest } = vi.hoisted(() => ({
   createCard: vi.fn(),
   updateCard: vi.fn(),
+  getAllCards: vi.fn(),
+  listProjects: vi.fn(),
   validateTransition: vi.fn(),
   dispatchCardEvent: vi.fn(),
   startDueReminderScheduler: vi.fn(),
@@ -12,15 +14,19 @@ const { createCard, updateCard, validateTransition, dispatchCardEvent, startDueR
   identity: { current: { username: 'nikita', scope: 'work' as const } },
   authenticated: { current: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' } | null },
   managerAuthorized: { current: false },
+  nativeAccess: { current: null as null | { userId: string; forProject: ReturnType<typeof vi.fn> } },
+  nativeProjectAccessContextFromRequest: vi.fn(async () => nativeAccess.current),
 }));
 
-vi.mock('@/lib/kanban/file-store', () => ({ createCard, updateCard, getAllCards: vi.fn() }));
+vi.mock('@/lib/kanban/file-store', () => ({ createCard, updateCard, getAllCards }));
+vi.mock('../../../../lib/kanban/project-store', () => ({ listProjects }));
 vi.mock('@/lib/kanban/due-at', () => ({ normalizeDueAt: vi.fn((value: unknown) => value) }));
 vi.mock('@/lib/kanban/transition-policy', () => ({ validateTransition, NIKITA_ACTOR: 'nikita' }));
 vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => identity.current,
   identityFromRequest: () => authenticated.current,
   managerRequestAuthorized: () => managerAuthorized.current,
+  nativeProjectAccessContextFromRequest,
 }));
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope }));
 vi.mock('@/lib/notifications/push', () => ({ dispatchCardEvent }));
@@ -28,7 +34,7 @@ vi.mock('@/lib/notifications/scheduler', () => ({ startDueReminderScheduler }));
 
 vi.mock('@/lib/auth/board-human', () => ({ boardHumanIdentityFromRequest: async () => authenticated.current }));
 
-import { POST } from './route';
+import { GET, POST } from './route';
 
 const createdCard: KanbanCard = {
   id: 'created',
@@ -231,5 +237,77 @@ describe('POST /api/kanban/cards', () => {
 
     expect(response.status).toBe(201);
     expect(createCard).toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/kanban/cards', () => {
+  const alpha = { ...createdCard, id: 'alpha-card', project: 'Alpha' };
+  const beta = { ...createdCard, id: 'beta-card', project: 'Beta' };
+  const legacy = { ...createdCard, id: 'legacy-card', project: 'Legacy' };
+  const projects = [
+    { id: '00000000-0000-4000-8000-000000000001', externalKey: 'alpha-key', name: 'Alpha' },
+    { id: '00000000-0000-4000-8000-000000000002', externalKey: 'empty-key', name: 'Empty project' },
+    { id: '00000000-0000-4000-8000-000000000003', externalKey: 'beta-key', name: 'Beta' },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    nativeAccess.current = null;
+    nativeProjectAccessContextFromRequest.mockResolvedValue(null);
+    identity.current = { username: 'anonymous', scope: 'work' };
+    tasksDirForScope.mockReturnValue('/scoped/work');
+    getAllCards.mockReturnValue([alpha, beta, legacy]);
+    listProjects.mockReturnValue(projects);
+  });
+
+  it('filters every persisted card and empty project through current native membership', async () => {
+    const forProject = vi.fn(async (project: string) => {
+      if (project === 'Beta' || project === 'Legacy') throw new Error('native_project_access_denied');
+      return { project, team: 'integrator', readAllowed: true as const, writeAllowed: false };
+    });
+    nativeAccess.current = { userId: 'sdk-user-17', forProject };
+    nativeProjectAccessContextFromRequest.mockResolvedValue(nativeAccess.current);
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards', {
+      headers: { 'X-Airlock-Todo-Native-Identity': 'verified-test-assertion' },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cards: [alpha], projects: [projects[0], projects[1]] });
+    expect(forProject.mock.calls.map(([project]) => project)).toEqual(['Alpha', 'Beta', 'Legacy', 'Empty project']);
+    expect(tasksDirForScope).toHaveBeenCalledWith('work');
+  });
+
+  it('treats a signed project query only as a filter and still checks its current grant', async () => {
+    const forProject = vi.fn(async (project: string) => {
+      if (project === 'Beta') throw new Error('native_project_access_denied');
+      return { project, team: 'integrator', readAllowed: true as const, writeAllowed: false };
+    });
+    nativeAccess.current = { userId: 'sdk-user-17', forProject };
+    nativeProjectAccessContextFromRequest.mockResolvedValue(nativeAccess.current);
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards?project=Beta', {
+      headers: { 'X-Airlock-Todo-Native-Identity': 'verified-test-assertion' },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cards: [], projects: [] });
+    expect(forProject).toHaveBeenCalledTimes(1);
+    expect(forProject).toHaveBeenCalledWith('Beta');
+  });
+
+  it('does not fall back to public legacy listing when a native assertion is invalid', async () => {
+    nativeProjectAccessContextFromRequest.mockRejectedValueOnce(new Error('native_identity_invalid'));
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards', {
+      headers: { 'X-Airlock-Todo-Native-Identity': 'tampered' },
+    }));
+
+    expect(response.status).toBe(403);
+    expect(getAllCards).not.toHaveBeenCalled();
+  });
+
+  it('preserves the existing no-assertion legacy list behavior', async () => {
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cards: [alpha, beta, legacy], projects });
+    expect(nativeProjectAccessContextFromRequest).toHaveBeenCalledTimes(1);
   });
 });

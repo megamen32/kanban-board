@@ -152,7 +152,7 @@ export function createCard(title: string, description: string = '', column: Kanb
   return withSourceOperationLock(tasksDir, () => createCardRecord(title, description, column, priority, tags, project, assignees, tasksDir, dueAt));
 }
 
-function createCardRecord(title: string, description: string, column: KanbanColumn, priority: Priority, tags: string[], project: string | undefined, assignees: string[], tasksDir: string, dueAt?: string, id = uuidv4(), sourceAdmission?: SourceAdmissionBinding): KanbanCard {
+function createCardRecord(title: string, description: string, column: KanbanColumn, priority: Priority, tags: string[], project: string | undefined, assignees: string[], tasksDir: string, dueAt?: string, id = uuidv4(), sourceAdmission?: SourceAdmissionBinding, sourceOutcome?: { source: string; needsReview: boolean }): KanbanCard {
   if (!project?.trim()) throw new Error('project is required for new cards');
   ensureDir(tasksDir);
   const now = new Date().toISOString();
@@ -178,6 +178,7 @@ function createCardRecord(title: string, description: string, column: KanbanColu
     owner: 'nikita',
     shared: false,
     ...defaultPlanningMetadata(),
+    ...(sourceOutcome ? { source: sourceOutcome.source, needsReview: sourceOutcome.needsReview } : {}),
   };
 
   writeCard(card, tasksDir);
@@ -189,8 +190,15 @@ export function createAdmittedCard(input: {
   id: string; title: string; description: string; project: string;
   priority: Priority; assignees: string[]; dueAt?: string; sourceAdmission: SourceAdmissionBinding;
 }, tasksDir = TASKS_DIR): KanbanCard {
-  return createCardRecord(input.title, input.description, 'inbox', input.priority, ['source-admitted'], input.project,
-    input.assignees, tasksDir, input.dueAt, input.id, input.sourceAdmission);
+  const classification = input.sourceAdmission.classification;
+  const column = classification === 'idea' ? 'someday' : 'inbox';
+  const tags = classification === 'explicit-task' ? ['source-admitted']
+    : classification === 'idea' ? ['source-idea'] : ['source-review'];
+  return createCardRecord(input.title, input.description, column, input.priority, tags, input.project,
+    input.assignees, tasksDir, input.dueAt, input.id, input.sourceAdmission,
+    classification === 'explicit-task' ? undefined : {
+      source: `source:${classification}`, needsReview: classification === 'ambiguous',
+    });
 }
 
 export type KanbanCardUpdates = TypedKanbanCardUpdates & Partial<Pick<KanbanCard, 'version'>>;
@@ -674,6 +682,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       || entry.dispatchReceiptText !== undefined && (typeof entry.dispatchReceiptText !== 'string' || entry.dispatchReceiptText.length > 4096)
       || entry.lastProgress !== undefined && (typeof entry.lastProgress !== 'string' || entry.lastProgress.length > 4000)
       || entry.lastProgressAt !== undefined && (typeof entry.lastProgressAt !== 'string' || Number.isNaN(Date.parse(entry.lastProgressAt)))
+      || entry.projectBinding !== undefined && !isTaskExecutionProjectBinding(entry.projectBinding, entry.hostId)
       || entry.taskDecisionRequest !== undefined && (!isRecord(entry.taskDecisionRequest)
         || Object.keys(entry.taskDecisionRequest).some(key => !['requestId', 'requestHash', 'purpose', 'version'].includes(key))
         || typeof entry.taskDecisionRequest.requestId !== 'string' || !/^td-[a-f0-9]{40}$/.test(entry.taskDecisionRequest.requestId)
@@ -690,6 +699,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
     if (['running', 'waiting', 'result'].includes(String(entry.phase)) && !entry.nativeTurnId) {
       throw invalidPlanningField(`${field}.nativeTurnId`, 'required after native turn admission');
     }
+    const projectBinding = entry.projectBinding === undefined ? undefined : normalizeTaskExecutionProjectBinding(entry.projectBinding);
     seen.add(entry.operationId);
     return {
       operationId: entry.operationId,
@@ -700,6 +710,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       phase: entry.phase as TaskExecutionReceipt['phase'],
       hostId: entry.hostId,
       harness: entry.harness as TaskExecutionReceipt['harness'],
+      ...(projectBinding ? { projectBinding } : {}),
       ...(typeof entry.nativeSessionId === 'string' ? { nativeSessionId: entry.nativeSessionId } : {}),
       ...(typeof entry.nativeTurnId === 'string' ? { nativeTurnId: entry.nativeTurnId } : {}),
       ...(isRecord(entry.taskDecisionRequest) ? { taskDecisionRequest: {
@@ -720,6 +731,66 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
   });
 }
 
+function isTaskExecutionProjectBinding(value: unknown, receiptHostId: unknown): boolean {
+  if (!isRecord(value) || !isRecord(value.pathResolution)) return false;
+  const binding = value;
+  const paths = binding.pathResolution as Record<string, unknown>;
+  const bindingKeys = ['contract', 'projectId', 'projectRoot', 'rootIdentity', 'policyRevision', 'observedAtMs',
+    'runtimeInstanceId', 'hostId', 'harness', 'harnessVersion', 'model', 'requiredTools', 'availableTools',
+    'availableModels', 'resourceReady', 'cwd', 'pathResolution'];
+  const pathKeys = ['requestedCwd', 'canonicalCwd', 'rootPath', 'contained', 'identityMatches'];
+  if (Object.keys(binding).some(key => !bindingKeys.includes(key))
+      || Object.keys(paths).some(key => !pathKeys.includes(key))
+      || Object.keys(binding).length !== bindingKeys.length || Object.keys(paths).length !== pathKeys.length) return false;
+  const strings = ['projectId', 'projectRoot', 'rootIdentity', 'policyRevision', 'runtimeInstanceId',
+    'hostId', 'harnessVersion', 'model', 'cwd'] as const;
+  if (binding.contract !== 'integrator-host-readiness-v1' || strings.some(key => typeof binding[key] !== 'string' || !(binding[key] as string).trim())
+      || binding.hostId !== receiptHostId || binding.harness !== 'codex' || binding.model !== 'gpt-6-luna'
+      || binding.resourceReady !== true || !Number.isSafeInteger(binding.observedAtMs) || (binding.observedAtMs as number) <= 0
+      || !Array.isArray(binding.requiredTools) || !binding.requiredTools.length
+      || binding.requiredTools.some(item => typeof item !== 'string' || !item.trim())
+      || !Array.isArray(binding.availableTools) || binding.availableTools.some(item => typeof item !== 'string' || !item.trim())
+      || !Array.isArray(binding.availableModels) || binding.availableModels.some(item => typeof item !== 'string' || !item.trim())
+      || !binding.requiredTools.every(item => (binding.availableTools as string[]).includes(item as string))
+      || !(binding.availableModels as string[]).includes('gpt-6-luna')) return false;
+  if (typeof paths.requestedCwd !== 'string' || typeof paths.canonicalCwd !== 'string'
+      || typeof paths.rootPath !== 'string' || paths.contained !== true || paths.identityMatches !== true
+      || paths.rootPath !== binding.projectRoot || paths.canonicalCwd !== binding.cwd) return false;
+  const pathApi = path.posix;
+  return pathApi.isAbsolute(binding.projectRoot as string) && pathApi.isAbsolute(binding.cwd as string)
+    && pathApi.isAbsolute(paths.rootPath) && pathApi.isAbsolute(paths.requestedCwd);
+}
+
+function normalizeTaskExecutionProjectBinding(value: unknown): NonNullable<TaskExecutionReceipt['projectBinding']> {
+  if (!isRecord(value) || !isRecord(value.pathResolution)) throw invalidPlanningField('task_execution_history.projectBinding', 'invalid project binding');
+  const paths = value.pathResolution;
+  return {
+    contract: value.contract as 'integrator-host-readiness-v1',
+    projectId: value.projectId as string,
+    projectRoot: value.projectRoot as string,
+    rootIdentity: value.rootIdentity as string,
+    policyRevision: value.policyRevision as string,
+    observedAtMs: value.observedAtMs as number,
+    runtimeInstanceId: value.runtimeInstanceId as string,
+    hostId: value.hostId as string,
+    harness: value.harness as 'codex',
+    harnessVersion: value.harnessVersion as string,
+    model: value.model as 'gpt-6-luna',
+    requiredTools: [...value.requiredTools as string[]],
+    availableTools: [...value.availableTools as string[]],
+    availableModels: [...value.availableModels as string[]],
+    resourceReady: true,
+    cwd: value.cwd as string,
+    pathResolution: {
+      requestedCwd: paths.requestedCwd as string,
+      canonicalCwd: paths.canonicalCwd as string,
+      rootPath: paths.rootPath as string,
+      contained: true,
+      identityMatches: true,
+    },
+  };
+}
+
 function taskExecutionContinuationsField(entry: unknown, field: string): TaskExecutionContinuation[] | undefined {
   if (!isRecord(entry) || entry.continuations === undefined) return undefined;
   const value = entry.continuations;
@@ -729,10 +800,11 @@ function taskExecutionContinuationsField(entry: unknown, field: string): TaskExe
   return value.map((item, index) => {
     const childField = `${field}.continuations[${index}]`;
     if (!isRecord(item)
-      || Object.keys(item).some(key => !['id', 'kind', 'instruction', 'inputId', 'requestHash', 'phase', 'nativeTurnId', 'summary', 'evidenceRefs', 'createdAt', 'updatedAt'].includes(key))
+      || Object.keys(item).some(key => !['id', 'kind', 'instruction', 'inputId', 'requestHash', 'requestedBy', 'phase', 'nativeTurnId', 'summary', 'evidenceRefs', 'createdAt', 'updatedAt'].includes(key))
       || typeof item.id !== 'string' || !/^[a-f0-9]{64}$/.test(item.id) || ids.has(item.id)
       || typeof item.inputId !== 'string' || !/^[a-f0-9]{64}$/.test(item.inputId) || inputs.has(item.inputId)
       || typeof item.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(item.requestHash)
+      || item.requestedBy !== undefined && (typeof item.requestedBy !== 'string' || !item.requestedBy.trim() || item.requestedBy.length > 256)
       || item.kind !== 'task-follow-up-v1'
       || typeof item.instruction !== 'string' || !item.instruction.trim() || item.instruction.length > 4000
       || !['intent', 'unknown', 'running', 'result'].includes(String(item.phase))
@@ -754,6 +826,7 @@ function taskExecutionContinuationsField(entry: unknown, field: string): TaskExe
       instruction: item.instruction,
       inputId: item.inputId,
       requestHash: item.requestHash,
+      ...(typeof item.requestedBy === 'string' ? { requestedBy: item.requestedBy } : {}),
       phase: item.phase as TaskExecutionContinuation['phase'],
       ...(typeof item.nativeTurnId === 'string' ? { nativeTurnId: item.nativeTurnId } : {}),
       ...(typeof item.summary === 'string' ? { summary: item.summary } : {}),
