@@ -789,16 +789,16 @@ function isTaskExecutionProjectBinding(value: unknown, receiptHostId: unknown): 
       || Object.keys(paths).some(key => !pathKeys.includes(key))
       || Object.keys(binding).length !== bindingKeys.length || Object.keys(paths).length !== pathKeys.length) return false;
   const strings = ['projectId', 'projectRoot', 'rootIdentity', 'policyRevision', 'runtimeInstanceId',
-    'hostId', 'harnessVersion', 'model', 'cwd'] as const;
+    'hostId', 'model', 'cwd'] as const;
   if (binding.contract !== 'integrator-host-readiness-v1' || strings.some(key => typeof binding[key] !== 'string' || !(binding[key] as string).trim())
-      || binding.hostId !== receiptHostId || binding.harness !== 'codex' || binding.model !== 'gpt-6-luna'
+      || typeof binding.harnessVersion !== 'string'
+      || binding.hostId !== receiptHostId || !['codex', 'zcode', 'opencode'].includes(String(binding.harness))
       || binding.resourceReady !== true || !Number.isSafeInteger(binding.observedAtMs) || (binding.observedAtMs as number) <= 0
-      || !Array.isArray(binding.requiredTools) || !binding.requiredTools.length
-      || binding.requiredTools.some(item => typeof item !== 'string' || !item.trim())
+      || !Array.isArray(binding.requiredTools) || binding.requiredTools.some(item => typeof item !== 'string' || !item.trim())
       || !Array.isArray(binding.availableTools) || binding.availableTools.some(item => typeof item !== 'string' || !item.trim())
       || !Array.isArray(binding.availableModels) || binding.availableModels.some(item => typeof item !== 'string' || !item.trim())
       || !binding.requiredTools.every(item => (binding.availableTools as string[]).includes(item as string))
-      || !(binding.availableModels as string[]).includes('gpt-6-luna')) return false;
+      || !(binding.availableModels as string[]).includes(String(binding.model))) return false;
   if (typeof paths.requestedCwd !== 'string' || typeof paths.canonicalCwd !== 'string'
       || typeof paths.rootPath !== 'string' || paths.contained !== true || paths.identityMatches !== true
       || paths.rootPath !== binding.projectRoot || paths.canonicalCwd !== binding.cwd) return false;
@@ -819,9 +819,9 @@ function normalizeTaskExecutionProjectBinding(value: unknown): NonNullable<TaskE
     observedAtMs: value.observedAtMs as number,
     runtimeInstanceId: value.runtimeInstanceId as string,
     hostId: value.hostId as string,
-    harness: value.harness as 'codex',
+    harness: value.harness as NonNullable<TaskExecutionReceipt['projectBinding']>['harness'],
     harnessVersion: value.harnessVersion as string,
-    model: value.model as 'gpt-6-luna',
+    model: value.model as string,
     requiredTools: [...value.requiredTools as string[]],
     availableTools: [...value.availableTools as string[]],
     availableModels: [...value.availableModels as string[]],

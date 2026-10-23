@@ -194,9 +194,9 @@ export interface TaskExecutionProjectBinding {
   observedAtMs: number;
   runtimeInstanceId: string;
   hostId: string;
-  harness: 'codex';
+  harness: 'codex' | 'zcode' | 'opencode';
   harnessVersion: string;
-  model: 'gpt-6-luna';
+  model: string;
   requiredTools: string[];
   availableTools: string[];
   availableModels: string[];

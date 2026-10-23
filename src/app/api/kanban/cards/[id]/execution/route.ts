@@ -61,7 +61,7 @@ function taskFingerprint(card: KanbanCard, actor: string, hostId: string, cwd: s
   const identity = {
     id: card.id, title: card.title, description: card.description, project: card.project,
     owner: card.owner ?? 'nikita', assignee: card.assignee ?? null, assignees: card.assignees,
-    actor, hostId, harness: 'codex', cwd, model: SESSION_MODEL,
+    actor, hostId, harness: projectBinding?.harness ?? 'codex', cwd, model: projectBinding?.model ?? SESSION_MODEL,
     ...(projectBinding ? { projectBinding } : {}),
   };
   return sha256(JSON.stringify(identity));
@@ -69,15 +69,20 @@ function taskFingerprint(card: KanbanCard, actor: string, hostId: string, cwd: s
 
 function scopedProjectReadiness(nodeInfo: RecordValue | undefined, savedProject: string, atMs = Date.now()): TaskExecutionProjectBinding | undefined {
   if (!nodeInfo || nodeInfo.projectReadinessContract !== PROJECT_READINESS_CONTRACT || typeof savedProject !== 'string' || !savedProject.trim()) return undefined;
+  // The binding is built from the route the herder reported: its harness and its model, never a
+  // codex constant. A route the board cannot name is a refusal, not a default.
+  const routeOutcome = projectRouteFromNodeInfo(nodeInfo);
+  if ('reason' in routeOutcome) return undefined;
+  const route = routeOutcome.route;
   const readiness = isRecord(nodeInfo.projectReadiness) ? nodeInfo.projectReadiness : undefined;
   const paths = readiness && isRecord(readiness.pathResolution) ? readiness.pathResolution : undefined;
-  const stringFields = ['projectId', 'projectRoot', 'rootIdentity', 'policyRevision', 'runtimeInstanceId', 'hostId', 'harnessVersion', 'cwd'];
+  const stringFields = ['projectId', 'projectRoot', 'rootIdentity', 'policyRevision', 'runtimeInstanceId', 'hostId', 'cwd'];
   if (!readiness || !paths || readiness.state !== 'ready'
       || stringFields.some(field => typeof readiness[field] !== 'string' || !(readiness[field] as string).trim())
       || readiness.projectId !== savedProject || readiness.hostId !== nodeInfo.hostId
       || typeof nodeInfo.hostId !== 'string' || !nodeInfo.hostId.trim()
       || typeof nodeInfo.nativeUser !== 'string' || !nodeInfo.nativeUser.trim()
-      || readiness.harness !== 'codex' || readiness.model !== SESSION_MODEL || readiness.resourceReady !== true
+      || readiness.harness !== route.harness || readiness.model !== route.model || readiness.resourceReady !== true
       || typeof readiness.observedAtMs !== 'number' || !Number.isSafeInteger(readiness.observedAtMs)
       || readiness.observedAtMs > atMs + 30_000 || atMs - readiness.observedAtMs > PROJECT_READINESS_MAX_AGE_MS
       || readiness.cwd !== paths.canonicalCwd || paths.rootPath !== readiness.projectRoot
@@ -87,14 +92,17 @@ function scopedProjectReadiness(nodeInfo: RecordValue | undefined, savedProject:
       || paths.requestedCwd !== paths.canonicalCwd || paths.canonicalCwd !== readiness.projectRoot
       || !path.isAbsolute(readiness.projectRoot as string) || !path.isAbsolute(readiness.cwd as string)
       || !path.isAbsolute(paths.requestedCwd)) return undefined;
+  // A harness without a scoped host probe reports no version; the codex route keeps its own.
+  if (route.harness === 'codex' && (typeof readiness.harnessVersion !== 'string' || !readiness.harnessVersion.trim())) return undefined;
   const requiredTools = readiness.requiredTools;
   const availableTools = readiness.availableTools;
   const availableModels = readiness.availableModels;
-  if (!Array.isArray(requiredTools) || requiredTools.length !== 1 || requiredTools[0] !== 'web_search'
+  if (!Array.isArray(requiredTools) || requiredTools.some(tool => typeof tool !== 'string' || !tool.trim())
+      || (route.harness === 'codex' && (requiredTools.length !== 1 || requiredTools[0] !== 'web_search'))
       || !Array.isArray(availableTools) || availableTools.some(tool => typeof tool !== 'string' || !tool.trim())
       || !requiredTools.every(tool => availableTools.includes(tool))
       || !Array.isArray(availableModels) || availableModels.some(model => typeof model !== 'string' || !model.trim())
-      || !availableModels.includes(SESSION_MODEL)) return undefined;
+      || !availableModels.includes(route.model)) return undefined;
   return {
     contract: PROJECT_READINESS_CONTRACT,
     projectId: readiness.projectId as string,
@@ -104,9 +112,9 @@ function scopedProjectReadiness(nodeInfo: RecordValue | undefined, savedProject:
     observedAtMs: readiness.observedAtMs,
     runtimeInstanceId: readiness.runtimeInstanceId as string,
     hostId: readiness.hostId as string,
-    harness: 'codex',
-    harnessVersion: readiness.harnessVersion as string,
-    model: SESSION_MODEL,
+    harness: route.harness,
+    harnessVersion: typeof readiness.harnessVersion === 'string' ? readiness.harnessVersion : '',
+    model: route.model,
     requiredTools: [...requiredTools] as string[],
     availableTools: [...availableTools] as string[],
     availableModels: [...availableModels] as string[],
@@ -412,7 +420,7 @@ function commitTaskContinuationResult(input: {
       || child.phase !== 'running' || child.nativeTurnId !== input.expectedChild.nativeTurnId
       || child.inputId !== input.expectedChild.inputId || child.requestHash !== input.expectedChild.requestHash
       || child.instruction !== input.expectedChild.instruction
-      || taskFingerprint(current, parent.startedBy, parent.hostId, input.cwd) !== parent.requestHash) {
+      || taskFingerprint(current, parent.startedBy, parent.hostId, input.cwd, parent.projectBinding) !== parent.requestHash) {
     return { conflict: true, serverCard: current };
   }
   const continuations = [...(parent.continuations ?? [])];
@@ -491,7 +499,7 @@ async function startTaskFollowUp(
   const session = isRecord(sessionPayload?.session) ? sessionPayload.session : undefined;
   const lastTurn = isRecord(session?.meta) && isRecord(session.meta.nativeLastTurn) ? session.meta.nativeLastTurn : undefined;
   if (!nodeInfo || nodeInfo.hostId !== parent.hostId || !session || session.id !== parent.nativeSessionId
-      || session.harness !== parent.harness || session.cwd !== cwd || session.model !== SESSION_MODEL
+      || session.harness !== parent.harness || session.cwd !== cwd || session.model !== expectedModel(parent)
       || session.status !== 'idle' || !lastTurn || lastTurn.turnId !== parent.nativeTurnId
       || lastTurn.status !== 'completed' || lastTurn.assistantSucceeded === false
       || lastTurn.cancelledByUser === true || lastTurn.transportLost === true) {
@@ -578,7 +586,7 @@ async function syncTaskFollowUp(context: AuthorizedTaskCard, body: RecordValue):
   try { before = await readExactTurn(); }
   catch { return continuationResponse(context.card, parent.operationId, child.id, 202); }
   if (!before.session || before.session.id !== parent.nativeSessionId || before.session.harness !== parent.harness
-      || before.session.cwd !== cwd || before.session.model !== SESSION_MODEL || !before.turn
+      || before.session.cwd !== cwd || before.session.model !== expectedModel(parent) || !before.turn
       || before.turn.turnId !== child.nativeTurnId || before.turn.status !== 'completed'
       || before.turn.assistantSucceeded === false || before.turn.cancelledByUser === true || before.turn.transportLost === true) {
     return continuationResponse(context.card, parent.operationId, child.id, 202);
@@ -590,7 +598,7 @@ async function syncTaskFollowUp(context: AuthorizedTaskCard, body: RecordValue):
   const details = isRecord(view?.details) ? view.details : undefined;
   const native = isRecord(details?.session) ? details.session : undefined;
   if (!details || view?.hostId !== parent.hostId || native?.id !== parent.nativeSessionId
-      || native?.harness !== parent.harness || native.cwd !== cwd || native.model !== SESSION_MODEL
+      || native?.harness !== parent.harness || native.cwd !== cwd || native.model !== expectedModel(parent)
       || details.historyUnavailable === true || !Array.isArray(details.messages)) {
     return continuationResponse(context.card, parent.operationId, child.id, 202);
   }
@@ -620,12 +628,23 @@ async function syncTaskFollowUp(context: AuthorizedTaskCard, body: RecordValue):
   return continuationResponse(saved, parent.operationId, child.id, 200);
 }
 
-function exactSessionView(result: HerderToolResult, hostId: string, sessionId: string, cwd: string): boolean {
+/** The model the launch route designated. A legacy receipt without a binding keeps the codex model. */
+function expectedModel(attempt: TaskExecutionReceipt): string {
+  return attempt.projectBinding?.model ?? SESSION_MODEL;
+}
+
+/** The harness the launch route designated. A legacy receipt without a binding keeps its own harness. */
+function expectedHarness(attempt: TaskExecutionReceipt): RouteHarness {
+  return attempt.projectBinding?.harness ?? attempt.harness;
+}
+
+function exactSessionView(result: HerderToolResult, hostId: string, sessionId: string, cwd: string,
+  harness: RouteHarness, model: string): boolean {
   const view = isRecord(result.structuredContent) ? result.structuredContent : undefined;
   const details = isRecord(view?.details) ? view.details : undefined;
   const native = isRecord(details?.session) ? details.session : undefined;
-  return view?.hostId === hostId && native?.id === sessionId && native?.harness === 'codex'
-    && native.cwd === cwd && native.model === SESSION_MODEL;
+  return view?.hostId === hostId && native?.id === sessionId && native?.harness === harness
+    && native.cwd === cwd && native.model === model;
 }
 
 /**
@@ -692,11 +711,12 @@ async function dispatchCreatedTask(input: {
   nativeSessionId: string;
   messageInputId: string;
   admittedStatus: number;
+  harness: RouteHarness;
 }): Promise<NextResponse> {
   let dispatchTool: HerderToolResult;
   try {
     dispatchTool = await callOwnerHerderTool('send_message', {
-      sessionId: input.nativeSessionId, harness: 'codex', inputId: input.messageInputId,
+      sessionId: input.nativeSessionId, harness: input.harness, inputId: input.messageInputId,
       message: taskPrompt(input.card), mode: 'steer', humanRequested: true,
     });
   } catch {
@@ -939,7 +959,7 @@ async function createTaskQuestion(
   const history = context.card.taskExecutionHistory ?? [];
   const attempt = history.at(-1);
   if (!attempt || attempt.operationId !== operationId || !['running', 'waiting'].includes(attempt.phase)
-      || !attempt.nativeTurnId || attempt.harness !== 'codex') {
+      || !attempt.nativeTurnId || !(ROUTE_HARNESSES as readonly string[]).includes(attempt.harness)) {
     return NextResponse.json({ error: 'current task execution cannot receive a question' }, { status: 409 });
   }
   const config = noticeConfig(true);
@@ -1145,10 +1165,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return unavailable('project_scoped_readiness_unavailable');
     }
     const nodeInfo = jsonFromTool(nodeInfoResult);
-    const projectBinding = scopedProjectReadiness(nodeInfo, context.card.project);
-    if (!projectBinding) {
-      return unavailable('project_scoped_execution_not_ready');
-    }
     // The launch harness and model are the project route the herder reported; a
     // route the board cannot name is refused, never guessed.
     const routeOutcome = projectRouteFromNodeInfo(nodeInfo);
@@ -1156,6 +1172,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return unavailable(routeOutcome.reason);
     }
     const projectRoute = routeOutcome.route;
+    const projectBinding = scopedProjectReadiness(nodeInfo, context.card.project);
+    if (!projectBinding) {
+      return unavailable('project_scoped_execution_not_ready');
+    }
     const hostId = projectBinding.hostId;
     const cwd = projectBinding.cwd;
     const requestHash = taskFingerprint(context.card, context.actor, hostId, cwd, projectBinding);
@@ -1236,13 +1256,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // Verify exact native host/session/CWD/model before sending any task text.
     let viewTool: HerderToolResult;
     try {
-      viewTool = await callOwnerHerderTool('fleet_session_view', { harness: 'codex', sessionId: createdSessionId });
+      viewTool = await callOwnerHerderTool('fleet_session_view', { harness: projectRoute.harness, sessionId: createdSessionId });
     } catch {
       return NextResponse.json({ ...taskExecutionSnapshot(createdCard), operationId,
         waitReason: 'Сессия создана; проверка её параметров временно недоступна. Повторите проверку этой же операции.',
         retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
-    if (!exactSessionView(viewTool, hostId, createdSessionId, cwd)) {
+    if (!exactSessionView(viewTool, hostId, createdSessionId, cwd, projectRoute.harness, projectRoute.model)) {
       const saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
         phase: 'stopped', nativeSessionId: createdSessionId,
         lastProgress: 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено.',
@@ -1253,7 +1273,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return dispatchCreatedTask({
       card: createdCard, tasksDir: context.tasksDir, actor: context.actor,
       operationId, requestHash, nativeSessionId: createdSessionId,
-      messageInputId, admittedStatus: 201,
+      messageInputId, admittedStatus: 201, harness: projectRoute.harness,
     });
   } catch {
     return NextResponse.json({ error: 'task execution request could not be processed safely' }, { status: 400 });
@@ -1322,7 +1342,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           waitReason: 'Сессия создана; проверка её параметров временно недоступна. Повторите проверку этой же операции.',
           retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
       }
-      if (!exactSessionView(viewTool, attempt.hostId, attempt.nativeSessionId, cwd)) {
+      if (!exactSessionView(viewTool, attempt.hostId, attempt.nativeSessionId, cwd, expectedHarness(attempt), expectedModel(attempt))) {
         const saved = saveReceiptProgress(id, context.tasksDir, operationId, attempt.requestHash, {
           phase: 'stopped', nativeSessionId: attempt.nativeSessionId,
           lastProgress: 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено.',
@@ -1339,7 +1359,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         card: current, tasksDir: context.tasksDir, actor: attempt.startedBy,
         operationId, requestHash: attempt.requestHash,
         nativeSessionId: attempt.nativeSessionId, messageInputId: attempt.messageInputId,
-        admittedStatus: 202,
+        admittedStatus: 202, harness: expectedHarness(attempt),
       });
     }
     if (!['running', 'waiting'].includes(attempt.phase) || !attempt.nativeSessionId) {
@@ -1352,7 +1372,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const attemptCwd = executionReceiptCwd(attempt);
     if (!session || session.id !== attempt.nativeSessionId || session.harness !== attempt.harness
       || !attemptCwd || session.cwd !== attemptCwd
-      || session.model !== SESSION_MODEL || typeof session.status !== 'string') {
+      || session.model !== expectedModel(attempt) || typeof session.status !== 'string') {
       return NextResponse.json({ error: 'native session identity could not be verified' }, { status: 502 });
     }
     const nativeLastTurn = isRecord(session.meta) && isRecord(session.meta.nativeLastTurn)
@@ -1414,7 +1434,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const confirmedLastTurn = isRecord(confirmedSession?.meta) && isRecord(confirmedSession.meta.nativeLastTurn)
       ? confirmedSession.meta.nativeLastTurn : undefined;
     if (!confirmedSession || confirmedSession.id !== attempt.nativeSessionId || confirmedSession.harness !== attempt.harness
-      || confirmedSession.cwd !== session.cwd || confirmedSession.model !== SESSION_MODEL || confirmedSession.status !== 'idle'
+      || confirmedSession.cwd !== session.cwd || confirmedSession.model !== expectedModel(attempt) || confirmedSession.status !== 'idle'
       || !confirmedLastTurn || confirmedLastTurn.turnId !== attempt.nativeTurnId || confirmedLastTurn.status !== 'completed'
       || confirmedLastTurn.assistantSucceeded === false || confirmedLastTurn.cancelledByUser === true
       || confirmedLastTurn.transportLost === true) {

@@ -61,17 +61,22 @@ function scopedReadiness(project = 'Demo', overrides: Record<string, unknown> = 
     requestedCwd: scopedProjectRoot, canonicalCwd: scopedProjectRoot, rootPath: scopedProjectRoot,
     contained: true, identityMatches: true,
   };
+  // The host reports the readiness of the route it names: the snapshot carries that harness and model.
+  const route = mocks.projectRouteOverride.value ?? { harness: 'codex', model: 'gpt-6-luna', state: 'ready' };
+  const harness = typeof route.harness === 'string' ? route.harness : 'codex';
+  const model = typeof route.model === 'string' ? route.model : 'gpt-6-luna';
+  const codex = harness === 'codex';
   return {
     hostId: 'roomhacker-server-100', nativeUser: 'operator',
     projectReadinessContract: 'integrator-host-readiness-v1',
-    projectRoute: mocks.projectRouteOverride.value ?? { harness: 'codex', model: 'gpt-6-luna', state: 'ready' },
+    projectRoute: route,
     projectReadiness: {
       state: 'ready', projectId: project, projectRoot: scopedProjectRoot,
       rootIdentity: 'exmanager-workspace-root-v1', policyRevision: 'scope-policy-7',
       observedAtMs: Date.now(), runtimeInstanceId: 'herder-runtime-12', hostId: 'roomhacker-server-100',
-      harness: 'codex', harnessVersion: 'codex-test-1', model: 'gpt-6-luna',
-      requiredTools: ['web_search'], availableTools: ['web_search', 'shell_exec'],
-      availableModels: ['gpt-6-luna'], resourceReady: true, cwd: scopedProjectRoot, pathResolution,
+      harness, harnessVersion: codex ? 'codex-test-1' : '', model,
+      requiredTools: codex ? ['web_search'] : [], availableTools: codex ? ['web_search', 'shell_exec'] : [],
+      availableModels: [model], resourceReady: true, cwd: scopedProjectRoot, pathResolution,
       ...overrides,
     },
   };
@@ -180,15 +185,16 @@ function toolResult(tool: string, args: Record<string, unknown>) {
       launchCwd: readiness.cwd,
     } : undefined;
     return { structuredContent: {
-      ok: true, created: true, inputId: args.inputId, harness: 'codex', sessionId, cwd: args.cwd,
+      ok: true, created: true, inputId: args.inputId, harness: readiness?.harness ?? 'codex', sessionId, cwd: args.cwd,
       ...(projectExecution ? { projectReadinessContract: args.projectReadinessContract, projectExecution } : {}),
     }, content: [] };
   }
   if (tool === 'fleet_session_view') {
-    const receiptCwd = mocks.currentCard.value?.taskExecutionHistory?.at(-1)?.projectBinding?.cwd ?? cwd;
+    const binding = mocks.currentCard.value?.taskExecutionHistory?.at(-1)?.projectBinding;
+    const receiptCwd = binding?.cwd ?? cwd;
     const result = { structuredContent: {
       hostId: 'roomhacker-server-100', details: {
-        session: { id: sessionId, harness: 'codex', cwd: receiptCwd, model: 'gpt-6-luna' },
+        session: { id: sessionId, harness: binding?.harness ?? 'codex', cwd: receiptCwd, model: binding?.model ?? 'gpt-6-luna' },
         historyUnavailable: false, messages: [{ role: 'assistant', text: 'Found two candidates' }],
       },
     }, content: [] };
