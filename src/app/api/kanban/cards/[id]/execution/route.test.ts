@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   taskExecutionSnapshot: vi.fn(),
   sessionInfo: { value: undefined as Record<string, unknown> | undefined },
   projectReadinessOverride: { value: undefined as Record<string, unknown> | undefined },
+  projectRouteOverride: { value: undefined as Record<string, unknown> | undefined },
   turnChangesAfterView: { value: false },
   cardChangesAfterView: { value: false },
 }));
@@ -63,6 +64,7 @@ function scopedReadiness(project = 'Demo', overrides: Record<string, unknown> = 
   return {
     hostId: 'roomhacker-server-100', nativeUser: 'operator',
     projectReadinessContract: 'integrator-host-readiness-v1',
+    projectRoute: mocks.projectRouteOverride.value ?? { harness: 'codex', model: 'gpt-6-luna', state: 'ready' },
     projectReadiness: {
       state: 'ready', projectId: project, projectRoot: scopedProjectRoot,
       rootIdentity: 'exmanager-workspace-root-v1', policyRevision: 'scope-policy-7',
@@ -236,6 +238,7 @@ describe('task execution API', () => {
     mocks.turnChangesAfterView.value = false;
     mocks.cardChangesAfterView.value = false;
     mocks.projectReadinessOverride.value = undefined;
+    mocks.projectRouteOverride.value = undefined;
     mocks.callOwnerHerderTool.mockImplementation(toolResult);
     mocks.validateTransition.mockReturnValue({ kind: 'accepted', patch: { column: 'in-progress' } });
     mocks.taskExecutionSnapshot.mockImplementation((card: KanbanCard) => ({
@@ -482,6 +485,40 @@ describe('task execution API', () => {
       mocks.callOwnerHerderTool.mockClear();
       const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
       if (!response) throw new Error('readiness response missing');
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ state: 'not_attempted' });
+      expect(mocks.updateCard).not.toHaveBeenCalled();
+      expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(0);
+    }
+  });
+
+  it('launches the harness and model of the project route the herder reported', async () => {
+    mocks.projectRouteOverride.value = { harness: 'opencode', model: 'omniroute/minimax-combo-m3.1', state: 'ready' };
+    const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('task execution response missing');
+    const creates = mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session');
+    expect(creates).toHaveLength(1);
+    expect(creates[0]![1]).toMatchObject({ harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' });
+  });
+
+  it('keeps a codex project route on the codex harness and model', async () => {
+    const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('task execution response missing');
+    const creates = mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session');
+    expect(creates).toHaveLength(1);
+    expect(creates[0]![1]).toMatchObject({ harness: 'codex', model: 'gpt-6-luna' });
+  });
+
+  it('refuses a launch with a concrete reason when the project route is not named', async () => {
+    for (const route of [
+      { state: 'unavailable', reason: 'project_route_unconfigured' },
+      { state: 'ready', harness: 'unknown-harness', model: 'gpt-6-luna' },
+    ]) {
+      mocks.projectRouteOverride.value = route;
+      mocks.updateCard.mockClear();
+      mocks.callOwnerHerderTool.mockClear();
+      const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+      if (!response) throw new Error('task execution response missing');
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({ state: 'not_attempted' });
       expect(mocks.updateCard).not.toHaveBeenCalled();

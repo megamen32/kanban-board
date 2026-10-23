@@ -26,6 +26,11 @@ const TASK_FOLLOW_UP_KIND = 'task-follow-up-v1' as const;
 const MAX_CONTINUATION_TEXT = 4_000;
 const PROJECT_READINESS_CONTRACT = 'integrator-host-readiness-v1' as const;
 const PROJECT_READINESS_MAX_AGE_MS = 30_000;
+/** The harnesses the owner MCP accepts for one project launch. */
+const ROUTE_HARNESSES = ['codex', 'zcode', 'opencode'] as const;
+type RouteHarness = (typeof ROUTE_HARNESSES)[number];
+/** The route states that name a usable project route; every other state is a refusal. */
+const ROUTE_READY_STATES = ['ready', 'available', 'resolved'];
 
 const isRecord = (value: unknown): value is RecordValue => !!value && typeof value === 'object' && !Array.isArray(value);
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -114,6 +119,24 @@ function scopedProjectReadiness(nodeInfo: RecordValue | undefined, savedProject:
       identityMatches: true,
     },
   };
+}
+
+/**
+ * The project route the owner herder reported for this project. The board never
+ * substitutes a harness of its own: an absent, refused or unknown route is a
+ * concrete refusal instead of a silent default.
+ */
+function projectRouteFromNodeInfo(nodeInfo: RecordValue | undefined): { route: { harness: RouteHarness; model: string } } | { reason: string } {
+  const raw = nodeInfo && isRecord(nodeInfo.projectRoute) ? nodeInfo.projectRoute : undefined;
+  if (!raw) return { reason: 'project_route_unavailable' };
+  const state = typeof raw.state === 'string' ? raw.state.trim().toLowerCase() : '';
+  const herderReason = typeof raw.reason === 'string' ? raw.reason.trim() : '';
+  if (!ROUTE_READY_STATES.includes(state)) return { reason: herderReason || 'project_route_unavailable' };
+  const harness = typeof raw.harness === 'string' ? raw.harness.trim() : '';
+  if (!(ROUTE_HARNESSES as readonly string[]).includes(harness)) return { reason: 'project_route_harness_unknown' };
+  const model = typeof raw.model === 'string' ? raw.model.trim() : '';
+  if (!model) return { reason: 'project_route_model_unavailable' };
+  return { route: { harness: harness as RouteHarness, model } };
 }
 
 function sameProjectBinding(left: TaskExecutionProjectBinding, right: TaskExecutionProjectBinding): boolean {
@@ -1125,12 +1148,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!projectBinding) {
       return unavailable('project_scoped_execution_not_ready');
     }
+    // The launch harness and model are the project route the herder reported; a
+    // route the board cannot name is refused, never guessed.
+    const routeOutcome = projectRouteFromNodeInfo(nodeInfo);
+    if ('reason' in routeOutcome) {
+      return unavailable(routeOutcome.reason);
+    }
+    const projectRoute = routeOutcome.route;
     const hostId = projectBinding.hostId;
     const cwd = projectBinding.cwd;
     const requestHash = taskFingerprint(context.card, context.actor, hostId, cwd, projectBinding);
     const intent: TaskExecutionReceipt = {
       operationId, requestHash, lastBoardVersion: context.card.version + 1, createInputId, messageInputId, phase: 'intent',
-      hostId, harness: 'codex', projectBinding, startedBy: context.actor,
+      hostId, harness: projectRoute.harness, projectBinding, startedBy: context.actor,
       ...(context.native ? { requestedBy: context.actor } : {}),
       createdAt: now(), updatedAt: now(),
     };
@@ -1143,7 +1173,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let createTool: HerderToolResult;
     try {
       createTool = await callOwnerHerderTool('fleet_create_session', {
-        inputId: createInputId, harness: 'codex', name, cwd, model: SESSION_MODEL, project: context.card.project,
+        inputId: createInputId, harness: projectRoute.harness, name, cwd, model: projectRoute.model, project: context.card.project,
         projectReadinessContract: projectBinding.contract,
         projectReadiness: {
           state: 'ready',
