@@ -9,6 +9,7 @@ import { taskExecutionSnapshot } from '@/lib/kanban/task-execution';
 import { callOwnerHerderTool, type HerderToolResult } from '@/lib/kanban/task-execution-client';
 import { validateTransition } from '@/lib/kanban/transition-policy';
 import { markSourceIntentConsumed } from '../../../../../../lib/kanban/source-operation';
+import { currentNativeProjectContext } from '../../../../../../lib/kanban/native-request-context';
 import type { KanbanCard, KanbanCardUpdates, TaskDecisionRequestReference, TaskExecutionContinuation, TaskExecutionProjectBinding, TaskExecutionReceipt } from '@/lib/kanban/types';
 import type { NativeProjectAccessContext } from '@/lib/kanban/native-project-access';
 
@@ -1081,7 +1082,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   let context: AuthorizedTaskCardResult;
   try {
     const { id } = await params;
-    context = await authorizedTaskCard(request, id);
+    context = await authorizedTaskCard(request, id, 'write', currentNativeProjectContext());
   } catch {
     return NextResponse.json({ error: 'task execution identity unavailable' }, { status: 400 });
   }
