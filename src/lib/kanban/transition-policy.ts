@@ -202,7 +202,8 @@ export function validateTransition(
     return { kind: 'accepted', patch };
   }
 
-  if (hasInternalTeamAuthorization(context) && (requested.completionEvidence ?? []).some(item =>
+  // An integrator-process card never completes on an automatic transition.
+  if (!isIntegratorProcessCard(before) && hasInternalTeamAuthorization(context) && (requested.completionEvidence ?? []).some(item =>
     typeof item.type === 'string' && item.type.trim() && Object.keys(item).some(key => key !== 'type')
   ) && !(before.requiresApprovalFrom ?? []).length && !(policyRequested.requiresApprovalFrom ?? []).length) {
     return { kind: 'accepted', patch: { ...patch, completedBy: context.internalTeamAuthorization!.actor,
@@ -252,7 +253,8 @@ export function validateTransition(
   }
 
   const completionEvidence = context.trustedCompletionEvidence ?? [];
-  if (completionEvidence.some(isMachineVerifiableEvidence)) {
+  // An integrator-process card never completes on an automatic transition.
+  if (!isIntegratorProcessCard(before) && completionEvidence.some(isMachineVerifiableEvidence)) {
     return {
       kind: 'accepted',
       patch: {
@@ -369,6 +371,18 @@ function hasInternalTeamAuthorization(context: TransitionContext): boolean {
 function hasOwnerAuthorization(context: TransitionContext): boolean {
   return context.ownerAuthorization?.actor === NIKITA_ACTOR
     && Object.keys(context.ownerAuthorization.evidence).length > 0;
+}
+
+/**
+ * Identify an integrator-process card by its immutable source-admission binding.
+ * The canonical catalog-link path already recognizes an admitted integrator task
+ * by exactly this classification, and the binding can never be added later.
+ *
+ * @param card Card state before the requested transition.
+ * @returns True when the card belongs to the integrator process.
+ */
+function isIntegratorProcessCard(card: KanbanCard): boolean {
+  return card.sourceAdmission?.classification === 'explicit-task';
 }
 
 /**

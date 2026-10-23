@@ -1,5 +1,5 @@
 import type { KanbanCard } from '@/lib/kanban/types';
-import { taskSessionUrl } from '../../lib/kanban/task-execution';
+import { SESSION_UI_BY_HOST, taskSessionUrl } from '../../lib/kanban/task-execution';
 
 export type ExecutionSnapshot = {
   cardId: string;
@@ -176,11 +176,22 @@ export function getLatestResult(card: KanbanCard) {
   return card.resultHistory?.at(-1);
 }
 
-/** Only links to the verified native session host may be shown as session links. */
+/** Session link origins are exactly the ones the session URL generator uses. */
+const VERIFIED_SESSION_ORIGINS: ReadonlySet<string> = new Set(
+  Object.values(SESSION_UI_BY_HOST).flatMap(base => {
+    try {
+      return [new URL(base).origin];
+    } catch {
+      return [];
+    }
+  }),
+);
+
+/** Only links to a verified native session host may be shown as session links. */
 export function isVerifiedSessionUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && url.hostname === 'agent.bezrabotnyi.com';
+    return url.protocol === 'https:' && VERIFIED_SESSION_ORIGINS.has(url.origin);
   } catch {
     return false;
   }

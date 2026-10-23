@@ -11,7 +11,7 @@ export interface TaskExecutionSnapshot {
   sessionUrl?: string;
 }
 
-const SESSION_UI_BY_HOST: Readonly<Record<string, string>> = {
+export const SESSION_UI_BY_HOST: Readonly<Record<string, string>> = {
   'roomhacker-server-100': 'https://agent.bezrabotnyi.com',
   'server-44': 'https://agent44.bezrabotnyi.com',
   'roomhacker-server-88': 'https://agent88.bezrabotnyi.com',

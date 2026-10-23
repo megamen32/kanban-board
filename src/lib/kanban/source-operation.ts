@@ -33,7 +33,7 @@ export interface SourceOperationRecord {
   /** Old version-1 records without classification/intent fields are explicit tasks. */
   classification?: SourceClassification;
   intentId?: string;
-  intentState: 'WAITING_FOR_COMMIT' | 'PENDING' | 'CANCELLED' | 'NOT_APPLICABLE';
+  intentState: 'WAITING_FOR_COMMIT' | 'PENDING' | 'CONSUMED' | 'CANCELLED' | 'NOT_APPLICABLE';
   state: 'PREPARED' | 'COMMITTED' | 'CANCELLED';
   publication: 'NOT_STARTED' | 'ATTEMPTED';
   updatedAt: string;
@@ -353,7 +353,10 @@ export function cancelSourceOperationForCardLocked(card: KanbanCard, tasksDir: s
   }
 }
 
-/** ID-only outbox view for the later designated dispatcher; it never launches work. */
+/**
+ * ID-only outbox view for the later designated dispatcher; it never launches work.
+ * Terminal intents (CANCELLED, CONSUMED) are never issued again.
+ */
 export function listPendingSourceIntents(tasksDir: string, findCard: (id: string) => KanbanCard | null): Array<Pick<SourceOperationRecord, 'operationKey' | 'requestHash' | 'cardId' | 'intentId'>> {
   return withSourceOperationLock(tasksDir, () => {
     const journal = readJournal(tasksDir);
@@ -362,5 +365,53 @@ export function listPendingSourceIntents(tasksDir: string, findCard: (id: string
         && typeof record.intentId === 'string' && record.state === 'COMMITTED'
         && record.intentState === 'PENDING' && sourceAdmissionMatches(findCard(record.cardId), record))
       .map(({ operationKey, requestHash, cardId, intentId }) => ({ operationKey, requestHash, cardId, intentId }));
+  });
+}
+
+export type SourceIntentConsumptionResult =
+  | { status: 'consumed'; operationKey: string; cardId: string; intentId: string }
+  | { status: 'already-consumed'; operationKey: string; cardId: string; intentId: string }
+  | { status: 'not-consumable'; reason: 'not-a-launch-intent' | 'intent-not-pending' | 'operation-not-committed'; operationKey: string; cardId: string; intentId?: string };
+
+/**
+ * Terminal transition of a launch intent: the designated launch path already
+ * committed its receipt, so the intent is spent and must never be issued again.
+ * The caller owns the launch and the receipt proof; this function owns only the
+ * journal state, so it never starts work and never touches the card.
+ *
+ * Idempotent: a repeated call reports `already-consumed` and leaves the journal
+ * byte-identical. Call it without holding the writer lock.
+ */
+export function markSourceIntentConsumed(
+  tasksDir: string,
+  consumption: { operationKey: string; intentId: string },
+): SourceIntentConsumptionResult {
+  return withSourceOperationLock(tasksDir, () => {
+    const journal = readJournal(tasksDir);
+    const record = journal.operations[consumption.operationKey];
+    if (!record) throw new Error('unknown source operation; refusing intent consumption');
+    const intentId = record.intentId;
+    if (typeof intentId !== 'string') {
+      return { status: 'not-consumable', reason: 'not-a-launch-intent', operationKey: record.operationKey, cardId: record.cardId };
+    }
+    if (intentId !== consumption.intentId) {
+      throw new Error('source intent id mismatch; refusing intent consumption');
+    }
+    if (record.intentState === 'CONSUMED') {
+      return { status: 'already-consumed', operationKey: record.operationKey, cardId: record.cardId, intentId };
+    }
+    if (record.state === 'CANCELLED' || record.intentState === 'CANCELLED') {
+      return { status: 'not-consumable', reason: 'intent-not-pending', operationKey: record.operationKey, cardId: record.cardId, intentId };
+    }
+    if (record.state !== 'COMMITTED') {
+      return { status: 'not-consumable', reason: 'operation-not-committed', operationKey: record.operationKey, cardId: record.cardId, intentId };
+    }
+    if (record.intentState !== 'PENDING') {
+      return { status: 'not-consumable', reason: 'intent-not-pending', operationKey: record.operationKey, cardId: record.cardId, intentId };
+    }
+    record.intentState = 'CONSUMED';
+    record.updatedAt = new Date().toISOString();
+    writeJournal(tasksDir, journal);
+    return { status: 'consumed', operationKey: record.operationKey, cardId: record.cardId, intentId };
   });
 }

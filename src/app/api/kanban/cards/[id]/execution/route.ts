@@ -8,6 +8,7 @@ import { findCardById, updateCard } from '@/lib/kanban/file-store';
 import { taskExecutionSnapshot } from '@/lib/kanban/task-execution';
 import { callOwnerHerderTool, type HerderToolResult } from '@/lib/kanban/task-execution-client';
 import { validateTransition } from '@/lib/kanban/transition-policy';
+import { markSourceIntentConsumed } from '../../../../../../lib/kanban/source-operation';
 import type { KanbanCard, KanbanCardUpdates, TaskDecisionRequestReference, TaskExecutionContinuation, TaskExecutionProjectBinding, TaskExecutionReceipt } from '@/lib/kanban/types';
 import type { NativeProjectAccessContext } from '@/lib/kanban/native-project-access';
 
@@ -603,6 +604,61 @@ function exactSessionView(result: HerderToolResult, hostId: string, sessionId: s
     && native.cwd === cwd && native.model === SESSION_MODEL;
 }
 
+/**
+ * B04c: once the launch receipt is durable the source launch intent is spent.
+ * This transition owns only the journal state, so it never starts work and never
+ * invalidates the running session; a refused transition is recorded on the card.
+ */
+function consumeLaunchIntent(
+  card: KanbanCard,
+  tasksDir: string,
+  operationId: string,
+  requestHash: string,
+): KanbanCard | undefined {
+  const binding = card.sourceAdmission;
+  if (!binding || typeof binding.operationKey !== 'string' || typeof binding.intentId !== 'string') return undefined;
+  let refusal: string | undefined;
+  try {
+    const result = markSourceIntentConsumed(tasksDir, { operationKey: binding.operationKey, intentId: binding.intentId });
+    if (result.status === 'not-consumable') refusal = result.reason;
+  } catch {
+    refusal = 'intent-transition-refused';
+  }
+  if (!refusal) return undefined;
+  return saveReceiptProgress(card.id, tasksDir, operationId, requestHash, {
+    lastProgress: `Запуск выполнен, но intent источника не закрыт (${refusal}); повторный запуск запрещён.`,
+    lastProgressAt: now(),
+  });
+}
+
+/**
+ * B04d: an ambiguous launch outcome may already have produced a native session,
+ * so the source launch intent is spent and is never issued again. Only a receipt
+ * that proves the launch did not happen (phase `stopped`) keeps the intent PENDING.
+ */
+function closeLaunchIntentOnUnknownOutcome(
+  card: KanbanCard,
+  tasksDir: string,
+  operationId: string,
+  requestHash: string,
+  phase: 'create-unknown' | 'dispatch-unknown',
+  note: string,
+): KanbanCard {
+  const binding = card.sourceAdmission;
+  if (!binding || typeof binding.operationKey !== 'string' || typeof binding.intentId !== 'string') return card;
+  let refusal: string | undefined;
+  try {
+    const result = markSourceIntentConsumed(tasksDir, { operationKey: binding.operationKey, intentId: binding.intentId });
+    if (result.status === 'not-consumable') refusal = result.reason;
+  } catch {
+    refusal = 'intent-transition-refused';
+  }
+  const lastProgress = refusal ? `${note} Intent источника не закрыт (${refusal}).` : note;
+  return saveReceiptProgress(card.id, tasksDir, operationId, requestHash, {
+    phase, lastProgress, lastProgressAt: now(),
+  }) ?? card;
+}
+
 async function dispatchCreatedTask(input: {
   card: KanbanCard;
   tasksDir: string;
@@ -624,7 +680,11 @@ async function dispatchCreatedTask(input: {
       phase: 'dispatch-unknown', nativeSessionId: input.nativeSessionId,
       dispatchReceiptText: 'owner MCP dispatch outcome unknown; never replay this operation',
     });
-    return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : { cardId: input.card.id, state: 'unknown' as const }), operationId: input.operationId, retryable: false }, {
+    // B04d: the native session already exists, so an ambiguous dispatch closes the
+    // launch intent; the same work is never issued a second time.
+    const closed = saved ? closeLaunchIntentOnUnknownOutcome(saved, input.tasksDir, input.operationId, input.requestHash,
+      'dispatch-unknown', 'Исход передачи не подтверждён; сессия уже создана, intent источника закрыт — повторный запуск запрещён.') : undefined;
+    return NextResponse.json({ ...(closed ? taskExecutionSnapshot(closed) : (saved ? taskExecutionSnapshot(saved) : { cardId: input.card.id, state: 'unknown' as const })), operationId: input.operationId, retryable: false }, {
       status: 202, headers: { 'Cache-Control': 'no-store' },
     });
   }
@@ -649,7 +709,18 @@ async function dispatchCreatedTask(input: {
     const startTransition = validateTransition(current, { column: 'in-progress' }, { origin: 'automation', actor: input.actor });
     return startTransition.kind === 'accepted' ? startTransition.patch : {};
   } : undefined);
-  const snapshot = updated ? taskExecutionSnapshot(updated) : { cardId: input.card.id, state: 'unknown' as const };
+  // B04c: the launch receipt is durable now, so the source launch intent is spent.
+  // A refused transition never invalidates the running session.
+  // B04d: an unconfirmed dispatch is an ambiguous outcome — the native session
+  // already exists, so the launch intent is closed there as well.
+  let launchedCard = updated;
+  if (updated && admitted) {
+    launchedCard = consumeLaunchIntent(input.card, input.tasksDir, input.operationId, input.requestHash) ?? updated;
+  } else if (updated) {
+    launchedCard = closeLaunchIntentOnUnknownOutcome(updated, input.tasksDir, input.operationId, input.requestHash,
+      'dispatch-unknown', 'Передача задания не подтверждена; сессия уже создана, intent источника закрыт — повторный запуск запрещён.');
+  }
+  const snapshot = launchedCard ? taskExecutionSnapshot(launchedCard) : { cardId: input.card.id, state: 'unknown' as const };
   return NextResponse.json({ ...snapshot, operationId: input.operationId, retryable: false }, {
     status: admitted ? input.admittedStatus : 202,
     headers: { 'Cache-Control': 'no-store' },
@@ -1090,7 +1161,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       const saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
         phase: 'create-unknown', createReceiptText: 'owner MCP create outcome unknown; never replay under a new operation',
       });
-      const snapshot = saved ? taskExecutionSnapshot(saved) : { cardId: context.card.id, state: 'unknown' as const };
+      // B04d: an unknown create outcome may already have produced a native session,
+      // so the launch intent is closed and no new operation may start it again.
+      const closed = saved ? closeLaunchIntentOnUnknownOutcome(saved, context.tasksDir, operationId, requestHash,
+        'create-unknown', 'Исход создания сессии не подтверждён; intent источника закрыт — повторный запуск запрещён.') : undefined;
+      const snapshot = closed ? taskExecutionSnapshot(closed) : { cardId: context.card.id, state: 'unknown' as const };
       return NextResponse.json({ ...snapshot, operationId, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
     const createText = textOf(createTool);
@@ -1109,7 +1184,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       const saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
         phase: 'create-unknown', createReceiptText: createText,
       });
-      const snapshot = saved ? taskExecutionSnapshot(saved) : { cardId: context.card.id, state: 'unknown' as const };
+      // B04d: the create receipt did not prove a scoped session, so the outcome stays
+      // ambiguous and the launch intent is closed instead of being issued again.
+      const closed = saved ? closeLaunchIntentOnUnknownOutcome(saved, context.tasksDir, operationId, requestHash,
+        'create-unknown', 'Создание сессии не подтверждено; intent источника закрыт — повторный запуск запрещён.') : undefined;
+      const snapshot = closed ? taskExecutionSnapshot(closed) : { cardId: context.card.id, state: 'unknown' as const };
       return NextResponse.json({ ...snapshot, operationId, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
 
