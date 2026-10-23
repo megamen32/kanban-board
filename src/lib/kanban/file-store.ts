@@ -4,6 +4,7 @@ import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
 import { DEFAULT_COLUMNS, parseCatalogTaskLink, PLANNING_VERSION } from './types';
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
+import { approvalListForProject } from './project-reviewers';
 import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskExecutionContinuation, TaskExecutionReceipt, TaskResult, TaskReviewRecord } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
@@ -159,7 +160,7 @@ export function createCard(title: string, description: string = '', column: Kanb
   return withSourceOperationLock(tasksDir, () => createCardRecord(title, description, column, priority, tags, project, assignees, tasksDir, dueAt));
 }
 
-function createCardRecord(title: string, description: string, column: KanbanColumn, priority: Priority, tags: string[], project: string | undefined, assignees: string[], tasksDir: string, dueAt?: string, id = uuidv4(), sourceAdmission?: SourceAdmissionBinding, sourceOutcome?: { source: string; needsReview: boolean }): KanbanCard {
+function createCardRecord(title: string, description: string, column: KanbanColumn, priority: Priority, tags: string[], project: string | undefined, assignees: string[], tasksDir: string, dueAt?: string, id = uuidv4(), sourceAdmission?: SourceAdmissionBinding, sourceOutcome?: { source: string; needsReview: boolean }, requiresApprovalFrom?: string[]): KanbanCard {
   if (!project?.trim()) throw new Error('project is required for new cards');
   ensureDir(tasksDir);
   const now = new Date().toISOString();
@@ -185,6 +186,7 @@ function createCardRecord(title: string, description: string, column: KanbanColu
     owner: 'nikita',
     shared: false,
     ...defaultPlanningMetadata(),
+    ...(requiresApprovalFrom?.length ? { requiresApprovalFrom } : {}),
     ...(sourceOutcome ? { source: sourceOutcome.source, needsReview: sourceOutcome.needsReview } : {}),
   };
 
@@ -205,7 +207,7 @@ export function createAdmittedCard(input: {
     input.assignees, tasksDir, input.dueAt, input.id, input.sourceAdmission,
     classification === 'explicit-task' ? undefined : {
       source: `source:${classification}`, needsReview: classification === 'ambiguous',
-    });
+    }, classification === 'explicit-task' ? approvalListForProject(input.project) : undefined);
 }
 
 export type KanbanCardUpdates = TypedKanbanCardUpdates & Partial<Pick<KanbanCard, 'version'>>;
