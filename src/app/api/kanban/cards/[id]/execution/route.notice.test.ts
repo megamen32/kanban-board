@@ -16,6 +16,7 @@ const harness = vi.hoisted(() => ({
 vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => harness.identity,
   identityFromRequest: () => harness.identity,
+  nativeProjectAccessContextFromRequest: async () => null,
 }));
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope: () => harness.tasksDir }));
 vi.mock('@/lib/kanban/file-store', async () => import('../../../../../../lib/kanban/file-store'));
