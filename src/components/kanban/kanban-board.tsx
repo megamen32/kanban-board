@@ -227,10 +227,10 @@ export function KanbanBoard() {
               <TabsTrigger value="closed">Закрытые ({counts.done + counts.archived})</TabsTrigger>
             </TabsList>
           </div>
-          <TabsContent value="dashboard" className="min-h-0">
+          <TabsContent value="dashboard" className="min-h-0 overflow-y-auto">
             <IntegratorTaskDashboard cards={derivedCards} onOpen={setSelectedCard} onRefresh={refresh} />
           </TabsContent>
-          <TabsContent value="execution" className="min-h-0">
+          <TabsContent value="execution" className="min-h-0 overflow-y-auto">
             {view === 'list' ? (
           <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} authoritativeCards={cards} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
             ) : (
