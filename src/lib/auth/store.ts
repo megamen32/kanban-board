@@ -197,6 +197,23 @@ export class AuthStore {
     this.save(state);
   }
 
+  /**
+   * Operator revocation for one client identity: drop every access token that
+   * was issued to that client id, so a retired client loses the board at once.
+   */
+  revokeClientAccessTokens(clientId: string): number {
+    const state = this.load();
+    let removed = 0;
+    for (const [hash, record] of Object.entries(state.accessTokens)) {
+      if (record.clientId === clientId) {
+        delete state.accessTokens[hash];
+        removed += 1;
+      }
+    }
+    if (removed > 0) this.save(state);
+    return removed;
+  }
+
   private load(): AuthState {
     if (!fs.existsSync(this.statePath)) return emptyState();
     const parsed = JSON.parse(fs.readFileSync(this.statePath, 'utf8')) as Partial<AuthState>;

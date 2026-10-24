@@ -209,6 +209,12 @@ export interface KanbanMcpOptions {
     envelope: SignedTodoMcpReadScope,
     args: Record<string, unknown>,
   ) => TodoMcpProjectEnsureClaims;
+  /**
+   * Restricts this principal to the board's read-only tools. The mutating
+   * tools are not registered at all, so the advertised tool list and every
+   * attempted mutation are read-only for this identity.
+   */
+  readOnlyApp?: boolean;
 }
 
 function verifyReadScope(
@@ -244,6 +250,7 @@ function verifyProjectEnsureScope(
 
 export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptions = {}): McpServer {
   const tasksDir = tasksDirForScope(scope);
+  const readOnlyApp = options.readOnlyApp === true;
   const server = new McpServer(
     { name: `excode-kanban-${scope}`, version: '1.0.0' },
     {
@@ -295,142 +302,146 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     return textResult({ card, scope });
   });
 
-  server.registerTool('kanban.capture_inbox', {
-    title: 'Capture raw transcript to Inbox',
-    description: 'Store one raw voice transcription or note in Inbox. Do not classify it, assign a role, invent a deadline, or move any existing card.',
-    inputSchema: { transcript: z.string().min(1), owner: z.string().min(1).optional() },
-    annotations: { openWorldHint: false },
-  }, async ({ transcript, owner }) => {
-    if (options.requireExManagerReadScope) throw new Error('raw shared service Inbox capture is disabled');
-    const clean = transcript.trim();
-    const basic = createCard(clean.replace(/\s+/g, ' ').slice(0, 96), clean, 'inbox', 'medium', ['inbox-capture'], 'Inbox', [], tasksDir);
-    const result = updateCard(basic.id, {
-      owner: owner ?? 'nikita', source: 'hermes:transcript', needsReview: true,
-    }, undefined, tasksDir);
-    if ('conflict' in result) throw new Error(`Version conflict for ${basic.id}`);
-    return textResult({ card: result, scope, transition: 'captured_to_inbox' });
-  });
-
-  server.registerTool('kanban.change', {
-    title: 'Create or update a Kanban card',
-    description: 'Create a card or update an existing card in the authorized board.',
-    inputSchema: {
-      mode: z.enum(['new', 'edit']),
-      cardId: z.string().min(1).optional(),
-      expectedVersion: z.number().int().optional(),
-      ownerCommandConfirmed: z.boolean().optional(),
-      ownerCompletionConfirmed: z.boolean().optional(),
-      exmanagerScope: z.object({ payload: z.string().min(1).max(24_000), signature: z.string().min(1).max(128) }).strict().optional(),
-      ...cardInput,
-    },
-    annotations: { openWorldHint: false },
-  }, async (input) => {
-    const {
-      mode,
-      cardId,
-      expectedVersion,
-      ownerCommandConfirmed,
-      ownerCompletionConfirmed,
-      exmanagerScope,
-      title,
-      description,
-      project,
-      column,
-      priority,
-      tags,
-      assignees,
-      dueAt,
-      ...planningInput
-    } = input as typeof input & ChangeInput;
-    const scopeArgs = Object.fromEntries(Object.entries(input).filter(([key, value]) => key !== 'exmanagerScope' && value !== undefined));
-    const callerScope = verifyWriteScope(options, exmanagerScope, scopeArgs);
-    const internalTeamAuthorization = options.allowInternalTeamCommands && (!options.requireExManagerWriteScope || callerScope)
-      ? { actor: 'exmanager-service', evidence: { type: 'authenticated_internal_team_command', service: 'exmanager-airlock-service' } }
-      : undefined;
-    if (internalTeamAuthorization && mode === 'edit' && (!Number.isSafeInteger(expectedVersion) || expectedVersion! < 1)) {
-      throw new Error('expectedVersion is required for internal team edits');
-    }
-    // Trust comes from the authenticated service principal, never the payload.
-    const ownerAuthorization = options.allowConfirmedOwnerCommands && ownerCommandConfirmed === true
-      && (!options.requireExManagerWriteScope || callerScope?.owner === true)
-      ? { actor: NIKITA_ACTOR, evidence: { type: 'airlock_confirmed_command', service: 'exmanager-airlock-service' } }
-      : undefined;
-    const requested = requestedUpdates({
-      title,
-      description,
-      project,
-      column,
-      priority,
-      tags,
-      assignees,
-      dueAt,
-      ...planningInput,
+  if (!readOnlyApp) {
+    server.registerTool('kanban.capture_inbox', {
+      title: 'Capture raw transcript to Inbox',
+      description: 'Store one raw voice transcription or note in Inbox. Do not classify it, assign a role, invent a deadline, or move any existing card.',
+      inputSchema: { transcript: z.string().min(1), owner: z.string().min(1).optional() },
+      annotations: { openWorldHint: false },
+    }, async ({ transcript, owner }) => {
+      if (options.requireExManagerReadScope) throw new Error('raw shared service Inbox capture is disabled');
+      const clean = transcript.trim();
+      const basic = createCard(clean.replace(/\s+/g, ' ').slice(0, 96), clean, 'inbox', 'medium', ['inbox-capture'], 'Inbox', [], tasksDir);
+      const result = updateCard(basic.id, {
+        owner: owner ?? 'nikita', source: 'hermes:transcript', needsReview: true,
+      }, undefined, tasksDir);
+      if ('conflict' in result) throw new Error(`Version conflict for ${basic.id}`);
+      return textResult({ card: result, scope, transition: 'captured_to_inbox' });
     });
+  }
 
-    // Completion is a distinct direct-owner delegation. Ordinary automation
-    // and caller-supplied completion evidence still cannot finish a card.
-    if (ownerCompletionConfirmed === true && (!ownerAuthorization || mode !== 'edit'
-      || column !== 'done' || !Number.isSafeInteger(expectedVersion) || expectedVersion! < 1
-      || Object.keys(requested).some(key => key !== 'column'))) {
-      throw new Error('owner completion requires trusted service authority and an exact status-only edit');
-    }
-    const ownerCompletionAuthorization = ownerCompletionConfirmed === true ? ownerAuthorization : undefined;
-
-    if (mode === 'new') {
-      if (!title) throw new Error('title is required for mode=new');
-      if (!project) throw new Error('project is required for mode=new');
-      if (callerScope && !callerScope.owner && !callerScope.projects.includes(project)) {
-        throw new Error('Todo destination project is outside the caller write scope');
-      }
-      validatePlanningInput({ ...planningInput, column, title, project });
-      const decision = validateTransition(creationBaseline(), requested, {
-        origin: 'mcp',
-        actor: 'mcp',
-        isCreation: true,
-        ownerAuthorization,
-        internalTeamAuthorization,
-      });
-      if (decision.kind === 'rejected') throw new Error(decision.reason);
-
-      const basicCard = createCard(
+  if (!readOnlyApp) {
+    server.registerTool('kanban.change', {
+      title: 'Create or update a Kanban card',
+      description: 'Create a card or update an existing card in the authorized board.',
+      inputSchema: {
+        mode: z.enum(['new', 'edit']),
+        cardId: z.string().min(1).optional(),
+        expectedVersion: z.number().int().optional(),
+        ownerCommandConfirmed: z.boolean().optional(),
+        ownerCompletionConfirmed: z.boolean().optional(),
+        exmanagerScope: z.object({ payload: z.string().min(1).max(24_000), signature: z.string().min(1).max(128) }).strict().optional(),
+        ...cardInput,
+      },
+      annotations: { openWorldHint: false },
+    }, async (input) => {
+      const {
+        mode,
+        cardId,
+        expectedVersion,
+        ownerCommandConfirmed,
+        ownerCompletionConfirmed,
+        exmanagerScope,
         title,
-        description || '',
-        decision.patch.column ?? column,
+        description,
+        project,
+        column,
         priority,
         tags,
+        assignees,
+        dueAt,
+        ...planningInput
+      } = input as typeof input & ChangeInput;
+      const scopeArgs = Object.fromEntries(Object.entries(input).filter(([key, value]) => key !== 'exmanagerScope' && value !== undefined));
+      const callerScope = verifyWriteScope(options, exmanagerScope, scopeArgs);
+      const internalTeamAuthorization = options.allowInternalTeamCommands && (!options.requireExManagerWriteScope || callerScope)
+        ? { actor: 'exmanager-service', evidence: { type: 'authenticated_internal_team_command', service: 'exmanager-airlock-service' } }
+        : undefined;
+      if (internalTeamAuthorization && mode === 'edit' && (!Number.isSafeInteger(expectedVersion) || expectedVersion! < 1)) {
+        throw new Error('expectedVersion is required for internal team edits');
+      }
+      // Trust comes from the authenticated service principal, never the payload.
+      const ownerAuthorization = options.allowConfirmedOwnerCommands && ownerCommandConfirmed === true
+        && (!options.requireExManagerWriteScope || callerScope?.owner === true)
+        ? { actor: NIKITA_ACTOR, evidence: { type: 'airlock_confirmed_command', service: 'exmanager-airlock-service' } }
+        : undefined;
+      const requested = requestedUpdates({
+        title,
+        description,
         project,
-        decision.patch.assignees ?? [],
-        tasksDir,
-        decision.patch.dueAt === undefined || decision.patch.dueAt === null
-          ? undefined
-          : decision.patch.dueAt,
-      );
-      const persisted = Object.fromEntries(
-        Object.entries(decision.patch).filter(([key]) => !['title', 'description', 'project', 'column', 'priority', 'tags', 'assignees', 'dueAt'].includes(key)),
-      ) as KanbanCardUpdates;
-      const card = Object.keys(persisted).length > 0
-        ? updateCard(basicCard.id, persisted, undefined, tasksDir) as KanbanCard
-        : basicCard;
-      return textResult({ card, scope, transition: decision });
-    }
+        column,
+        priority,
+        tags,
+        assignees,
+        dueAt,
+        ...planningInput,
+      });
 
-    if (!cardId) throw new Error('cardId is required for mode=edit');
-    const before = findCardById(cardId, tasksDir);
-    if (!before) throw new Error(`Card ${cardId} not found`);
-    if (callerScope && !callerScope.owner
-        && (!callerScope.projects.includes(before.project) || (project && !callerScope.projects.includes(project)))) {
-      throw new Error(`Card ${cardId} not found`);
-    }
-    if (ownerCompletionAuthorization && (before.owner !== NIKITA_ACTOR
-      || (before.requiresApprovalFrom ?? []).some(actor => actor !== NIKITA_ACTOR))) {
-      throw new Error('owner completion is outside the exact owner review scope');
-    }
-    const decision = validateTransition(before, requested, { origin: 'mcp', actor: 'mcp', ownerAuthorization, ownerCompletionAuthorization, internalTeamAuthorization });
-    if (decision.kind === 'rejected') throw new Error(decision.reason);
-    const result = updateCard(cardId, decision.patch, expectedVersion, tasksDir);
-    if ('conflict' in result) throw new Error(`Version conflict for card ${cardId}`);
-    return textResult({ card: result, scope, transition: decision });
-  });
+      // Completion is a distinct direct-owner delegation. Ordinary automation
+      // and caller-supplied completion evidence still cannot finish a card.
+      if (ownerCompletionConfirmed === true && (!ownerAuthorization || mode !== 'edit'
+        || column !== 'done' || !Number.isSafeInteger(expectedVersion) || expectedVersion! < 1
+        || Object.keys(requested).some(key => key !== 'column'))) {
+        throw new Error('owner completion requires trusted service authority and an exact status-only edit');
+      }
+      const ownerCompletionAuthorization = ownerCompletionConfirmed === true ? ownerAuthorization : undefined;
+
+      if (mode === 'new') {
+        if (!title) throw new Error('title is required for mode=new');
+        if (!project) throw new Error('project is required for mode=new');
+        if (callerScope && !callerScope.owner && !callerScope.projects.includes(project)) {
+          throw new Error('Todo destination project is outside the caller write scope');
+        }
+        validatePlanningInput({ ...planningInput, column, title, project });
+        const decision = validateTransition(creationBaseline(), requested, {
+          origin: 'mcp',
+          actor: 'mcp',
+          isCreation: true,
+          ownerAuthorization,
+          internalTeamAuthorization,
+        });
+        if (decision.kind === 'rejected') throw new Error(decision.reason);
+
+        const basicCard = createCard(
+          title,
+          description || '',
+          decision.patch.column ?? column,
+          priority,
+          tags,
+          project,
+          decision.patch.assignees ?? [],
+          tasksDir,
+          decision.patch.dueAt === undefined || decision.patch.dueAt === null
+            ? undefined
+            : decision.patch.dueAt,
+        );
+        const persisted = Object.fromEntries(
+          Object.entries(decision.patch).filter(([key]) => !['title', 'description', 'project', 'column', 'priority', 'tags', 'assignees', 'dueAt'].includes(key)),
+        ) as KanbanCardUpdates;
+        const card = Object.keys(persisted).length > 0
+          ? updateCard(basicCard.id, persisted, undefined, tasksDir) as KanbanCard
+          : basicCard;
+        return textResult({ card, scope, transition: decision });
+      }
+
+      if (!cardId) throw new Error('cardId is required for mode=edit');
+      const before = findCardById(cardId, tasksDir);
+      if (!before) throw new Error(`Card ${cardId} not found`);
+      if (callerScope && !callerScope.owner
+          && (!callerScope.projects.includes(before.project) || (project && !callerScope.projects.includes(project)))) {
+        throw new Error(`Card ${cardId} not found`);
+      }
+      if (ownerCompletionAuthorization && (before.owner !== NIKITA_ACTOR
+        || (before.requiresApprovalFrom ?? []).some(actor => actor !== NIKITA_ACTOR))) {
+        throw new Error('owner completion is outside the exact owner review scope');
+      }
+      const decision = validateTransition(before, requested, { origin: 'mcp', actor: 'mcp', ownerAuthorization, ownerCompletionAuthorization, internalTeamAuthorization });
+      if (decision.kind === 'rejected') throw new Error(decision.reason);
+      const result = updateCard(cardId, decision.patch, expectedVersion, tasksDir);
+      if ('conflict' in result) throw new Error(`Version conflict for card ${cardId}`);
+      return textResult({ card: result, scope, transition: decision });
+    });
+  }
 
   if (options.verifySourceAdmission) {
     server.registerTool('kanban.source.admit', {
@@ -492,18 +503,20 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     });
   }
 
-  server.registerTool('kanban.project.ensure', {
-    title: 'Ensure a persistent Kanban project',
-    description: 'Create an empty project or return the same immutable project for the external key. A different name for an existing key conflicts.',
-    inputSchema: {
-      ...projectInput,
-      exmanagerScope: z.object({ payload: z.string().min(1).max(24_000), signature: z.string().min(1).max(128) }).strict().optional(),
-    },
-    annotations: { idempotentHint: true, destructiveHint: false, openWorldHint: false },
-  }, async ({ externalKey, name, exmanagerScope }) => {
-    verifyProjectEnsureScope(options, exmanagerScope, { externalKey, name });
-    return textResult(ensureProject(tasksDir, { externalKey, name }));
-  });
+  if (!readOnlyApp) {
+    server.registerTool('kanban.project.ensure', {
+      title: 'Ensure a persistent Kanban project',
+      description: 'Create an empty project or return the same immutable project for the external key. A different name for an existing key conflicts.',
+      inputSchema: {
+        ...projectInput,
+        exmanagerScope: z.object({ payload: z.string().min(1).max(24_000), signature: z.string().min(1).max(128) }).strict().optional(),
+      },
+      annotations: { idempotentHint: true, destructiveHint: false, openWorldHint: false },
+    }, async ({ externalKey, name, exmanagerScope }) => {
+      verifyProjectEnsureScope(options, exmanagerScope, { externalKey, name });
+      return textResult(ensureProject(tasksDir, { externalKey, name }));
+    });
+  }
 
   server.registerTool('kanban.project.list', {
     title: 'List persistent Kanban projects',
@@ -515,17 +528,19 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     return textResult({ projects: listProjects(tasksDir) });
   });
 
-  server.registerTool('kanban.delete', {
-    title: 'Delete a Kanban card',
-    description: 'Delete one card from the authorized board by id.',
-    inputSchema: { cardId: z.string().min(1) },
-    annotations: { openWorldHint: false },
-  }, async ({ cardId }) => {
-    if (options.requireExManagerWriteScope) throw new Error('raw shared service deletion is disabled');
-    const deleted = deleteCard(cardId, tasksDir);
-    if (!deleted) throw new Error(`Card ${cardId} not found`);
-    return textResult({ cardId, deleted: true, scope });
-  });
+  if (!readOnlyApp) {
+    server.registerTool('kanban.delete', {
+      title: 'Delete a Kanban card',
+      description: 'Delete one card from the authorized board by id.',
+      inputSchema: { cardId: z.string().min(1) },
+      annotations: { openWorldHint: false },
+    }, async ({ cardId }) => {
+      if (options.requireExManagerWriteScope) throw new Error('raw shared service deletion is disabled');
+      const deleted = deleteCard(cardId, tasksDir);
+      if (!deleted) throw new Error(`Card ${cardId} not found`);
+      return textResult({ cardId, deleted: true, scope });
+    });
+  }
 
   return server;
 }

@@ -30,6 +30,12 @@ export async function POST(request: NextRequest) {
   const service = identity.accessToken;
   const trustedWorkService = service?.clientId === 'exmanager-airlock-service'
     && service.username === 'exmanager-service' && service.scope === 'work';
+  // The Airlock todo-board application reads the board with its own client.
+  // It is deliberately not the trusted work service, so it needs no signed
+  // per-call scope, and its principal is read-only: no mutating tool exists
+  // for it, on this board or on any other.
+  const readOnlyAppClient = service?.clientId === 'airlock-todo-board-app'
+    && service.username === 'airlock-todo-board-app' && service.scope === 'work';
   const verifySourceAdmission = trustedWorkService && identity.scope === 'work'
     ? configuredSourceAdmissionVerifier()
     : undefined;
@@ -51,6 +57,7 @@ export async function POST(request: NextRequest) {
   const server = createKanbanMcpServer(identity.scope, {
     allowConfirmedOwnerCommands: trustedWorkService,
     allowInternalTeamCommands: trustedWorkService,
+    readOnlyApp: readOnlyAppClient,
     requireExManagerReadScope,
     ...(verifyExManagerReadScope ? { verifyExManagerReadScope } : {}),
     requireExManagerWriteScope,
