@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUpRight, CircleHelp, Clock3, Play } from 'lucide-react';
-import type { KanbanCard } from '@/lib/kanban/types';
+import type { KanbanCard, TaskExecutionSessionControlPhase } from '@/lib/kanban/types';
 import { Button } from '@/components/ui/button';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import {
@@ -33,6 +33,12 @@ function safeSourceUrl(value: string): string | null {
   } catch { return null; }
 }
 
+async function sessionControlRequestHash(cardId: string, operationId: string, action: 'direct' | 'stop', message: string): Promise<string> {
+  const payload = JSON.stringify({ cardId, operationId, action, message });
+  const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
 export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
   const [executions, setExecutions] = useState<Record<string, ExecutionSnapshot | null>>({});
   const [storedOperations, setStoredOperations] = useState<Record<string, StoredOperationState>>({});
@@ -41,8 +47,14 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
   const [syncBusy, setSyncBusy] = useState<Record<string, boolean>>({});
   const [startMessages, setStartMessages] = useState<Record<string, string>>({});
   const [followUpText, setFollowUpText] = useState<Record<string, string>>({});
+  const [sessionControlText, setSessionControlText] = useState<Record<string, string>>({});
+  const [sessionControlHashes, setSessionControlHashes] = useState<Record<string, string | undefined>>({});
+  const [sessionControlBusy, setSessionControlBusy] = useState<Record<string, boolean>>({});
+  const [sessionControlPhase, setSessionControlPhase] = useState<Record<string, TaskExecutionSessionControlPhase | undefined>>({});
   const inFlightStarts = useRef(new Set<string>());
   const inFlightSyncs = useRef(new Set<string>());
+  const inFlightSessionControls = useRef(new Set<string>());
+  const sessionControlDraftSequence = useRef<Record<string, number>>({});
   const counts = getDashboardCounts(cards);
   const cardIdsKey = cards.map(card => card.id).sort().join('\0');
 
@@ -226,6 +238,53 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
     }
   }
 
+  async function controlSession(card: KanbanCard, action: 'direct' | 'stop') {
+    const active = (card.taskExecutionHistory ?? []).filter(receipt => ['running', 'waiting'].includes(receipt.phase));
+    const receipt = active.length === 1 && active[0]?.harness === 'opencode'
+      && active[0].nativeSessionId && active[0].hostId ? active[0] : undefined;
+    if (!receipt) return;
+    const message = action === 'direct' ? sessionControlText[card.id]?.trim() ?? '' : '';
+    if (action === 'direct' && !message) return;
+    if (action === 'stop' && !window.confirm('Остановить активную сессию исполнителя для этой карточки?')) return;
+    let requestHash: string;
+    try { requestHash = await sessionControlRequestHash(card.id, receipt.operationId, action, message); }
+    catch { return; }
+    const controlKey = action === 'direct'
+      ? `${card.id}:${receipt.operationId}:direct:${requestHash}` : `${card.id}:${receipt.operationId}:stop`;
+    if (inFlightSessionControls.current.has(controlKey)) return;
+    const existing = action === 'direct'
+      ? receipt.sessionControls?.direct?.find(item => item.requestHash === requestHash)
+      : receipt.sessionControls?.stop;
+    if (existing) {
+      setSessionControlPhase(previous => ({ ...previous, [controlKey]: existing.phase }));
+      return;
+    }
+    if (sessionControlPhase[controlKey]) return;
+
+    inFlightSessionControls.current.add(controlKey);
+    setSessionControlBusy(previous => ({ ...previous, [controlKey]: true }));
+    setSessionControlPhase(previous => ({ ...previous, [controlKey]: 'intent' }));
+    try {
+      const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: action === 'direct' ? 'session-direct' : 'session-stop', expectedVersion: card.version,
+          ...(action === 'direct' ? { message } : {}) }),
+      });
+      const body: unknown = await response.json().catch(() => null);
+      const state = body && typeof body === 'object' && 'state' in body
+        ? (body as { state?: unknown }).state : undefined;
+      const responseHash = body && typeof body === 'object' && 'requestHash' in body
+        ? (body as { requestHash?: unknown }).requestHash : undefined;
+      setSessionControlPhase(previous => ({ ...previous, [controlKey]: response.status === 200 && state === 'accepted' && responseHash === requestHash ? 'accepted' : 'unknown' }));
+    } catch {
+      setSessionControlPhase(previous => ({ ...previous, [controlKey]: 'unknown' }));
+    } finally {
+      await Promise.resolve(onRefresh()).catch(() => undefined);
+      inFlightSessionControls.current.delete(controlKey);
+      setSessionControlBusy(previous => ({ ...previous, [controlKey]: false }));
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     const candidates = cards.filter(card => !['done', 'archived'].includes(card.column));
@@ -287,6 +346,18 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
               const retryOperation = storageReady && canRetrySameOperation(storedOperation, execution) ? storedOperation : null;
               const canRetry = retryOperation !== null && !startBusy[card.id] && !syncBusy[card.id];
               const executionReceipt = card.taskExecutionHistory?.at(-1);
+              const activeControlReceipts = (card.taskExecutionHistory ?? []).filter(receipt => ['running', 'waiting'].includes(receipt.phase));
+              const controlReceipt = activeControlReceipts.length === 1 && activeControlReceipts[0]?.harness === 'opencode'
+                && activeControlReceipts[0].nativeSessionId && activeControlReceipts[0].hostId ? activeControlReceipts[0] : undefined;
+              const controlHashKey = controlReceipt ? `${card.id}:${controlReceipt.operationId}` : card.id;
+              const directDraftHash = sessionControlHashes[controlHashKey];
+              const directControlKey = controlReceipt && directDraftHash
+                ? `${card.id}:${controlReceipt.operationId}:direct:${directDraftHash}` : '';
+              const stopControlKey = controlReceipt ? `${card.id}:${controlReceipt.operationId}:stop` : '';
+              const existingDirect = controlReceipt && directDraftHash
+                ? controlReceipt.sessionControls?.direct?.find(item => item.requestHash === directDraftHash) : undefined;
+              const directPhase = existingDirect?.phase ?? (directControlKey ? sessionControlPhase[directControlKey] : undefined);
+              const stopPhase = controlReceipt?.sessionControls?.stop?.phase ?? (stopControlKey ? sessionControlPhase[stopControlKey] : undefined);
               const taskFollowUp = executionReceipt?.continuations?.[0];
               const confirmedRequests = confirmedTaskRequests(card);
               const canContinue = canContinueTask(card) && !startBusy[card.id] && !syncBusy[card.id];
@@ -359,6 +430,53 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
                       {!storedOperation && execution && execution.startAvailable === undefined && <p className="text-sm text-muted-foreground">Готовность к запуску пока не подтверждена.</p>}
                       {!storedOperation && !execution && <p className="text-sm text-muted-foreground">Проверяем доступность запуска…</p>}
                       {!storedOperation && startMessages[card.id] && <p role="status" className="text-sm text-muted-foreground">{startMessages[card.id]}</p>}
+                      {controlReceipt && <div className="w-full rounded-md border p-3">
+                        <p className="text-sm font-medium">Управление активной OpenCode-сессией</p>
+                        <label htmlFor={`session-direct-${card.id}`} className="mt-2 block text-xs text-muted-foreground">Сообщение текущему ходу</label>
+                        <textarea id={`session-direct-${card.id}`} className="mt-1 min-h-20 w-full rounded-md border bg-background p-2 text-sm"
+                          maxLength={4000} value={sessionControlText[card.id] ?? ''}
+                          disabled={sessionControlBusy[directControlKey]}
+                          onChange={event => {
+                            const value = event.target.value;
+                            setSessionControlText(previous => ({ ...previous, [card.id]: value }));
+                            setSessionControlHashes(previous => ({ ...previous, [controlHashKey]: undefined }));
+                            const sequence = (sessionControlDraftSequence.current[controlHashKey] ?? 0) + 1;
+                            sessionControlDraftSequence.current[controlHashKey] = sequence;
+                            if (!controlReceipt || !value.trim()) {
+                              return;
+                            }
+                            void sessionControlRequestHash(card.id, controlReceipt.operationId, 'direct', value.trim()).then(hash => {
+                              if (sessionControlDraftSequence.current[controlHashKey] === sequence) {
+                                setSessionControlHashes(previous => ({ ...previous, [controlHashKey]: hash }));
+                              }
+                            }).catch(() => {
+                              if (sessionControlDraftSequence.current[controlHashKey] === sequence) {
+                                setSessionControlHashes(previous => ({ ...previous, [controlHashKey]: undefined }));
+                              }
+                            });
+                          }}
+                          placeholder="Коротко уточните следующий шаг" />
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button size="sm" variant="outline" disabled={!sessionControlText[card.id]?.trim() || !directDraftHash
+                            || sessionControlBusy[directControlKey] || !!existingDirect || !!directPhase}
+                            onClick={() => void controlSession(card, 'direct')}>
+                            {sessionControlBusy[directControlKey] ? 'Передаю…' : 'Передать в текущий ход'}
+                          </Button>
+                          <Button size="sm" variant="outline" disabled={sessionControlBusy[stopControlKey]
+                            || !!controlReceipt.sessionControls?.stop || !!stopPhase}
+                            onClick={() => void controlSession(card, 'stop')}>
+                            {sessionControlBusy[stopControlKey] ? 'Останавливаю…' : 'Остановить исполнителя'}
+                          </Button>
+                        </div>
+                        {directPhase && <p role="status" className="mt-2 text-xs text-muted-foreground">Передача: {directPhase === 'accepted'
+                          ? 'сообщение принято текущим ходом.' : directPhase === 'intent'
+                            ? 'запрос записан; не отправляйте это сообщение повторно.' : 'исход неизвестен; это сообщение нельзя повторять.'}</p>}
+                        {stopPhase && <p role="status" className="mt-2 text-xs text-muted-foreground">Остановка: {stopPhase === 'accepted'
+                          ? 'команда принята; сверьте состояние карточки.' : stopPhase === 'intent'
+                            ? 'действие уже записано; не отправляйте его повторно.' : 'исход неизвестен; команду повторять нельзя.'}</p>}
+                        {(controlReceipt.sessionControls?.direct?.length ?? 0) > 0 && !directPhase
+                          && <p className="mt-2 text-xs text-muted-foreground">Ранее передано отдельных сообщений: {controlReceipt.sessionControls?.direct?.length}.</p>}
+                      </div>}
                       {canContinue && <div className="w-full rounded-md border p-3">
                         <label htmlFor={`task-follow-up-${card.id}`} className="text-sm font-medium">Уточнение исполнителю</label>
                         <textarea id={`task-follow-up-${card.id}`} className="mt-2 min-h-24 w-full rounded-md border bg-background p-2 text-sm"

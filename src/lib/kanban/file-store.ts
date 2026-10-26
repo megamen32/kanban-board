@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { DEFAULT_COLUMNS, parseCatalogTaskLink, PLANNING_VERSION } from './types';
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
 import { approvalListForProject } from './project-reviewers';
-import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskExecutionContinuation, TaskExecutionReceipt, TaskResult, TaskReviewRecord } from './types';
+import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskExecutionContinuation, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls, TaskResult, TaskReviewRecord } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
@@ -707,6 +707,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
   return value.map((entry, index) => {
     const field = `task_execution_history[${index}]`;
     const continuations = taskExecutionContinuationsField(entry, field);
+    const sessionControls = taskExecutionSessionControlsField(entry, field);
     if (!isRecord(entry)
       || typeof entry.operationId !== 'string' || !/^[a-f0-9]{64}$/.test(entry.operationId)
       || seen.has(entry.operationId)
@@ -770,11 +771,47 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       ...(typeof entry.lastProgress === 'string' ? { lastProgress: entry.lastProgress } : {}),
       ...(typeof entry.lastProgressAt === 'string' ? { lastProgressAt: entry.lastProgressAt } : {}),
       ...(continuations ? { continuations } : {}),
+      ...(sessionControls ? { sessionControls } : {}),
       startedBy: entry.startedBy,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
     };
   });
+}
+
+function taskExecutionSessionControlsField(entry: unknown, field: string): TaskExecutionSessionControls | undefined {
+  if (!isRecord(entry) || entry.sessionControls === undefined) return undefined;
+  const value = entry.sessionControls;
+  if (!isRecord(value) || Object.keys(value).some(key => !['direct', 'stop'].includes(key))) {
+    throw invalidPlanningField(`${field}.sessionControls`, 'expected direct/stop receipt states');
+  }
+  const result: TaskExecutionSessionControls = {};
+  const parseControl = (item: unknown, itemField: string): TaskExecutionSessionControl => {
+    if (!isRecord(item)
+      || Object.keys(item).some(key => !['requestHash', 'phase', 'updatedAt'].includes(key))
+      || typeof item.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(item.requestHash)
+      || !['intent', 'accepted', 'unknown'].includes(String(item.phase))
+      || typeof item.updatedAt !== 'string' || Number.isNaN(Date.parse(item.updatedAt))) {
+      throw invalidPlanningField(itemField, 'invalid session control receipt');
+    }
+    return {
+      requestHash: item.requestHash,
+      phase: item.phase as TaskExecutionSessionControl['phase'],
+      updatedAt: item.updatedAt,
+    };
+  };
+  if (value.direct !== undefined) {
+    if (!Array.isArray(value.direct)) throw invalidPlanningField(`${field}.sessionControls.direct`, 'expected a direct action receipt list');
+    const seenHashes = new Set<string>();
+    result.direct = value.direct.map((item, index) => {
+      const parsed = parseControl(item, `${field}.sessionControls.direct[${index}]`);
+      if (seenHashes.has(parsed.requestHash)) throw invalidPlanningField(`${field}.sessionControls.direct`, 'duplicate direct request hash');
+      seenHashes.add(parsed.requestHash);
+      return parsed;
+    });
+  }
+  if (value.stop !== undefined) result.stop = parseControl(value.stop, `${field}.sessionControls.stop`);
+  return result;
 }
 
 function isTaskExecutionProjectBinding(value: unknown, receiptHostId: unknown): boolean {

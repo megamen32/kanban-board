@@ -115,6 +115,28 @@ function followUpRequest(action: 'continue-task' | 'sync-task-continuation', exp
   });
 }
 
+const controlCardId = '11111111-2222-4333-8444-555555555555';
+const controlOperationId = 'b'.repeat(64);
+
+function controllableOpenCodeCard(): KanbanCard {
+  return {
+    ...baseCard,
+    id: controlCardId,
+    taskExecutionHistory: [{
+      operationId: controlOperationId, requestHash: 'c'.repeat(64), lastBoardVersion: baseCard.version,
+      createInputId: '1'.repeat(64), messageInputId: '2'.repeat(64), phase: 'running',
+      hostId: 'roomhacker-server-100', harness: 'opencode', nativeSessionId: 'opencode-session-1',
+      nativeTurnId: 'opencode-turn-1', startedBy: 'nikita', createdAt: baseCard.created, updatedAt: baseCard.updated,
+    }],
+  };
+}
+
+function sessionControlRequest(body: Record<string, unknown>) {
+  return new NextRequest(`https://todo.example.test/api/kanban/cards/${controlCardId}/execution`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+}
+
 function runningQuestionCard(): KanbanCard {
   return {
     ...baseCard,
@@ -1230,5 +1252,110 @@ describe('task execution API', () => {
     expect(postedMandates).toHaveLength(2);
     expect(postedMandates[0]).toEqual(postedMandates[1]);
     expect(postedMandates[0]?.version).toBe(String(currentVersion));
+  });
+
+  it('allows distinct direct messages once, stops the exact receipt, and never replays either action', async () => {
+    mocks.currentCard.value = controllableOpenCodeCard();
+    mocks.callOwnerHerderTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => ({
+      structuredContent: {
+        card_id: controlCardId,
+        board_operation_id: controlOperationId,
+        action: tool === 'todo_task_direct' ? 'direct' : 'stop',
+        response: { result: 'accepted by owner profile' },
+      },
+    }));
+
+    const direct = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: 4, message: 'Проверь текущий шаг' }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!direct) throw new Error('direct response missing');
+    expect(direct.status).toBe(200);
+    expect(await direct.json()).toMatchObject({ boardOperationId: controlOperationId, action: 'direct', state: 'accepted' });
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('todo_task_direct', {
+      card_id: controlCardId, project: 'Demo', board_operation_id: controlOperationId, message: 'Проверь текущий шаг',
+    });
+
+    const secondDirect = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: mocks.currentCard.value!.version, message: 'Сделай следующий шаг' }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!secondDirect) throw new Error('second direct response missing');
+    expect(secondDirect.status).toBe(200);
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('todo_task_direct', {
+      card_id: controlCardId, project: 'Demo', board_operation_id: controlOperationId, message: 'Сделай следующий шаг',
+    });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.sessionControls?.direct).toHaveLength(2);
+    const callsAfterTwoMessages = mocks.callOwnerHerderTool.mock.calls.length;
+    const replayFirstMessage = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: mocks.currentCard.value!.version, message: 'Проверь текущий шаг' }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!replayFirstMessage) throw new Error('direct replay response missing');
+    expect(replayFirstMessage.status).toBe(200);
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledTimes(callsAfterTwoMessages);
+    const replaySecondMessage = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: mocks.currentCard.value!.version, message: 'Сделай следующий шаг' }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!replaySecondMessage) throw new Error('second direct replay response missing');
+    expect(replaySecondMessage.status).toBe(200);
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledTimes(callsAfterTwoMessages);
+
+    const versionAfterDirect = mocks.currentCard.value!.version;
+    const stop = await PATCH(sessionControlRequest({ action: 'session-stop', expectedVersion: versionAfterDirect }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!stop) throw new Error('stop response missing');
+    expect(stop.status).toBe(200);
+    expect(await stop.json()).toMatchObject({ boardOperationId: controlOperationId, action: 'stop', state: 'accepted' });
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('todo_task_stop', {
+      card_id: controlCardId, project: 'Demo', board_operation_id: controlOperationId,
+    });
+
+    const beforeDuplicate = mocks.callOwnerHerderTool.mock.calls.length;
+    const duplicate = await PATCH(sessionControlRequest({ action: 'session-stop', expectedVersion: mocks.currentCard.value!.version }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!duplicate) throw new Error('duplicate stop response missing');
+    expect(duplicate.status).toBe(200);
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledTimes(beforeDuplicate);
+  });
+
+  it('persists UNKNOWN before returning and refuses to repeat the same direct action', async () => {
+    mocks.currentCard.value = controllableOpenCodeCard();
+    mocks.callOwnerHerderTool.mockRejectedValue(new Error('synthetic transport ambiguity'));
+    const first = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: 4, message: 'Продолжай текущий шаг' }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!first) throw new Error('unknown direct response missing');
+    expect(first.status).toBe(202);
+    expect(await first.json()).toMatchObject({ action: 'direct', state: 'unknown' });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.sessionControls?.direct?.[0]?.phase).toBe('unknown');
+
+    const retry = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: mocks.currentCard.value!.version, message: 'Продолжай текущий шаг' }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!retry) throw new Error('unknown direct retry response missing');
+    expect(retry.status).toBe(202);
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not accept a browser-supplied board operation id or an ambiguous active receipt set', async () => {
+    mocks.currentCard.value = controllableOpenCodeCard();
+    const forged = await PATCH(sessionControlRequest({ action: 'session-stop', expectedVersion: 4, board_operation_id: 'f'.repeat(64) }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!forged) throw new Error('forged request response missing');
+    expect(forged.status).toBe(400);
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+
+    const card = mocks.currentCard.value!;
+    mocks.currentCard.value = { ...card, taskExecutionHistory: [
+      ...card.taskExecutionHistory!,
+      { ...card.taskExecutionHistory![0]!, operationId: 'd'.repeat(64) },
+    ] };
+    const ambiguous = await PATCH(sessionControlRequest({ action: 'session-stop', expectedVersion: 4 }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!ambiguous) throw new Error('ambiguous request response missing');
+    expect(ambiguous.status).toBe(409);
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
   });
 });

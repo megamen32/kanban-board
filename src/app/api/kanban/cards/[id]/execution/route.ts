@@ -10,7 +10,7 @@ import { callOwnerHerderTool, type HerderToolResult } from '@/lib/kanban/task-ex
 import { validateTransition } from '@/lib/kanban/transition-policy';
 import { markSourceIntentConsumed } from '../../../../../../lib/kanban/source-operation';
 import { currentNativeProjectContext } from '../../../../../../lib/kanban/native-request-context';
-import type { KanbanCard, KanbanCardUpdates, TaskDecisionRequestReference, TaskExecutionContinuation, TaskExecutionProjectBinding, TaskExecutionReceipt } from '@/lib/kanban/types';
+import type { KanbanCard, KanbanCardUpdates, TaskDecisionRequestReference, TaskExecutionContinuation, TaskExecutionProjectBinding, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls } from '@/lib/kanban/types';
 import type { NativeProjectAccessContext } from '@/lib/kanban/native-project-access';
 
 export const runtime = 'nodejs';
@@ -25,6 +25,7 @@ const MAX_NOTICE_RESPONSE_BYTES = 1_000_000;
 const MAX_NOTICE_MESSAGE_CHARS = 4_000;
 const TASK_FOLLOW_UP_KIND = 'task-follow-up-v1' as const;
 const MAX_CONTINUATION_TEXT = 4_000;
+const MAX_SESSION_CONTROL_MESSAGE = 4_000;
 const PROJECT_READINESS_CONTRACT = 'integrator-host-readiness-v1' as const;
 const PROJECT_READINESS_MAX_AGE_MS = 30_000;
 /** The harnesses the owner MCP accepts for one project launch. */
@@ -1280,6 +1281,136 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 }
 
+type SessionControlAction = keyof TaskExecutionSessionControls;
+
+function exactActiveOpenCodeReceipt(card: KanbanCard): TaskExecutionReceipt | undefined {
+  const active = (card.taskExecutionHistory ?? []).filter(receipt => ['running', 'waiting'].includes(receipt.phase));
+  if (active.length !== 1) return undefined;
+  const receipt = active[0]!;
+  if (receipt.harness !== 'opencode' || !/^[a-f0-9]{64}$/.test(receipt.operationId)
+      || !receipt.nativeTurnId || !receipt.nativeSessionId?.trim() || receipt.nativeSessionId.length > 512
+      || /[\r\n\x00]/.test(receipt.nativeSessionId) || !receipt.hostId.trim() || receipt.hostId.length > 512
+      || /[/:\r\n\x00]/.test(receipt.hostId)) return undefined;
+  return receipt;
+}
+
+function updateSessionControl(
+  cardId: string,
+  tasksDir: string,
+  operationId: string,
+  requestHash: string,
+  action: SessionControlAction,
+  phase: TaskExecutionSessionControl['phase'],
+  expectedVersion?: number,
+): KanbanCard | { conflict: true; serverCard: KanbanCard } | undefined {
+  for (let attemptNumber = 0; attemptNumber < 5; attemptNumber++) {
+    const current = findCardById(cardId, tasksDir);
+    if (!current) return undefined;
+    if (expectedVersion !== undefined && current.version !== expectedVersion) return { conflict: true, serverCard: current };
+    const history = [...(current.taskExecutionHistory ?? [])];
+    const index = history.findIndex(receipt => receipt.operationId === operationId);
+    const receipt = history[index];
+    if (!receipt || receipt.harness !== 'opencode'
+        || phase === 'intent' && !['running', 'waiting'].includes(receipt.phase)) return undefined;
+    const controls = receipt.sessionControls ?? {};
+    const old = action === 'direct'
+      ? controls.direct?.find(control => control.requestHash === requestHash)
+      : controls.stop;
+    if (phase === 'intent') {
+      if (old) return current;
+    } else if (!old || old.requestHash !== requestHash || old.phase !== 'intent') {
+      return current;
+    }
+    const state: TaskExecutionSessionControl = { requestHash, phase, updatedAt: now() };
+    const sessionControls: TaskExecutionSessionControls = action === 'direct'
+      ? { ...controls, direct: phase === 'intent'
+        ? [...(controls.direct ?? []), state]
+        : (controls.direct ?? []).map(control => control.requestHash === requestHash ? state : control) }
+      : { ...controls, stop: state };
+    history[index] = { ...receipt, sessionControls, lastBoardVersion: current.version + 1, updatedAt: now() };
+    const saved = updateCard(cardId, { taskExecutionHistory: history }, current.version, tasksDir);
+    if (!('conflict' in saved)) return saved;
+    if (expectedVersion !== undefined) return saved;
+  }
+  return undefined;
+}
+
+function sessionControlResponse(cardId: string, receipt: TaskExecutionReceipt, action: SessionControlAction, requestHash: string, status: number): NextResponse {
+  const control = action === 'direct'
+    ? receipt.sessionControls?.direct?.find(item => item.requestHash === requestHash)
+    : receipt.sessionControls?.stop;
+  return NextResponse.json({ cardId, boardOperationId: receipt.operationId, action, requestHash, state: control?.phase ?? 'unknown' }, {
+    status, headers: { 'Cache-Control': 'no-store' },
+  });
+}
+
+async function controlTaskSession(context: AuthorizedTaskCard, body: RecordValue): Promise<NextResponse> {
+  const action = body.action === 'session-direct' ? 'direct' : body.action === 'session-stop' ? 'stop' : undefined;
+  const expectedKeys = action === 'direct' ? ['action', 'expectedVersion', 'message'] : ['action', 'expectedVersion'];
+  if (!action || Object.keys(body).length !== expectedKeys.length || Object.keys(body).some(key => !expectedKeys.includes(key))
+      || !Number.isSafeInteger(body.expectedVersion)
+      || action === 'direct' && (typeof body.message !== 'string' || !body.message.trim()
+        || body.message.length > MAX_SESSION_CONTROL_MESSAGE || /[\x00-\x08\x0b-\x1f\x7f]/.test(body.message))) {
+    return NextResponse.json({ error: 'invalid session control request' }, { status: 400 });
+  }
+  if (body.expectedVersion !== context.card.version) return NextResponse.json({ conflict: true, serverCard: context.card }, { status: 409 });
+  const receipt = exactActiveOpenCodeReceipt(context.card);
+  if (!receipt) return NextResponse.json({ error: 'one exact running or waiting OpenCode receipt is required' }, { status: 409 });
+  const message = action === 'direct' ? (body.message as string).trim() : '';
+  const requestHash = sha256(JSON.stringify({ cardId: context.card.id, operationId: receipt.operationId, action, message }));
+  const prior = action === 'direct'
+    ? receipt.sessionControls?.direct?.find(item => item.requestHash === requestHash)
+    : receipt.sessionControls?.stop;
+  if (prior) {
+    return sessionControlResponse(context.card.id, receipt, action, requestHash, prior.phase === 'accepted' ? 200 : 202);
+  }
+  if (action === 'stop' && receipt.sessionControls?.stop) {
+    return NextResponse.json({ error: 'this stop action already has a durable outcome; do not retry it' }, { status: 409 });
+  }
+  if (!process.env.AGENT_HERDER_HTTP_TOKEN?.trim()) return NextResponse.json({ error: 'protected session control channel is not configured' }, { status: 503 });
+
+  const savedIntent = updateSessionControl(context.card.id, context.tasksDir, receipt.operationId,
+    requestHash, action, 'intent', context.card.version);
+  if (!savedIntent || 'conflict' in savedIntent) {
+    return NextResponse.json({ conflict: true, ...(savedIntent && 'conflict' in savedIntent ? { serverCard: savedIntent.serverCard } : {}) }, { status: 409 });
+  }
+  const durableReceipt = savedIntent.taskExecutionHistory?.find(item => item.operationId === receipt.operationId);
+  const exactDurableReceipt = exactActiveOpenCodeReceipt(savedIntent);
+  if (!durableReceipt || exactDurableReceipt?.operationId !== receipt.operationId) {
+    const unknownCard = updateSessionControl(context.card.id, context.tasksDir, receipt.operationId, requestHash, action, 'unknown');
+    const finalReceipt = unknownCard && !('conflict' in unknownCard)
+      ? unknownCard.taskExecutionHistory?.find(item => item.operationId === receipt.operationId) : undefined;
+    return finalReceipt ? sessionControlResponse(context.card.id, finalReceipt, action, requestHash, 202)
+      : NextResponse.json({ cardId: context.card.id, boardOperationId: receipt.operationId, action, requestHash, state: 'unknown' }, { status: 202 });
+  }
+
+  let toolResult: HerderToolResult | undefined;
+  try {
+    toolResult = await callOwnerHerderTool(action === 'direct' ? 'todo_task_direct' : 'todo_task_stop', {
+      card_id: context.card.id,
+      project: context.card.project,
+      board_operation_id: durableReceipt.operationId,
+      ...(action === 'direct' ? { message } : {}),
+    });
+  } catch {
+    // The durable intent is terminal for dispatch: transport failure may follow a
+    // successful provider call, so this request is never sent a second time.
+  }
+  const result = isRecord(toolResult?.structuredContent) ? toolResult.structuredContent : undefined;
+  const response = isRecord(result?.response) ? result.response : undefined;
+  const accepted = !!result && toolResult?.isError !== true
+    && result.card_id === context.card.id && result.board_operation_id === durableReceipt.operationId
+    && result.action === action && typeof response?.result === 'string' && !!response.result.trim();
+  const saved = updateSessionControl(context.card.id, context.tasksDir, receipt.operationId,
+    requestHash, action, accepted ? 'accepted' : 'unknown');
+  const finalReceipt = saved && !('conflict' in saved)
+    ? saved.taskExecutionHistory?.find(item => item.operationId === receipt.operationId) : undefined;
+  if (finalReceipt) return sessionControlResponse(context.card.id, finalReceipt, action, requestHash, accepted ? 200 : 202);
+  return NextResponse.json({ cardId: context.card.id, boardOperationId: receipt.operationId, action, requestHash, state: accepted ? 'accepted' : 'unknown' }, {
+    status: accepted ? 200 : 202, headers: { 'Cache-Control': 'no-store' },
+  });
+}
+
 /** Sync one exact completed native result into the existing human-review card flow. */
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -1296,6 +1427,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (referenced && referenced.startedBy !== context.actor && !['continue-task', 'sync-task-continuation'].includes(String(body.action))) {
         return NextResponse.json({ error: 'saved execution receipt owner does not match native identity; do not replay or remap this receipt' }, { status: 409 });
       }
+    }
+    if (isRecord(body) && (body.action === 'session-direct' || body.action === 'session-stop')) {
+      return await controlTaskSession(context, body);
     }
     if (isRecord(body) && body.action === 'create-question') return await createTaskQuestion(context, body);
     if (isRecord(body) && body.action === 'continue-task') return await startTaskFollowUp(context, body);

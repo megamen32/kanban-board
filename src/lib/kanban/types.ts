@@ -177,6 +177,17 @@ export interface TaskExecutionContinuation {
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+export type TaskExecutionSessionControlPhase = 'intent' | 'accepted' | 'unknown';
+/** One fail-closed, user-issued control action bound to an exact OpenCode receipt. */
+export interface TaskExecutionSessionControl {
+  requestHash: string;
+  phase: TaskExecutionSessionControlPhase;
+  updatedAt: string;
+}
+export interface TaskExecutionSessionControls {
+  direct?: readonly TaskExecutionSessionControl[];
+  stop?: TaskExecutionSessionControl;
+}
 /** Opaque Notice request identity attached to the exact execution operation. */
 export interface TaskDecisionRequestReference {
   requestId: string;
@@ -234,6 +245,8 @@ export interface TaskExecutionReceipt {
   lastProgressAt?: string;
   /** Append-only task-scoped follow-up turns; never replaces the initial receipt. */
   continuations?: readonly TaskExecutionContinuation[];
+  /** At most one direct and one stop per exact execution receipt; UNKNOWN is terminal. */
+  sessionControls?: TaskExecutionSessionControls;
   startedBy: string;
   createdAt: string;
   updatedAt: string;
