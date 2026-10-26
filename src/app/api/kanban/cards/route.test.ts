@@ -241,6 +241,7 @@ describe('POST /api/kanban/cards', () => {
 });
 
 describe('GET /api/kanban/cards', () => {
+  const allowed = { ...createdCard, id: 'allowed-card', project: 'Олег и Никита' };
   const alpha = { ...createdCard, id: 'alpha-card', project: 'Alpha' };
   const beta = { ...createdCard, id: 'beta-card', project: 'Beta' };
   const legacy = { ...createdCard, id: 'legacy-card', project: 'Legacy' };
@@ -254,13 +255,48 @@ describe('GET /api/kanban/cards', () => {
     vi.clearAllMocks();
     nativeAccess.current = null;
     nativeProjectAccessContextFromRequest.mockResolvedValue(null);
-    identity.current = { username: 'anonymous', scope: 'work' };
+    identity.current = { username: 'nikita', scope: 'work' };
     tasksDirForScope.mockReturnValue('/scoped/work');
-    getAllCards.mockReturnValue([alpha, beta, legacy]);
-    listProjects.mockReturnValue(projects);
+    getAllCards.mockReturnValue([allowed, alpha, beta, legacy]);
+    listProjects.mockReturnValue([...projects, { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }]);
+  });
+
+  it('returns only the server-allowlisted board project, independent of query hints', async () => {
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards?project=Alpha'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
+  });
+
+  it('allows the other exact server-resolved board identity for the same project only', async () => {
+    identity.current = { username: 'oleg', scope: 'work' };
+    authenticated.current = { username: 'oleg', scope: 'work' };
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards?project=Beta'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
+  });
+
+  it('fails closed for another verified identity without reading the shared store', async () => {
+    identity.current = { username: 'other-user', scope: 'work' };
+    authenticated.current = { username: 'other-user', scope: 'work' };
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cards: [], projects: [] });
+    expect(getAllCards).not.toHaveBeenCalled();
+    expect(listProjects).not.toHaveBeenCalled();
+  });
+
+  it('does not authorize the presentation-only board identity when server identity verification fails', async () => {
+    identity.current = { username: 'nikita', scope: 'work' };
+    authenticated.current = null;
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cards: [], projects: [] });
+    expect(getAllCards).not.toHaveBeenCalled();
+    expect(listProjects).not.toHaveBeenCalled();
   });
 
   it('filters every persisted card and empty project through current native membership', async () => {
+    authenticated.current = null;
     const forProject = vi.fn(async (project: string) => {
       if (project === 'Beta' || project === 'Legacy') throw new Error('native_project_access_denied');
       return { project, team: 'integrator', readAllowed: true as const, writeAllowed: false };
@@ -272,8 +308,8 @@ describe('GET /api/kanban/cards', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [alpha], projects: [projects[0], projects[1]] });
-    expect(forProject.mock.calls.map(([project]) => project)).toEqual(['Alpha', 'Beta', 'Legacy', 'Empty project']);
+    expect(await response.json()).toEqual({ cards: [allowed, alpha], projects: [projects[0], projects[1], { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
+    expect(forProject.mock.calls.map(([project]) => project)).toEqual(['Олег и Никита', 'Alpha', 'Beta', 'Legacy', 'Empty project']);
     expect(tasksDirForScope).toHaveBeenCalledWith('work');
   });
 
@@ -305,9 +341,11 @@ describe('GET /api/kanban/cards', () => {
   });
 
   it('preserves the existing no-assertion legacy list behavior', async () => {
+    identity.current = { username: 'nikita', scope: 'work' };
+    authenticated.current = { username: 'nikita', scope: 'work' };
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [alpha, beta, legacy], projects });
+    expect(await response.json()).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
     expect(nativeProjectAccessContextFromRequest).toHaveBeenCalledTimes(1);
   });
 });
