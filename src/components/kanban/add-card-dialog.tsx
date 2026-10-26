@@ -52,12 +52,13 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   defaultColumn: string;
   defaultProject?: string;
+  ownerPreview?: string | null;
   roles?: RoleDefinition[];
   projectOptions?: string[];
   onCreate: (title: string, description: string, column: string, priority: string, tags: string[], project: string, assignees: string[], dueAt?: string, planning?: ReturnType<typeof buildPlanningMetadataCreate>) => Promise<KanbanCard | undefined>;
 }
 
-export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProject = '', onCreate, roles, projectOptions = [] }: Props) {
+export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProject = '', ownerPreview = 'nikita', onCreate, roles, projectOptions = [] }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [column, setColumn] = useState(defaultColumn);
@@ -126,7 +127,10 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
         <DialogHeader>
           <DialogTitle>Новая задача</DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
-            Название, проект, ответственные и описание видны сразу. Дополнительные поля — по запросу.
+            Название, проект, ответственные и описание видны сразу. Дополнительные поля — по запросу.{' '}
+            {ownerPreview
+              ? `Владелец новой задачи — ${ownerPreview}; профиль доски — только фильтр.`
+              : 'Владелец определяется серверной учётной записью; профиль доски — только фильтр.'}
           </DialogDescription>
         </DialogHeader>
 

@@ -15,8 +15,10 @@
   launch tasks, ask executor questions, send messages, or create notifications.
 - The visible identity chooser is only a board filter. The unauthenticated
   loopback route returns 401 from `/api/auth/session`; it does not create a
-  signed-in human session. Server-side owner authorization still applies. In
-  particular, do not impersonate the board owner or fabricate headers to assign
+  signed-in human session. In this anonymous QA mode, new synthetic cards use
+  the board owner's `nikita` space; the profile filter does not change ownership.
+  Authenticated sessions use the server-verified username (`roomhacker` maps to
+  `nikita`). Do not impersonate the board owner or fabricate headers to assign
   or transfer ownership. Record the denial and continue with unassigned synthetic
   work where that still tests the user goal.
 

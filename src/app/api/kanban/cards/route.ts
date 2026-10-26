@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
     const requested: KanbanCardUpdates = {};
     for (const [key, value] of Object.entries({
       title, description, column, priority, tags, project, assignees, dueAt,
-      owner: body.owner,
+      owner: authenticatedIdentity?.username ?? (managerAuthorized ? body.owner : undefined),
       shared: body.shared,
       planningVersion: body.planningVersion,
       type: body.type,

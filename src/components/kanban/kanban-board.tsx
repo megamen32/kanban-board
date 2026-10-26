@@ -41,6 +41,7 @@ export function KanbanBoard() {
   const [selectedCard, setSelectedCard] = useState<KanbanCard | null>(null);
   const [planningTab, setPlanningTab] = useState<PlanningTab>('dashboard');
   const [username, setUsername] = useState<string | null>(null);
+  const [identityChecked, setIdentityChecked] = useState(false);
   const [person, setPerson] = useState('nikita');
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('shared');
   const [showWelcome, setShowWelcome] = useState(false);
@@ -61,7 +62,7 @@ export function KanbanBoard() {
   }, [isMobile]);
 
   useEffect(() => {
-    fetch('/api/auth/session').then(response => response.ok ? response.json() : null).then(data => setUsername(data?.username ?? null)).catch(() => setUsername(null));
+    fetch('/api/auth/session').then(response => response.ok ? response.json() : null).then(data => setUsername(data?.username ?? null)).catch(() => setUsername(null)).finally(() => setIdentityChecked(true));
   }, []);
 
   useEffect(() => {
@@ -321,7 +322,7 @@ export function KanbanBoard() {
         <Button className="fixed bottom-6 right-6 h-12 w-12 rounded-full shadow-lg z-50" aria-label="Новая задача" title="Новая задача" onClick={() => { setDefaultColumn('todo'); setShowAdd(true); }}>
           <Plus className="h-5 w-5" />
         </Button>
-        <AddCardDialog projectOptions={projectOptions} defaultProject={project === 'all' ? '' : project} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
+        <AddCardDialog projectOptions={projectOptions} defaultProject={project === 'all' ? '' : project} ownerPreview={identityChecked ? username ?? 'nikita' : null} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
         {selectedCard && <CardEditDialog projectOptions={projectOptions} relatedCards={cards} roles={roles} card={selectedCard} username={username} onRefresh={refresh} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReviewDecision} />}
         {conflict && <ConflictDialog conflict={conflict} onResolve={resolveConflict} />}
         <Dialog open={showWelcome} onOpenChange={setShowWelcome}>
