@@ -10,6 +10,23 @@ import { dispatchCardEvent } from '@/lib/notifications/push';
 import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
 import { validateTransition } from '@/lib/kanban/transition-policy';
 
+const VERIFIED_BOARD_PROJECT = 'Олег и Никита';
+const QA_BOARD_PROJECT = 'ExManager QA';
+
+function boardReadProject(identity: { username: string; scope: 'work' | 'personal' }): string | null {
+  if (identity.scope !== 'work') return null;
+  if (['qa_exmanager_a', 'qa_exmanager_b'].includes(identity.username)) return QA_BOARD_PROJECT;
+  return ['nikita', 'oleg'].includes(identity.username) ? VERIFIED_BOARD_PROJECT : null;
+}
+
+function mayReadBoardProject(identity: { username: string; scope: 'work' | 'personal' }, project: string): boolean {
+  return boardReadProject(identity) === project.trim();
+}
+
+function mayReadAnyBoardProject(identity: { username: string; scope: 'work' | 'personal' }): boolean {
+  return boardReadProject(identity) !== null;
+}
+
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let nativeContext: NativeProjectAccessContext | null;
   try {
@@ -20,9 +37,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       status: reason === 'native_identity_unconfigured' ? 503 : 403,
     });
   }
-  // Human-facing reads keep their existing anonymous/UI-scope behavior. A
-  // service caller that supplies the manager capability must prove it; never
-  // let a bad token fall through to the public identity fallback.
+  // A supplied manager capability must prove itself; ordinary human reads use only server-verified identity.
   const hasManagerCapability = req.headers.has('x-kanban-manager-token');
   const managerAuthorized = hasManagerCapability && managerRequestAuthorized(req);
   if (hasManagerCapability && !managerAuthorized) {
@@ -43,14 +58,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       });
     }
   }
+  const identity = managerAuthorized ? { username: 'manager', scope: 'work' as const } : await boardHumanIdentityFromRequest(req);
+  if (!managerAuthorized && !identity) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  if (!managerAuthorized && !mayReadAnyBoardProject(identity!)) return NextResponse.json({ error: 'not found' }, { status: 404 });
   startDueReminderScheduler();
-  const identity = managerAuthorized
-    ? { username: 'manager', scope: 'work' as const }
-    : boardIdentityFromRequest(req);
-  const tasksDir = tasksDirForScope(identity.scope);
+  const tasksDir = tasksDirForScope(identity?.scope ?? 'work');
   const { id } = await params;
   const card = findCardById(id, tasksDir);
   if (!card) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  if (!managerAuthorized && !mayReadBoardProject(identity!, card.project)) return NextResponse.json({ error: 'not found' }, { status: 404 });
   return NextResponse.json({ card });
 }
 

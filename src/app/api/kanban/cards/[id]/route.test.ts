@@ -255,14 +255,67 @@ describe('GET /api/kanban/cards/[id]', () => {
     findCardById.mockReturnValue(existingCard);
   });
 
-  it('preserves ordinary board reads without a manager header', async () => {
+  it('allows ordinary reads only for the configured board project and verified identity', async () => {
+    authenticated.current = { username: 'nikita', scope: 'work' };
+    identity.current = { username: 'nikita', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'Олег и Никита' });
     const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), {
       params: Promise.resolve({ id: 'card-1' }),
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ card: existingCard });
+    expect(await response.json()).toEqual({ card: { ...existingCard, project: 'Олег и Никита' } });
     expect(findCardById).toHaveBeenCalledWith('card-1', '/scoped/work');
+  });
+
+  it.each(['qa_exmanager_a', 'qa_exmanager_b'])('allows QA identity %s to read the isolated QA project', async username => {
+    authenticated.current = { username, scope: 'work' };
+    identity.current = { username, scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'ExManager QA' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), {
+      params: Promise.resolve({ id: 'card-1' }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ card: { ...existingCard, project: 'ExManager QA' } });
+  });
+
+  it('does not return a known card id from another project', async () => {
+    authenticated.current = { username: 'nikita', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'Alpha' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/known-other-card'), {
+      params: Promise.resolve({ id: 'known-other-card' }),
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'not found' });
+  });
+
+  it('denies a server-verified username outside the two named project identities', async () => {
+    authenticated.current = { username: 'other-user', scope: 'work' };
+    identity.current = { username: 'other-user', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'Олег и Никита' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), { params: Promise.resolve({ id: 'card-1' }) });
+    expect(response.status).toBe(404);
+    expect(findCardById).not.toHaveBeenCalled();
+  });
+
+  it('does not return a project card to an unverified/unknown board identity', async () => {
+    authenticated.current = null;
+    identity.current = { username: 'anonymous', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'Олег и Никита' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), {
+      params: Promise.resolve({ id: 'card-1' }),
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'not found' });
+  });
+
+  it('denies a client/presentation-only nikita identity when server verification is absent', async () => {
+    authenticated.current = null;
+    identity.current = { username: 'nikita', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'Олег и Никита' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), { params: Promise.resolve({ id: 'card-1' }) });
+    expect(response.status).toBe(404);
+    expect(findCardById).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid supplied manager capability instead of falling back to anonymous access', async () => {
@@ -285,6 +338,23 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ card: existingCard });
     expect(findCardById).toHaveBeenCalledWith('card-1', '/scoped/work');
+  });
+
+  it('allows the exact verified board identity to read the one configured project', async () => {
+    authenticated.current = { username: 'nikita', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'Олег и Никита' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), { params: Promise.resolve({ id: 'card-1' }) });
+    expect(response.status).toBe(200);
+    expect((await response.json()).card.project).toBe('Олег и Никита');
+  });
+
+  it('allows the other exact verified board identity to read the configured project', async () => {
+    authenticated.current = { username: 'oleg', scope: 'work' };
+    identity.current = { username: 'oleg', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'Олег и Никита' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), { params: Promise.resolve({ id: 'card-1' }) });
+    expect(response.status).toBe(200);
+    expect((await response.json()).card.project).toBe('Олег и Никита');
   });
 
   it('checks the canonical project with the verified native member before returning a card', async () => {
@@ -379,10 +449,12 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(findCardById).not.toHaveBeenCalled();
 
     nativeProjectAccessContextFromRequest.mockResolvedValue(null);
+    authenticated.current = { username: 'nikita', scope: 'work' };
+    identity.current = { username: 'anonymous', scope: 'work' };
     const legacy = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), {
       params: Promise.resolve({ id: 'card-1' }),
     });
-    expect(legacy.status).toBe(200);
-    expect(await legacy.json()).toEqual({ card: existingCard });
+    expect(legacy.status).toBe(404);
+    expect(await legacy.json()).toEqual({ error: 'not found' });
   });
 });

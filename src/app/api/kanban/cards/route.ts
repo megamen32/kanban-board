@@ -11,6 +11,21 @@ import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
 import { validateTransition } from '@/lib/kanban/transition-policy';
 import { NIKITA_ACTOR } from '@/lib/kanban/transition-policy';
 
+const VERIFIED_BOARD_PROJECT = 'Олег и Никита';
+const QA_BOARD_PROJECT = 'ExManager QA';
+
+function boardReadProject(identity: { username: string; scope: 'work' | 'personal' }): string | null {
+  if (identity.scope !== 'work') return null;
+  if (['qa_exmanager_a', 'qa_exmanager_b'].includes(identity.username)) return QA_BOARD_PROJECT;
+  return ['nikita', 'oleg'].includes(identity.username) ? VERIFIED_BOARD_PROJECT : null;
+}
+
+function anonymousQaReadAllowed(req: NextRequest): boolean {
+  if (process.env.KANBAN_QA_ANONYMOUS_READS !== '1') return false;
+  const hostname = req.nextUrl.hostname.toLowerCase();
+  return hostname === '127.0.0.1' || hostname === '::1' || hostname === 'localhost';
+}
+
 export async function GET(req: NextRequest) {
   try {
     const nativeContext = await nativeProjectAccessContextFromRequest(req);
@@ -39,9 +54,19 @@ export async function GET(req: NextRequest) {
         projects: projects.filter(project => readable.has(project.name.trim())),
       });
     }
-    const identity = boardIdentityFromRequest(req);
-    const cards = getAllCards(tasksDirForScope(identity.scope));
-    return NextResponse.json({ cards, projects: listProjects(tasksDirForScope(identity.scope)) });
+    const authenticatedIdentity = await boardHumanIdentityFromRequest(req);
+    const allowedProject = authenticatedIdentity ? boardReadProject(authenticatedIdentity) : null;
+    if (!allowedProject) {
+      if (!authenticatedIdentity && anonymousQaReadAllowed(req)) {
+        const tasksDir = tasksDirForScope('work');
+        return NextResponse.json({ cards: getAllCards(tasksDir), projects: listProjects(tasksDir) });
+      }
+      return NextResponse.json({ cards: [], projects: [] });
+    }
+    const tasksDir = tasksDirForScope(authenticatedIdentity!.scope);
+    const cards = getAllCards(tasksDir).filter(card => card.project.trim() === allowedProject);
+    const projects = listProjects(tasksDir).filter(project => project.name.trim() === allowedProject);
+    return NextResponse.json({ cards, projects });
   } catch (e) {
     const reason = e instanceof Error ? e.message : '';
     const status = reason === 'native_identity_unconfigured' ? 503

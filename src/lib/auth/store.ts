@@ -153,6 +153,25 @@ export class AuthStore {
     return record.username;
   }
 
+  /**
+   * Mint an ordinary board session for a username verified by an external
+   * authenticator (the Airlock relay callback's allow-listed platform user).
+   * The caller must have already proven the identity; this method only
+   * creates the same opaque session as password login and grants no role,
+   * owner mapping, or scope beyond the shared work board.
+   */
+  createRelaySession(username: string): string {
+    const normalized = username.trim();
+    if (!normalized || normalized.length > 64 || /[\u0000-\u001f\u007f]/.test(normalized)) {
+      throw new Error('invalid relay identity');
+    }
+    const state = this.load();
+    const raw = randomBytes(32).toString('base64url');
+    state.sessions[tokenHash(raw)] = { username: normalized, expiresAt: this.now() + SESSION_TTL_SECONDS };
+    this.save(state);
+    return raw;
+  }
+
   createAuthorizationCode(username: string, clientId: string, redirectUri: string, scopeText?: string): string {
     const state = this.load();
     const raw = randomBytes(32).toString('base64url');
