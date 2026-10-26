@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useKanban } from '@/hooks/use-kanban';
 import { DndProvider } from './dnd-provider';
 import { KanbanColumnComponent } from './kanban-column';
@@ -8,7 +8,7 @@ import { AddCardDialog } from './add-card-dialog';
 import { ConflictDialog } from './conflict-dialog';
 import { CardActionsContext } from './kanban-card';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
-import { Plus, FolderSync, RotateCw } from 'lucide-react';
+import { Plus, FolderSync, RotateCw, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { KanbanCard, KanbanCardUpdates, RoleDefinition } from '@/lib/kanban/types';
@@ -27,6 +27,7 @@ import { RolesDialog } from './roles-dialog';
 import { InboxCapture } from './inbox-capture';
 import { IntegratorTaskDashboard } from './integrator-task-dashboard';
 import { parseBoardUrlState, serializeBoardUrlState, type BoardLayout, type ClosedKind } from './board-url-state';
+import { describePlacement, automaticRevealScope, placeCreatedCard, type BoardScope } from './create-receipt';
 import { mutationErrorMessage, readMutationResponse } from '../../lib/kanban/mutation-response';
 
 export function KanbanBoard() {
@@ -50,6 +51,8 @@ export function KanbanBoard() {
   const [search, setSearch] = useState('');
   const [attention, setAttention] = useState<AttentionFilter>('all');
   const [closedKind, setClosedKind] = useState<ClosedKind>('all');
+  const [receipt, setReceipt] = useState<{ card: KanbanCard; text: string } | null>(null);
+  const [highlightCardId, setHighlightCardId] = useState<string | null>(null);
   const [urlReady, setUrlReady] = useState(false);
   const isMobile = useIsMobile();
 
@@ -127,6 +130,47 @@ export function KanbanBoard() {
   );
 
   const handleAdd = (column: string) => { setDefaultColumn(column); setShowAdd(true); };
+
+  // The scope the board shows right now. A create can resolve after the user
+  // changed a filter, so the receipt must read the live scope, not a closure.
+  const scopeRef = useRef<BoardScope>({ workspaceView, person, project, assignee, attention, inboxOnly, planningTab });
+  useEffect(() => {
+    scopeRef.current = { workspaceView, person, project, assignee, attention, inboxOnly, planningTab };
+  }, [assignee, attention, inboxOnly, person, planningTab, project, workspaceView]);
+
+  // The workspace view is a filter, not an access rule: «Всё» can expose cards the
+  // current view hides. The board therefore only narrows into the matching owner
+  // or shared view, and never widens a filter on its own.
+  const revealCreatedCard = useCallback((card: KanbanCard) => {
+    const scope = scopeRef.current;
+    const placement = placeCreatedCard(card, scope);
+    const automatic = automaticRevealScope(card, scope, placement);
+    const viewChange = automatic.workspaceView !== scope.workspaceView
+      ? { from: scope.workspaceView, to: automatic.workspaceView }
+      : undefined;
+    if (automatic.workspaceView !== scope.workspaceView) setWorkspaceView(automatic.workspaceView);
+    if (automatic.planningTab !== scope.planningTab) setPlanningTab(automatic.planningTab);
+    const after = placeCreatedCard(card, automatic);
+    setHighlightCardId(after.visibleNow ? card.id : null);
+    setReceipt({ card, text: describePlacement(card, after, viewChange) });
+  }, []);
+
+  const handleCreate = useCallback(async (
+    title: string,
+    description: string,
+    column: string,
+    priority: string,
+    tags: string[],
+    cardProject: string,
+    cardAssignees: string[],
+    dueAt?: string,
+    planning?: KanbanCardUpdates,
+  ) => {
+    const saved = await createCard(title, description, column, priority, tags, cardProject, cardAssignees, dueAt, planning);
+    if (saved) revealCreatedCard(saved);
+    return saved;
+  }, [createCard, revealCreatedCard]);
+
   const handleUpdate = useCallback(async (id: string, updates: KanbanCardUpdates, version?: number) => {
     return updateCard(id, updates, version);
   }, [updateCard]);
@@ -168,7 +212,7 @@ export function KanbanBoard() {
   }
 
   return (
-    <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete, roles, username, refresh }}>
+    <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete, roles, username, refresh, highlightCardId }}>
       <DndProvider cards={visibleCards} onMoveCard={moveCard} onReorder={reorderColumn}>
         <div className="px-3 sm:px-6 pt-3 sm:pt-4 pb-2 border-b">
           <div className="flex items-center gap-2 sm:gap-3">
@@ -215,9 +259,19 @@ export function KanbanBoard() {
             </div>}
           </div>
         </div>
+        {receipt && (
+          <div role="status" className="flex flex-wrap items-center gap-2 border-b border-emerald-600/30 bg-emerald-600/10 px-3 py-2 text-sm sm:px-6">
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-400" />
+            <p className="min-w-0 flex-1">{receipt.text}</p>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button size="sm" variant="outline" onClick={() => setSelectedCard(receipt.card)}>Открыть</Button>
+              <Button size="sm" variant="ghost" onClick={() => setReceipt(null)}>Понятно</Button>
+            </div>
+          </div>
+        )}
         <Tabs value={planningTab} onValueChange={handlePlanningTabChange} className="flex min-h-0 flex-1">
           <div className="overflow-x-auto border-b px-3 py-2 sm:px-6">
-            <TabsList className="h-10 w-full min-w-max justify-start bg-transparent p-0">
+            <TabsList className="h-auto min-h-10 w-full flex-wrap justify-start gap-1 bg-transparent p-0 sm:h-10 sm:min-w-max sm:flex-nowrap sm:gap-0">
               <TabsTrigger value="dashboard">Обзор</TabsTrigger>
               <TabsTrigger value="execution">Активные</TabsTrigger>
               <TabsTrigger value="inbox">Входящие</TabsTrigger>
@@ -232,7 +286,7 @@ export function KanbanBoard() {
           </TabsContent>
           <TabsContent value="execution" className="min-h-0 overflow-y-auto">
             {view === 'list' ? (
-          <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} authoritativeCards={cards} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
+          <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} authoritativeCards={cards} highlightCardId={highlightCardId} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
             ) : (
           <div className="flex gap-3 sm:gap-4 p-3 sm:p-6 overflow-x-auto overscroll-x-contain flex-1">
             {DEFAULT_COLUMNS.filter(col => col.id !== 'archived' && col.id !== 'done').map(col => (
@@ -261,13 +315,13 @@ export function KanbanBoard() {
                 <option value="archived">Не планируется ({counts.archived})</option>
               </select>
             </div>
-            <TaskListView cards={closedCards} authoritativeCards={cards} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
+            <TaskListView cards={closedCards} authoritativeCards={cards} highlightCardId={highlightCardId} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
           </TabsContent>
         </Tabs>
-        <Button className="fixed bottom-6 right-6 h-12 w-12 rounded-full shadow-lg z-50" onClick={() => { setDefaultColumn('todo'); setShowAdd(true); }}>
+        <Button className="fixed bottom-6 right-6 h-12 w-12 rounded-full shadow-lg z-50" aria-label="Новая задача" title="Новая задача" onClick={() => { setDefaultColumn('todo'); setShowAdd(true); }}>
           <Plus className="h-5 w-5" />
         </Button>
-        <AddCardDialog projectOptions={projectOptions} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={createCard} />
+        <AddCardDialog projectOptions={projectOptions} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
         {selectedCard && <CardEditDialog projectOptions={projectOptions} relatedCards={cards} roles={roles} card={selectedCard} username={username} onRefresh={refresh} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReviewDecision} />}
         {conflict && <ConflictDialog conflict={conflict} onResolve={resolveConflict} />}
         <Dialog open={showWelcome} onOpenChange={setShowWelcome}>

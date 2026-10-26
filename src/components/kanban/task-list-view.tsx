@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -10,14 +10,21 @@ import { statusSaveError } from './status-result';
 interface Props {
   cards: KanbanCard[];
   authoritativeCards?: KanbanCard[];
+  highlightCardId?: string | null;
   onStatusChange: (id: string, column: KanbanColumn, version: number) => Promise<unknown>;
   onOpen: (card: KanbanCard) => void;
 }
 
-export function TaskListView({ cards, authoritativeCards = cards, onStatusChange, onOpen }: Props) {
+export function TaskListView({ cards, authoritativeCards = cards, highlightCardId = null, onStatusChange, onOpen }: Props) {
   const [pendingStatuses, setPendingStatuses] = useState<Record<string, KanbanColumn>>({});
   const [statusError, setStatusError] = useState<string | null>(null);
   const [failedStatus, setFailedStatus] = useState<{ id: string; column: KanbanColumn } | null>(null);
+  const highlightedRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // A freshly created card has to reach the eye without a manual hunt.
+    if (!highlightCardId) return;
+    highlightedRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [highlightCardId]);
   useEffect(() => {
     // An explicit conflict choice can later save the same requested transition.
     // Clear its old warning only when authoritative card state proves success.
@@ -69,7 +76,11 @@ export function TaskListView({ cards, authoritativeCards = cards, onStatusChange
             const needsReview = displayCard.column === 'review' && displayCard.needsReview === true;
             const status = DEFAULT_COLUMNS.find(column => column.id === displayCard.column)?.title ?? displayCard.column;
             return (
-              <div key={card.id} className="group flex min-h-12 items-center gap-3 py-2">
+              <div
+                key={card.id}
+                ref={card.id === highlightCardId ? highlightedRef : undefined}
+                className={`group flex min-h-12 items-center gap-3 py-2 ${card.id === highlightCardId ? 'rounded-md bg-primary/5 ring-2 ring-primary/60' : ''}`}
+              >
                 <button
                   type="button"
                   aria-label={needsReview ? 'Открыть результат для приёмки' : done ? 'Вернуть задачу' : 'Отметить выполненной'}
