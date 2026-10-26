@@ -153,6 +153,18 @@ export class AuthStore {
     return record.username;
   }
 
+  createRelaySession(username: string): string {
+    const normalized = username.trim();
+    if (!normalized || normalized.length > 64 || /[\u0000-\u001f\u007f]/.test(normalized)) {
+      throw new Error('invalid relay identity');
+    }
+    const state = this.load();
+    const raw = randomBytes(32).toString('base64url');
+    state.sessions[tokenHash(raw)] = { username: normalized, expiresAt: this.now() + SESSION_TTL_SECONDS };
+    this.save(state);
+    return raw;
+  }
+
   createAuthorizationCode(username: string, clientId: string, redirectUri: string, scopeText?: string): string {
     const state = this.load();
     const raw = randomBytes(32).toString('base64url');

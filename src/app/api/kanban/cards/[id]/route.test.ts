@@ -268,6 +268,24 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(findCardById).toHaveBeenCalledWith('card-1', '/scoped/work');
   });
 
+  it.each(['qa_exmanager_a', 'qa_exmanager_b'])('allows QA identity %s to read the isolated QA project', async username => {
+    authenticated.current = { username, scope: 'work' };
+    identity.current = { username, scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'ExManager QA' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), { params: Promise.resolve({ id: 'card-1' }) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ card: { ...existingCard, project: 'ExManager QA' } });
+  });
+
+  it('denies an unrelated test participant from the isolated QA project', async () => {
+    authenticated.current = { username: 'qa_exmanager_outsider', scope: 'work' };
+    identity.current = { username: 'qa_exmanager_outsider', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'ExManager QA' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), { params: Promise.resolve({ id: 'card-1' }) });
+    expect(response.status).toBe(404);
+    expect(findCardById).not.toHaveBeenCalled();
+  });
+
   it('does not return a known card id from another project', async () => {
     authenticated.current = { username: 'nikita', scope: 'work' };
     findCardById.mockReturnValue({ ...existingCard, project: 'Alpha' });

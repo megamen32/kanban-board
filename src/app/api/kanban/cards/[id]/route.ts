@@ -11,13 +11,14 @@ import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
 import { validateTransition } from '@/lib/kanban/transition-policy';
 
 const VERIFIED_BOARD_PROJECT = 'Олег и Никита';
+const QA_BOARD_PROJECT = 'ExManager QA';
 
 function mayReadBoardProject(identity: { username: string; scope: 'work' | 'personal' }, project: string): boolean {
-  return identity.scope === 'work' && ['nikita', 'oleg'].includes(identity.username) && project.trim() === VERIFIED_BOARD_PROJECT;
+  return identity.scope === 'work' && ((['nikita', 'oleg'].includes(identity.username) && project.trim() === VERIFIED_BOARD_PROJECT) || (['qa_exmanager_a', 'qa_exmanager_b'].includes(identity.username) && project.trim() === QA_BOARD_PROJECT));
 }
 
 function mayReadAnyBoardProject(identity: { username: string; scope: 'work' | 'personal' }): boolean {
-  return identity.scope === 'work' && ['nikita', 'oleg'].includes(identity.username);
+  return identity.scope === 'work' && ['nikita', 'oleg', 'qa_exmanager_a', 'qa_exmanager_b'].includes(identity.username);
 }
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

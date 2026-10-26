@@ -242,6 +242,7 @@ describe('POST /api/kanban/cards', () => {
 
 describe('GET /api/kanban/cards', () => {
   const allowed = { ...createdCard, id: 'allowed-card', project: 'Олег и Никита' };
+  const qaCard = { ...createdCard, id: 'qa-card', project: 'ExManager QA' };
   const alpha = { ...createdCard, id: 'alpha-card', project: 'Alpha' };
   const beta = { ...createdCard, id: 'beta-card', project: 'Beta' };
   const legacy = { ...createdCard, id: 'legacy-card', project: 'Legacy' };
@@ -257,8 +258,8 @@ describe('GET /api/kanban/cards', () => {
     nativeProjectAccessContextFromRequest.mockResolvedValue(null);
     identity.current = { username: 'nikita', scope: 'work' };
     tasksDirForScope.mockReturnValue('/scoped/work');
-    getAllCards.mockReturnValue([allowed, alpha, beta, legacy]);
-    listProjects.mockReturnValue([...projects, { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }]);
+    getAllCards.mockReturnValue([allowed, qaCard, alpha, beta, legacy]);
+    listProjects.mockReturnValue([...projects, { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }, { id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }]);
   });
 
   it('returns only the server-allowlisted board project, independent of query hints', async () => {
@@ -273,6 +274,14 @@ describe('GET /api/kanban/cards', () => {
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards?project=Beta'));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
+  });
+
+  it.each(['qa_exmanager_a', 'qa_exmanager_b'])('allows QA identity %s to read only the isolated QA project', async username => {
+    identity.current = { username, scope: 'work' };
+    authenticated.current = { username, scope: 'work' };
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards?project=Олег%20и%20Никита'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cards: [qaCard], projects: [{ id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }] });
   });
 
   it('fails closed for another verified identity without reading the shared store', async () => {

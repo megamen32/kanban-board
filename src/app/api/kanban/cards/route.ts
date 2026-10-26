@@ -12,9 +12,12 @@ import { validateTransition } from '@/lib/kanban/transition-policy';
 import { NIKITA_ACTOR } from '@/lib/kanban/transition-policy';
 
 const VERIFIED_BOARD_PROJECT = 'Олег и Никита';
+const QA_BOARD_PROJECT = 'ExManager QA';
 
 function boardReadProject(identity: { username: string; scope: 'work' | 'personal' }): string | null {
-  return identity.scope === 'work' && ['nikita', 'oleg'].includes(identity.username) ? VERIFIED_BOARD_PROJECT : null;
+  if (identity.scope !== 'work') return null;
+  if (['qa_exmanager_a', 'qa_exmanager_b'].includes(identity.username)) return QA_BOARD_PROJECT;
+  return ['nikita', 'oleg'].includes(identity.username) ? VERIFIED_BOARD_PROJECT : null;
 }
 
 export async function GET(req: NextRequest) {
