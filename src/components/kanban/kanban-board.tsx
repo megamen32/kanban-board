@@ -225,7 +225,7 @@ export function KanbanBoard() {
             </div>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <select aria-label="Кто вы" value={person} onChange={event => { setPerson(event.target.value); window.localStorage.setItem('kanban-person', event.target.value); }} className="h-8 max-w-[130px] rounded-md border bg-background px-2 text-xs">
+            <select aria-label="Фильтр по человеку" value={person} onChange={event => { setPerson(event.target.value); window.localStorage.setItem('kanban-person', event.target.value); }} className="h-8 max-w-[130px] rounded-md border bg-background px-2 text-xs">
               {people.length === 0 && <option value="nikita">nikita</option>}
               {people.map(item => <option key={item} value={item}>{item}</option>)}
             </select>
@@ -321,14 +321,14 @@ export function KanbanBoard() {
         <Button className="fixed bottom-6 right-6 h-12 w-12 rounded-full shadow-lg z-50" aria-label="Новая задача" title="Новая задача" onClick={() => { setDefaultColumn('todo'); setShowAdd(true); }}>
           <Plus className="h-5 w-5" />
         </Button>
-        <AddCardDialog projectOptions={projectOptions} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
+        <AddCardDialog projectOptions={projectOptions} defaultProject={project === 'all' ? '' : project} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
         {selectedCard && <CardEditDialog projectOptions={projectOptions} relatedCards={cards} roles={roles} card={selectedCard} username={username} onRefresh={refresh} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReviewDecision} />}
         {conflict && <ConflictDialog conflict={conflict} onResolve={resolveConflict} />}
         <Dialog open={showWelcome} onOpenChange={setShowWelcome}>
           <DialogContent className="sm:max-w-md" showCloseButton={false}>
-            <DialogHeader><DialogTitle>Ты кто?</DialogTitle></DialogHeader>
-            <p className="text-sm text-muted-foreground">Выберите себя для личного фильтра или откройте общие задачи команды. Завершённые и отменённые карточки доступны в разделе «Закрытые».</p>
-            <select aria-label="Выберите себя" value={person} onChange={event => setPerson(event.target.value)} className="h-10 rounded-md border bg-background px-3">
+            <DialogHeader><DialogTitle>Какой список открыть?</DialogTitle></DialogHeader>
+            <p className="text-sm text-muted-foreground">Выберите профиль, чтобы отфильтровать личные задачи, или откройте общие задачи команды. Профиль меняет только список на экране, а не владельца новой карточки. Завершённые и отменённые карточки доступны в разделе «Закрытые».</p>
+            <select aria-label="Профиль для личного фильтра" value={person} onChange={event => setPerson(event.target.value)} className="h-10 rounded-md border bg-background px-3">
               {people.length === 0 && <option value="nikita">nikita</option>}
               {people.map(item => <option key={item} value={item}>{item}</option>)}
             </select>
