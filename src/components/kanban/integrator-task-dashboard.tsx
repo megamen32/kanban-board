@@ -95,6 +95,14 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
     }
   }
 
+  function reviewerAssignmentButton(card: KanbanCard) {
+    return <Button size="sm" variant="outline" disabled={!canAssignReviewer}
+      title={canAssignReviewer ? 'Назначить человека, который примет результат' : 'Назначить проверяющего может только владелец доски'}
+      onClick={() => { if (!canAssignReviewer) return; setReviewerAssignmentCardId(card.id); setReviewerDraft(''); setReviewerError(null); }}>
+      <UserRoundCheck aria-hidden className="mr-1 h-3.5 w-3.5" />Назначить проверяющего
+    </Button>;
+  }
+
   function writeOperation(cardId: string, operation: StoredStartOperation): boolean {
     try {
       window.localStorage.setItem(executionOperationStorageKey(cardId), JSON.stringify(operation));
@@ -452,15 +460,11 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                     {execution?.lastProgress && <p className="mt-2 text-sm"><span className="text-muted-foreground">Последняя сохранённая сводка:</span> {execution.lastProgress.summary}</p>}
                     {waitLabel && <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
                       <p><span className="text-muted-foreground">Ждём:</span> {waitLabel}</p>
-                      {humanWait && approvers.length === 0 && canAssignReviewer && <Button size="sm" variant="outline" onClick={() => { setReviewerAssignmentCardId(card.id); setReviewerDraft(''); setReviewerError(null); }}>
-                        <UserRoundCheck aria-hidden className="mr-1 h-3.5 w-3.5" />Назначить проверяющего
-                      </Button>}
+                      {humanWait && approvers.length === 0 && reviewerAssignmentButton(card)}
                     </div>}
                     {card.column === 'review' && card.needsReview && <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
                       <p><span className="text-muted-foreground">Проверяет:</span> {approvers.join(', ') || 'проверяющий не назначен'}</p>
-                      {approvers.length === 0 && canAssignReviewer && <Button size="sm" variant="outline" onClick={() => { setReviewerAssignmentCardId(card.id); setReviewerDraft(''); setReviewerError(null); }}>
-                        <UserRoundCheck aria-hidden className="mr-1 h-3.5 w-3.5" />Назначить проверяющего
-                      </Button>}
+                      {approvers.length === 0 && reviewerAssignmentButton(card)}
                     </div>}
                     {reviewerAssignmentCardId === card.id && <form className="mt-2 max-w-lg rounded-md border bg-background p-3" onSubmit={event => { event.preventDefault(); void assignReviewer(card); }}>
                       <label htmlFor={`reviewer-${card.id}`} className="text-sm font-medium">Кто проверит?</label>

@@ -5,7 +5,7 @@ import type { KanbanCard } from '@/lib/kanban/types';
 
 vi.stubGlobal('React', React);
 // @ts-expect-error Vitest's runtime accepts virtual mocks; the installed type omits this option.
-vi.mock('@/components/ui/button', () => ({ Button: ({ children }: { children: React.ReactNode }) => React.createElement('button', null, children) }), { virtual: true });
+vi.mock('@/components/ui/button', () => ({ Button: ({ children, disabled, title }: { children: React.ReactNode; disabled?: boolean; title?: string }) => React.createElement('button', { disabled, title }, children) }), { virtual: true });
 // @ts-expect-error Vitest's runtime accepts virtual mocks; the installed type omits this option.
 vi.mock('@/components/ui/input', () => ({ Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => React.createElement('input', props) }), { virtual: true });
 vi.mock('@/lib/kanban/types', () => ({
@@ -43,5 +43,17 @@ describe('integrator task description rendering', () => {
 
     expect(html).toContain('Изменить');
     expect(html).toContain('Назначить проверяющего');
+  });
+
+  it('explains that only the board owner can assign a reviewer', () => {
+    const waiting: KanbanCard = { ...card, column: 'review', needsReview: true, requiresApprovalFrom: [] };
+    const html = renderToStaticMarkup(React.createElement(IntegratorTaskDashboard, {
+      cards: [waiting], onOpen: () => undefined, onRefresh: () => undefined,
+      canAssignReviewer: false, onAssignReviewer: async () => null,
+    }));
+
+    expect(html).toContain('Назначить проверяющего');
+    expect(html).toContain('Назначить проверяющего может только владелец доски');
+    expect(html).toContain('disabled="" title="Назначить проверяющего может только владелец доски"');
   });
 });
