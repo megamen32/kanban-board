@@ -1357,6 +1357,32 @@ function sessionControlResponse(cardId: string, receipt: TaskExecutionReceipt, a
   });
 }
 
+function nativeDirectAccepted(result: HerderToolResult | undefined, receipt: TaskExecutionReceipt, inputId: string): boolean {
+  if (!result || result.isError === true) return false;
+  const text = result.content.map(item => item.type === 'text' ? item.text ?? '' : '').join('\n');
+  const target = `[${receipt.harness}] ${receipt.nativeSessionId}`;
+  const hasTarget = text.startsWith(`Message sent to ${target} (steering).`)
+    || text.startsWith(`Message accepted by ${target}; native turn start is still being verified.`)
+    || text.startsWith(`Message reserved for the current turn of ${target}; model observation is not yet confirmed.`);
+  if (!hasTarget) return false;
+  const match = text.match(/\n(?:Native admission|Current-turn context reservation) receipt: (\{[^\n]*\})/);
+  if (!match) return false;
+  try {
+    const admission: unknown = JSON.parse(match[1]!);
+    return isRecord(admission) && admission.admitted === true && admission.inputId === inputId;
+  } catch {
+    return false;
+  }
+}
+
+function nativeStopAccepted(result: HerderToolResult | undefined, receipt: TaskExecutionReceipt): boolean {
+  if (!result || result.isError === true) return false;
+  const text = result.content.map(item => item.type === 'text' ? item.text ?? '' : '').join('\n').trim();
+  const localReceipt = `Stopped agent [${receipt.harness}] ${receipt.nativeSessionId}.`;
+  const hostReceipt = `Stopped agent [${receipt.harness}] ${receipt.nativeSessionId} on host '${receipt.hostId}'.`;
+  return text === localReceipt || text === hostReceipt;
+}
+
 async function controlTaskSession(context: AuthorizedTaskCard, body: RecordValue): Promise<NextResponse> {
   const action = body.action === 'session-direct' ? 'direct' : body.action === 'session-stop' ? 'stop' : undefined;
   const expectedKeys = action === 'direct' ? ['action', 'expectedVersion', 'message'] : ['action', 'expectedVersion'];
@@ -1399,21 +1425,27 @@ async function controlTaskSession(context: AuthorizedTaskCard, body: RecordValue
 
   let toolResult: HerderToolResult | undefined;
   try {
-    toolResult = await callOwnerHerderTool(action === 'direct' ? 'todo_task_direct' : 'todo_task_stop', {
-      card_id: context.card.id,
-      project: context.card.project,
-      board_operation_id: durableReceipt.operationId,
-      ...(action === 'direct' ? { message } : {}),
-    });
+    toolResult = action === 'direct'
+      ? await callOwnerHerderTool('send_message', {
+        sessionId: durableReceipt.nativeSessionId,
+        harness: durableReceipt.harness,
+        hostId: durableReceipt.hostId,
+        inputId: requestHash,
+        message,
+        mode: 'steer',
+      })
+      : await callOwnerHerderTool('stop_agent', {
+        sessionId: durableReceipt.nativeSessionId,
+        harness: durableReceipt.harness,
+        hostId: durableReceipt.hostId,
+      });
   } catch {
     // The durable intent is terminal for dispatch: transport failure may follow a
     // successful provider call, so this request is never sent a second time.
   }
-  const result = isRecord(toolResult?.structuredContent) ? toolResult.structuredContent : undefined;
-  const response = isRecord(result?.response) ? result.response : undefined;
-  const accepted = !!result && toolResult?.isError !== true
-    && result.card_id === context.card.id && result.board_operation_id === durableReceipt.operationId
-    && result.action === action && typeof response?.result === 'string' && !!response.result.trim();
+  const accepted = action === 'direct'
+    ? nativeDirectAccepted(toolResult, durableReceipt, requestHash)
+    : nativeStopAccepted(toolResult, durableReceipt);
   const saved = updateSessionControl(context.card.id, context.tasksDir, receipt.operationId,
     requestHash, action, accepted ? 'accepted' : 'unknown');
   const finalReceipt = saved && !('conflict' in saved)

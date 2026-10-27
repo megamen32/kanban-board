@@ -1257,12 +1257,9 @@ describe('task execution API', () => {
   it('allows distinct direct messages once, stops the exact receipt, and never replays either action', async () => {
     mocks.currentCard.value = controllableOpenCodeCard();
     mocks.callOwnerHerderTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => ({
-      structuredContent: {
-        card_id: controlCardId,
-        board_operation_id: controlOperationId,
-        action: tool === 'todo_task_direct' ? 'direct' : 'stop',
-        response: { result: 'accepted by owner profile' },
-      },
+      content: [{ type: 'text', text: tool === 'send_message'
+        ? `Message sent to [${String(args.harness)}] ${String(args.sessionId)} (steering).\nNative admission receipt: ${JSON.stringify({ admitted: true, inputId: args.inputId })}`
+        : `Stopped agent [${String(args.harness)}] ${String(args.sessionId)} on host '${String(args.hostId)}'.` }],
     }));
 
     const direct = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: 4, message: 'Проверь текущий шаг' }), {
@@ -1271,8 +1268,12 @@ describe('task execution API', () => {
     if (!direct) throw new Error('direct response missing');
     expect(direct.status).toBe(200);
     expect(await direct.json()).toMatchObject({ boardOperationId: controlOperationId, action: 'direct', state: 'accepted' });
-    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('todo_task_direct', {
-      card_id: controlCardId, project: 'Demo', board_operation_id: controlOperationId, message: 'Проверь текущий шаг',
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('send_message', {
+      sessionId: 'opencode-session-1', harness: 'opencode', hostId: 'roomhacker-server-100',
+      inputId: createHash('sha256').update(JSON.stringify({
+        cardId: controlCardId, operationId: controlOperationId, action: 'direct', message: 'Проверь текущий шаг',
+      })).digest('hex'),
+      message: 'Проверь текущий шаг', mode: 'steer',
     });
 
     const secondDirect = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: mocks.currentCard.value!.version, message: 'Сделай следующий шаг' }), {
@@ -1280,8 +1281,12 @@ describe('task execution API', () => {
     });
     if (!secondDirect) throw new Error('second direct response missing');
     expect(secondDirect.status).toBe(200);
-    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('todo_task_direct', {
-      card_id: controlCardId, project: 'Demo', board_operation_id: controlOperationId, message: 'Сделай следующий шаг',
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('send_message', {
+      sessionId: 'opencode-session-1', harness: 'opencode', hostId: 'roomhacker-server-100',
+      inputId: createHash('sha256').update(JSON.stringify({
+        cardId: controlCardId, operationId: controlOperationId, action: 'direct', message: 'Сделай следующий шаг',
+      })).digest('hex'),
+      message: 'Сделай следующий шаг', mode: 'steer',
     });
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.sessionControls?.direct).toHaveLength(2);
     const callsAfterTwoMessages = mocks.callOwnerHerderTool.mock.calls.length;
@@ -1305,8 +1310,8 @@ describe('task execution API', () => {
     if (!stop) throw new Error('stop response missing');
     expect(stop.status).toBe(200);
     expect(await stop.json()).toMatchObject({ boardOperationId: controlOperationId, action: 'stop', state: 'accepted' });
-    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('todo_task_stop', {
-      card_id: controlCardId, project: 'Demo', board_operation_id: controlOperationId,
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('stop_agent', {
+      sessionId: 'opencode-session-1', harness: 'opencode', hostId: 'roomhacker-server-100',
     });
 
     const beforeDuplicate = mocks.callOwnerHerderTool.mock.calls.length;
@@ -1335,6 +1340,25 @@ describe('task execution API', () => {
     if (!retry) throw new Error('unknown direct retry response missing');
     expect(retry.status).toBe(202);
     expect(mocks.callOwnerHerderTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts the native current-turn reservation only with its exact stable input receipt', async () => {
+    mocks.currentCard.value = controllableOpenCodeCard();
+    const message = 'Зарезервируй текущий шаг';
+    const inputId = createHash('sha256').update(JSON.stringify({
+      cardId: controlCardId, operationId: controlOperationId, action: 'direct', message,
+    })).digest('hex');
+    mocks.callOwnerHerderTool.mockImplementation(async (_tool: string, args: Record<string, unknown>) => ({
+      content: [{ type: 'text', text: `Message reserved for the current turn of [${String(args.harness)}] ${String(args.sessionId)}; model observation is not yet confirmed.\nCurrent-turn context reservation receipt: ${JSON.stringify({ admitted: true, inputId })}` }],
+    }));
+
+    const response = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: 4, message }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!response) throw new Error('current-turn reservation response missing');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ boardOperationId: controlOperationId, action: 'direct', state: 'accepted' });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.sessionControls?.direct?.[0]?.phase).toBe('accepted');
   });
 
   it('does not accept a browser-supplied board operation id or an ambiguous active receipt set', async () => {

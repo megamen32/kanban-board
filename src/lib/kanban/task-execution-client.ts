@@ -4,7 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 const HERDER_MCP_URL = 'https://agent.bezrabotnyi.com/airlock-mcp';
 const MAX_RESPONSE_BYTES = 1_000_000;
 
-export type HerderToolName = 'fleet_node_info' | 'fleet_create_session' | 'fleet_session_view' | 'agent_info' | 'send_message' | 'todo_task_direct' | 'todo_task_stop';
+export type HerderToolName = 'fleet_node_info' | 'fleet_create_session' | 'fleet_session_view' | 'agent_info' | 'send_message' | 'stop_agent';
 export interface HerderToolResult {
   content: Array<{ type: string; text?: string }>;
   structuredContent?: unknown;
