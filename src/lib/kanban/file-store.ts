@@ -784,14 +784,14 @@ function isTaskExecutionProjectBinding(value: unknown, receiptHostId: unknown): 
   const strings = ['projectId', 'projectRoot', 'rootIdentity', 'policyRevision', 'runtimeInstanceId',
     'hostId', 'harnessVersion', 'model', 'cwd'] as const;
   if (binding.contract !== 'integrator-host-readiness-v1' || strings.some(key => typeof binding[key] !== 'string' || !(binding[key] as string).trim())
-      || binding.hostId !== receiptHostId || binding.harness !== 'codex' || binding.model !== 'gpt-6-luna'
+      || binding.hostId !== receiptHostId || !['codex', 'opencode'].includes(String(binding.harness))
       || binding.resourceReady !== true || !Number.isSafeInteger(binding.observedAtMs) || (binding.observedAtMs as number) <= 0
       || !Array.isArray(binding.requiredTools) || !binding.requiredTools.length
       || binding.requiredTools.some(item => typeof item !== 'string' || !item.trim())
       || !Array.isArray(binding.availableTools) || binding.availableTools.some(item => typeof item !== 'string' || !item.trim())
       || !Array.isArray(binding.availableModels) || binding.availableModels.some(item => typeof item !== 'string' || !item.trim())
       || !binding.requiredTools.every(item => (binding.availableTools as string[]).includes(item as string))
-      || !(binding.availableModels as string[]).includes('gpt-6-luna')) return false;
+      || !(binding.availableModels as string[]).includes(binding.model as string)) return false;
   if (typeof paths.requestedCwd !== 'string' || typeof paths.canonicalCwd !== 'string'
       || typeof paths.rootPath !== 'string' || paths.contained !== true || paths.identityMatches !== true
       || paths.rootPath !== binding.projectRoot || paths.canonicalCwd !== binding.cwd) return false;

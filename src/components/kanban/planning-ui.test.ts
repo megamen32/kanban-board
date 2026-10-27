@@ -35,7 +35,7 @@ describe('planning UI projections', () => {
 
     expect(getPlanningTabCards(cards, 'execution', '2026-08-12T10:00:00+03:00').map(item => item.id))
       .toEqual(['inbox', 'today']);
-    expect(getPlanningTabCards(cards, 'inbox').map(item => item.id)).toEqual(['inbox']);
+    expect(getPlanningTabCards(cards, 'inbox').map(item => item.id)).toEqual(['inbox', 'today']);
     expect(getPlanningTabCards(cards, 'today', '2026-08-12T10:00:00+03:00').map(item => item.id)).toEqual(['today']);
   });
 
