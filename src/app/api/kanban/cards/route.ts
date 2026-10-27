@@ -20,18 +20,12 @@ function boardReadProject(identity: { username: string; scope: 'work' | 'persona
   return ['nikita', 'oleg'].includes(identity.username) ? VERIFIED_BOARD_PROJECT : null;
 }
 
-function anonymousQaReadAllowed(req: NextRequest): boolean {
-  if (process.env.KANBAN_QA_ANONYMOUS_READS !== '1') return false;
-  const hostname = req.nextUrl.hostname.toLowerCase();
-  return hostname === '127.0.0.1' || hostname === '::1' || hostname === 'localhost';
-}
-
+// The QA login can read only its own cards when the isolated QA runtime opts in.
 function qaTestloginSelfReadAllowed(identity: { username: string; scope: 'work' | 'personal' } | null): identity is { username: 'testlogin'; scope: 'work' } {
   return process.env.KANBAN_QA_ANONYMOUS_READS === '1'
     && identity?.scope === 'work'
     && identity.username === 'testlogin';
 }
-
 export async function GET(req: NextRequest) {
   try {
     const nativeContext = await nativeProjectAccessContextFromRequest(req);
@@ -73,13 +67,7 @@ export async function GET(req: NextRequest) {
       const projects = listProjects(tasksDir).filter(project => ownedProjects.has(project.name.trim()));
       return NextResponse.json({ cards, projects });
     }
-    if (!allowedProject) {
-      if (!authenticatedIdentity && anonymousQaReadAllowed(req)) {
-        const tasksDir = tasksDirForScope('work');
-        return NextResponse.json({ cards: getAllCards(tasksDir), projects: listProjects(tasksDir) });
-      }
-      return NextResponse.json({ cards: [], projects: [] });
-    }
+    if (!allowedProject) return NextResponse.json({ cards: [], projects: [] });
     const tasksDir = tasksDirForScope(authenticatedIdentity!.scope);
     const cards = getAllCards(tasksDir).filter(card => card.project.trim() === allowedProject);
     const projects = listProjects(tasksDir).filter(project => project.name.trim() === allowedProject);

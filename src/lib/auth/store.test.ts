@@ -28,4 +28,19 @@ describe('AuthStore', () => {
     now += 31 * 24 * 60 * 60;
     expect(token && store.validateAccessToken(token.accessToken)).toBeNull();
   });
+
+  it('revokes every access token of one client identity and keeps the others', () => {
+    const store = new AuthStore({ rootDir: mkdtempSync(path.join(tmpdir(), 'kanban-auth-')), encryptionKey: 'a'.repeat(32) });
+    const appCode = store.createAuthorizationCode('airlock-todo-board-app', 'airlock-todo-board-app', 'urn:airlock:app', 'kanban:work');
+    const appToken = store.exchangeAuthorizationCode(appCode, 'airlock-todo-board-app', 'urn:airlock:app');
+    const serviceCode = store.createAuthorizationCode('exmanager-service', 'exmanager-airlock-service', 'urn:exmanager:operator-provisioning', 'kanban:work');
+    const serviceToken = store.exchangeAuthorizationCode(serviceCode, 'exmanager-airlock-service', 'urn:exmanager:operator-provisioning');
+    expect(appToken && store.validateAccessToken(appToken.accessToken)).not.toBeNull();
+    expect(serviceToken && store.validateAccessToken(serviceToken.accessToken)).not.toBeNull();
+
+    expect(store.revokeClientAccessTokens('airlock-todo-board-app')).toBe(1);
+    expect(appToken && store.validateAccessToken(appToken.accessToken)).toBeNull();
+    expect(serviceToken && store.validateAccessToken(serviceToken.accessToken)).not.toBeNull();
+    expect(store.revokeClientAccessTokens('airlock-todo-board-app')).toBe(0);
+  });
 });

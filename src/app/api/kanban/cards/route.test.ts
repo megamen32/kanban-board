@@ -259,6 +259,7 @@ describe('GET /api/kanban/cards', () => {
     nativeAccess.current = null;
     nativeProjectAccessContextFromRequest.mockResolvedValue(null);
     identity.current = { username: 'nikita', scope: 'work' };
+    authenticated.current = { username: 'nikita', scope: 'work' };
     tasksDirForScope.mockReturnValue('/scoped/work');
     getAllCards.mockReturnValue([allowed, qaCard, alpha, beta, legacy]);
     listProjects.mockReturnValue([...projects, { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }, { id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }]);
@@ -347,27 +348,12 @@ describe('GET /api/kanban/cards', () => {
     expect(listProjects).not.toHaveBeenCalled();
   });
 
-  it('allows anonymous reads only for the explicitly enabled loopback QA host', async () => {
+  it('does not expose all work projects to anonymous loopback requests in QA mode', async () => {
     identity.current = { username: 'anonymous', scope: 'work' };
     authenticated.current = null;
     vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
 
     const response = await GET(new NextRequest('http://127.0.0.1:43330/api/kanban/cards'));
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      cards: [allowed, qaCard, alpha, beta, legacy],
-      projects: [...projects, { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }, { id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }],
-    });
-    expect(tasksDirForScope).toHaveBeenCalledWith('work');
-  });
-
-  it('keeps anonymous reads closed on non-loopback hosts even when QA mode is enabled', async () => {
-    identity.current = { username: 'anonymous', scope: 'work' };
-    authenticated.current = null;
-    vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
-
-    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ cards: [], projects: [] });
@@ -378,7 +364,7 @@ describe('GET /api/kanban/cards', () => {
   it('filters every persisted card and empty project through current native membership', async () => {
     authenticated.current = null;
     const forProject = vi.fn(async (project: string) => {
-      if (project === 'Beta' || project === 'Legacy') throw new Error('native_project_access_denied');
+      if (project === 'ExManager QA' || project === 'Beta' || project === 'Legacy') throw new Error('native_project_access_denied');
       return { project, team: 'integrator', readAllowed: true as const, writeAllowed: false };
     });
     nativeAccess.current = { userId: 'sdk-user-17', forProject };
@@ -388,7 +374,7 @@ describe('GET /api/kanban/cards', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [allowed, qaCard, alpha], projects: [projects[0], projects[1], { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }, { id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }] });
+    expect(await response.json()).toEqual({ cards: [allowed, alpha], projects: [projects[0], projects[1], { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
     expect(forProject.mock.calls.map(([project]) => project)).toEqual(['Олег и Никита', 'ExManager QA', 'Alpha', 'Beta', 'Legacy', 'Empty project']);
     expect(tasksDirForScope).toHaveBeenCalledWith('work');
   });

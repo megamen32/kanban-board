@@ -248,4 +248,37 @@ describe('Kanban MCP transport', () => {
     expect((await tool('kanban.delete', { cardId: first.id })).isError).toBe(true);
   });
 
+  it('serves the Airlock application client as read-only and leaves the ordinary client unchanged', async () => {
+    const ordinary = await POST(request({ jsonrpc: '2.0', id: 30, method: 'tools/list', params: {} }));
+    expect((await ordinary.json()).result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      'kanban.list',
+      'kanban.read',
+      'kanban.capture_inbox',
+      'kanban.change',
+      'kanban.project.ensure',
+      'kanban.project.list',
+      'kanban.delete',
+    ]);
+
+    const auth = new AuthStore({ rootDir: authDir, encryptionKey: authSecret });
+    const appCode = auth.createAuthorizationCode('airlock-todo-board-app', 'airlock-todo-board-app', 'urn:airlock:app', 'kanban:work');
+    token = auth.exchangeAuthorizationCode(appCode, 'airlock-todo-board-app', 'urn:airlock:app')!.accessToken;
+
+    const appTools = await POST(request({ jsonrpc: '2.0', id: 31, method: 'tools/list', params: {} }));
+    const appToolNames = (await appTools.json()).result.tools.map((tool: { name: string }) => tool.name);
+    expect(appToolNames).toEqual(['kanban.list', 'kanban.read', 'kanban.project.list']);
+
+    const read = await POST(request({ jsonrpc: '2.0', id: 32, method: 'tools/call', params: { name: 'kanban.list', arguments: { limit: 5 } } }));
+    expect((await read.json()).result.isError).toBeFalsy();
+
+    for (const name of ['kanban.change', 'kanban.delete', 'kanban.capture_inbox', 'kanban.project.ensure']) {
+      const mutation = await POST(request({
+        jsonrpc: '2.0', id: 33, method: 'tools/call',
+        params: { name, arguments: { cardId: 'x', mode: 'new', project: 'QA', title: 'x', transcript: 'x', externalKey: 'x', name: 'x' } },
+      }));
+      const body = await mutation.json();
+      expect(body.error ?? body.result?.isError).toBeTruthy();
+    }
+  });
+
 });

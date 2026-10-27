@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   taskExecutionSnapshot: vi.fn(),
   sessionInfo: { value: undefined as Record<string, unknown> | undefined },
   projectReadinessOverride: { value: undefined as Record<string, unknown> | undefined },
+  projectRouteOverride: { value: undefined as Record<string, unknown> | undefined },
   turnChangesAfterView: { value: false },
   cardChangesAfterView: { value: false },
 }));
@@ -60,24 +61,28 @@ function scopedReadiness(project = 'Demo', overrides: Record<string, unknown> = 
     requestedCwd: scopedProjectRoot, canonicalCwd: scopedProjectRoot, rootPath: scopedProjectRoot,
     contained: true, identityMatches: true,
   };
+  // The host reports the readiness of the route it names: the snapshot carries that harness and model.
+  const route = mocks.projectRouteOverride.value ?? { harness: 'codex', model: 'gpt-6-luna', state: 'ready' };
+  const harness = typeof route.harness === 'string' ? route.harness : 'codex';
+  const model = typeof route.model === 'string' ? route.model : 'gpt-6-luna';
+  const codex = harness === 'codex';
   return {
     hostId: 'roomhacker-server-100', nativeUser: 'operator',
     projectReadinessContract: 'integrator-host-readiness-v1',
+    projectRoute: route,
     projectReadiness: {
       state: 'ready', projectId: project, projectRoot: scopedProjectRoot,
       rootIdentity: 'exmanager-workspace-root-v1', policyRevision: 'scope-policy-7',
       observedAtMs: Date.now(), runtimeInstanceId: 'herder-runtime-12', hostId: 'roomhacker-server-100',
-      harness: 'codex', harnessVersion: 'codex-test-1', model: 'gpt-6-luna',
-      requiredTools: ['web_search'], availableTools: ['web_search', 'shell_exec'],
-      availableModels: ['gpt-6-luna'], resourceReady: true, cwd: scopedProjectRoot, pathResolution,
+      harness, harnessVersion: codex ? 'codex-test-1' : '', model,
+      requiredTools: codex ? ['web_search'] : [], availableTools: codex ? ['web_search', 'shell_exec'] : [],
+      availableModels: [model], resourceReady: true, cwd: scopedProjectRoot, pathResolution,
       ...overrides,
     },
   };
 }
 
 const parentOperationId = 'a'.repeat(64);
-const controlCardId = '11111111-2222-4333-8444-555555555555';
-const controlOperationId = 'b'.repeat(64);
 function researchCard(description = baseCard.description): KanbanCard {
   const card: KanbanCard = {
     ...baseCard, description, column: 'review', needsReview: true, version: 8,
@@ -109,6 +114,9 @@ function followUpRequest(action: 'continue-task' | 'sync-task-continuation', exp
     }),
   });
 }
+
+const controlCardId = '11111111-2222-4333-8444-555555555555';
+const controlOperationId = 'b'.repeat(64);
 
 function controllableOpenCodeCard(): KanbanCard {
   return {
@@ -199,15 +207,16 @@ function toolResult(tool: string, args: Record<string, unknown>) {
       launchCwd: readiness.cwd,
     } : undefined;
     return { structuredContent: {
-      ok: true, created: true, inputId: args.inputId, harness: 'codex', sessionId, cwd: args.cwd,
+      ok: true, created: true, inputId: args.inputId, harness: readiness?.harness ?? 'codex', sessionId, cwd: args.cwd,
       ...(projectExecution ? { projectReadinessContract: args.projectReadinessContract, projectExecution } : {}),
     }, content: [] };
   }
   if (tool === 'fleet_session_view') {
-    const receiptCwd = mocks.currentCard.value?.taskExecutionHistory?.at(-1)?.projectBinding?.cwd ?? cwd;
+    const binding = mocks.currentCard.value?.taskExecutionHistory?.at(-1)?.projectBinding;
+    const receiptCwd = binding?.cwd ?? cwd;
     const result = { structuredContent: {
       hostId: 'roomhacker-server-100', details: {
-        session: { id: sessionId, harness: 'codex', cwd: receiptCwd, model: 'gpt-6-luna' },
+        session: { id: sessionId, harness: binding?.harness ?? 'codex', cwd: receiptCwd, model: binding?.model ?? 'gpt-6-luna' },
         historyUnavailable: false, messages: [{ role: 'assistant', text: 'Found two candidates' }],
       },
     }, content: [] };
@@ -257,6 +266,7 @@ describe('task execution API', () => {
     mocks.turnChangesAfterView.value = false;
     mocks.cardChangesAfterView.value = false;
     mocks.projectReadinessOverride.value = undefined;
+    mocks.projectRouteOverride.value = undefined;
     mocks.callOwnerHerderTool.mockImplementation(toolResult);
     mocks.validateTransition.mockReturnValue({ kind: 'accepted', patch: { column: 'in-progress' } });
     mocks.taskExecutionSnapshot.mockImplementation((card: KanbanCard) => ({
@@ -503,6 +513,40 @@ describe('task execution API', () => {
       mocks.callOwnerHerderTool.mockClear();
       const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
       if (!response) throw new Error('readiness response missing');
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ state: 'not_attempted' });
+      expect(mocks.updateCard).not.toHaveBeenCalled();
+      expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(0);
+    }
+  });
+
+  it('launches the harness and model of the project route the herder reported', async () => {
+    mocks.projectRouteOverride.value = { harness: 'opencode', model: 'omniroute/minimax-combo-m3.1', state: 'ready' };
+    const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('task execution response missing');
+    const creates = mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session');
+    expect(creates).toHaveLength(1);
+    expect(creates[0]![1]).toMatchObject({ harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' });
+  });
+
+  it('keeps a codex project route on the codex harness and model', async () => {
+    const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('task execution response missing');
+    const creates = mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session');
+    expect(creates).toHaveLength(1);
+    expect(creates[0]![1]).toMatchObject({ harness: 'codex', model: 'gpt-6-luna' });
+  });
+
+  it('refuses a launch with a concrete reason when the project route is not named', async () => {
+    for (const route of [
+      { state: 'unavailable', reason: 'project_route_unconfigured' },
+      { state: 'ready', harness: 'unknown-harness', model: 'gpt-6-luna' },
+    ]) {
+      mocks.projectRouteOverride.value = route;
+      mocks.updateCard.mockClear();
+      mocks.callOwnerHerderTool.mockClear();
+      const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+      if (!response) throw new Error('task execution response missing');
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({ state: 'not_attempted' });
       expect(mocks.updateCard).not.toHaveBeenCalled();

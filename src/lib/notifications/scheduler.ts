@@ -3,6 +3,7 @@ import { tasksDirForScope } from '../auth/data-scope';
 import type { BoardScope } from '@/lib/auth/scopes';
 import { reminderIntervalMs, reminderLookbackHours, subscriptionsFilePath } from './config';
 import { dispatchDueReminder } from './push';
+import { consumeSourceIntentLaunchOnce } from '../kanban/source-launch';
 
 const SCHEDULER_KEY = '__excodeDueReminderScheduler';
 type SchedulerGlobal = typeof globalThis & { [SCHEDULER_KEY]?: { timer: ReturnType<typeof setInterval> } };
@@ -29,6 +30,14 @@ export async function runDueReminderTick(
       if (!Number.isFinite(dueAt) || dueAt > now.getTime() || dueAt < earliest) continue;
       const result = await dispatchDueReminder(scope, card, options.storePath || subscriptionsFilePath());
       dispatched += result.sent;
+    }
+    // B04b: one pending source intent of this scope, launched from the existing
+    // tick. No new timer, schedule or process is introduced for it.
+    try {
+      await consumeSourceIntentLaunchOnce(scope, { tasksDir });
+    } catch (error) {
+      // A failed launch must never stop the reminder cycle of the next scope.
+      console.error('source intent launch failed', error);
     }
   }
   return dispatched;

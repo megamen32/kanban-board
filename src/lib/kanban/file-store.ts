@@ -4,6 +4,7 @@ import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
 import { DEFAULT_COLUMNS, parseCatalogTaskLink, PLANNING_VERSION } from './types';
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
+import { approvalListForProject } from './project-reviewers';
 import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskExecutionContinuation, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls, TaskResult, TaskReviewRecord } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
@@ -14,7 +15,7 @@ const KNOWN_FRONTMATTER_KEYS = new Set([
   'today_rank', 'source', 'needs_review', 'suggested_assignee', 'waiting_for',
   'requires_approval_from', 'completed_by', 'completed_at', 'completion_evidence',
   'approval_evidence', 'result_history', 'review_history', 'next_action',
-  'source_admission', 'catalog_task_link', 'task_execution_history',
+  'source_admission', 'catalog_task_link', 'catalog_task_links', 'task_execution_history',
 ]);
 const PLANNING_FRONTMATTER_KEYS = new Set([
   'planning_version', 'type', 'role', 'accountable', 'assignee', 'blocker_reason', 'important', 'urgent',
@@ -105,6 +106,13 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
   const cardId = data.id || legacyName;
   const catalogLink = data.catalog_task_link !== undefined ? parseCatalogTaskLink(data.catalog_task_link) : undefined;
   if (catalogLink && catalogLink.taskId !== cardId) throw new Error('canonical catalog link task ID does not match Markdown card');
+  const catalogLinks = data.catalog_task_links !== undefined
+    ? (Array.isArray(data.catalog_task_links) ? data.catalog_task_links.map(parseCatalogTaskLink) : (() => { throw new Error('invalid canonical catalog links'); })())
+    : [];
+  if (catalogLinks.some(link => link.taskId !== cardId || !link.subjectKey || !link.resultDigest)
+      || new Set(catalogLinks.map(link => link.subjectKey)).size !== catalogLinks.length) {
+    throw new Error('canonical catalog link task or subject key does not match Markdown card');
+  }
   const rawFrontmatter = Object.fromEntries(
     Object.entries(data).filter(([key]) => !KNOWN_FRONTMATTER_KEYS.has(key)),
   ) as RawFrontmatter;
@@ -144,6 +152,7 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     ...planning,
     ...(data.source_admission && typeof data.source_admission === 'object' ? { sourceAdmission: data.source_admission as SourceAdmissionBinding } : {}),
     ...(catalogLink ? { catalogLink } : {}),
+    ...(catalogLinks.length ? { catalogLinks } : {}),
     ...(data.task_execution_history !== undefined ? { taskExecutionHistory: taskExecutionHistoryField(data.task_execution_history) } : {}),
     rawFrontmatter,
   };
@@ -153,7 +162,7 @@ export function createCard(title: string, description: string = '', column: Kanb
   return withSourceOperationLock(tasksDir, () => createCardRecord(title, description, column, priority, tags, project, assignees, tasksDir, dueAt));
 }
 
-function createCardRecord(title: string, description: string, column: KanbanColumn, priority: Priority, tags: string[], project: string | undefined, assignees: string[], tasksDir: string, dueAt?: string, id = uuidv4(), sourceAdmission?: SourceAdmissionBinding, sourceOutcome?: { source: string; needsReview: boolean }): KanbanCard {
+function createCardRecord(title: string, description: string, column: KanbanColumn, priority: Priority, tags: string[], project: string | undefined, assignees: string[], tasksDir: string, dueAt?: string, id = uuidv4(), sourceAdmission?: SourceAdmissionBinding, sourceOutcome?: { source: string; needsReview: boolean }, requiresApprovalFrom?: string[]): KanbanCard {
   if (!project?.trim()) throw new Error('project is required for new cards');
   ensureDir(tasksDir);
   const now = new Date().toISOString();
@@ -179,6 +188,7 @@ function createCardRecord(title: string, description: string, column: KanbanColu
     owner: 'nikita',
     shared: false,
     ...defaultPlanningMetadata(),
+    ...(requiresApprovalFrom?.length ? { requiresApprovalFrom } : {}),
     ...(sourceOutcome ? { source: sourceOutcome.source, needsReview: sourceOutcome.needsReview } : {}),
   };
 
@@ -199,7 +209,7 @@ export function createAdmittedCard(input: {
     input.assignees, tasksDir, input.dueAt, input.id, input.sourceAdmission,
     classification === 'explicit-task' ? undefined : {
       source: `source:${classification}`, needsReview: classification === 'ambiguous',
-    });
+    }, classification === 'explicit-task' ? approvalListForProject(input.project) : undefined);
 }
 
 export type KanbanCardUpdates = TypedKanbanCardUpdates & Partial<Pick<KanbanCard, 'version'>>;
@@ -215,6 +225,7 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
   if (Object.hasOwn(updates as object, 'catalogLink')) {
     throw new Error('canonical catalog link is immutable');
   }
+  if (Object.hasOwn(updates as object, 'catalogLinks')) throw new Error('canonical catalog links are immutable');
   const card = findCardById(id, tasksDir);
   if (!card) throw new Error(`Card ${id} not found`);
   if (updates.project !== undefined && !updates.project.trim()) throw new Error('project is required');
@@ -352,14 +363,28 @@ export function readCatalogTaskLinkForReplay(
   tasksDir = TASKS_DIR,
 ): { status: 'reused'; card: KanbanCard; link: CatalogTaskLink } | { status: 'stale' | 'conflict' | 'missing' } {
   const link = parseCatalogTaskLink(untrustedLink);
-  if (link.taskId !== cardId || link.boardVersion !== expectedBoardVersion) throw new Error('catalog replay identity does not match requested operation');
+  const subjectKey = link.subjectKey;
+  if (!subjectKey || !link.resultDigest) throw new Error('catalog link subject key and result digest are required');
+  if (link.taskId !== cardId) throw new Error('catalog replay identity does not match requested operation');
   return withSourceOperationLock(tasksDir, () => {
     const card = findCardById(cardId, tasksDir);
     if (!card) return { status: 'missing' };
-    if (!card.catalogLink) return { status: 'missing' };
-    if (!sameCatalogTaskLink(card.catalogLink, link)) return { status: 'conflict' };
-    if (card.version !== expectedBoardVersion + 1) return { status: 'stale' };
-    return { status: 'reused', card, link: card.catalogLink };
+    const prior = findLinkForSubject(card, subjectKey);
+    if (!prior) return { status: 'missing' };
+    if (!sameCatalogTaskIdentity(prior, link)) return { status: 'conflict' };
+    const savedLinks = [...(card.catalogLinks ?? []), ...(card.catalogLink ? [card.catalogLink] : [])];
+    const linkVersions = Array.from(new Set(savedLinks
+      .map(saved => saved.boardVersion)
+      .filter(version => Number.isSafeInteger(version) && version >= prior.boardVersion && version < card.version)))
+      .sort((a, b) => a - b);
+    const catalogOnlyVersionChain = linkVersions.length === card.version - prior.boardVersion
+      && linkVersions.every((version, offset) => version === prior.boardVersion + offset);
+    const currentReplay = expectedBoardVersion === card.version && catalogOnlyVersionChain;
+    const concurrentReplay = expectedBoardVersion === prior.boardVersion && card.version === prior.boardVersion + 1
+      && catalogOnlyVersionChain;
+    const revisedResultReplay = expectedBoardVersion === card.version && prior.resultDigest !== link.resultDigest;
+    if (!currentReplay && !concurrentReplay && !revisedResultReplay) return { status: 'stale' };
+    return { status: 'reused', card, link: prior };
   });
 }
 
@@ -371,35 +396,54 @@ export function persistCatalogTaskLink(
   tasksDir = TASKS_DIR,
 ): CatalogTaskLinkWriteResult {
   const link = parseCatalogTaskLink(untrustedLink);
+  const subjectKey = link.subjectKey;
+  if (!subjectKey || !link.resultDigest) throw new Error('catalog link subject key and result digest are required');
   if (link.taskId !== cardId || link.boardVersion !== expectedVersion) throw new Error('catalog link identity does not match CAS target');
   return withSourceOperationLock(tasksDir, () => {
     const card = findCardById(cardId, tasksDir);
     if (!card) throw new Error('catalog link task was not found');
-    if (card.catalogLink) {
-      if (!sameCatalogTaskLink(card.catalogLink, link)) return { status: 'conflict' };
-      return { status: 'reused', card, link: card.catalogLink };
+    const prior = findLinkForSubject(card, subjectKey);
+    if (prior) {
+      if (!sameCatalogTaskIdentity(prior, link)) return { status: 'conflict' };
+      return { status: 'reused', card, link: prior };
     }
     if (card.version !== expectedVersion) return { status: 'stale' };
     if (getAllCards(tasksDir).some(candidate => candidate.id !== cardId
-        && candidate.catalogLink?.operationRef === link.operationRef)) return { status: 'conflict' };
+        && (candidate.catalogLink?.operationRef === link.operationRef || candidate.catalogLinks?.some(saved => saved.operationRef === link.operationRef)))) return { status: 'conflict' };
 
     const updated: KanbanCard = {
       ...card,
-      catalogLink: link,
+      catalogLinks: [...(card.catalogLinks ?? []), link].sort((a, b) => (a.subjectKey ?? '').localeCompare(b.subjectKey ?? '')),
       version: card.version + 1,
       updated: new Date().toISOString(),
     };
     writeCard(updated, tasksDir);
     const readback = findCardById(cardId, tasksDir);
-    if (!readback?.catalogLink || !sameCatalogTaskLink(readback.catalogLink, link)) {
+    const saved = readback ? findLinkForSubject(readback, subjectKey) : undefined;
+    if (!saved || !sameCatalogTaskLink(saved, link)) {
       throw new Error('canonical catalog link readback mismatch');
     }
-    return { status: 'created', card: readback, link: readback.catalogLink };
+    return { status: 'created', card: readback!, link: saved };
   });
 }
 
-export function findCatalogTaskLink(cardId: string, tasksDir = TASKS_DIR): CatalogTaskLink | null {
-  return findCardById(cardId, tasksDir)?.catalogLink ?? null;
+export function findCatalogTaskLink(cardId: string, subjectKey: string, tasksDir = TASKS_DIR): CatalogTaskLink | null {
+  const card = findCardById(cardId, tasksDir);
+  return card ? findLinkForSubject(card, subjectKey) ?? null : null;
+}
+
+function findLinkForSubject(card: KanbanCard, subjectKey: string): CatalogTaskLink | undefined {
+  return card.catalogLinks?.find(link => link.subjectKey === subjectKey)
+    ?? (card.catalogLink?.subjectKey === subjectKey ? card.catalogLink : undefined);
+}
+
+function sameCatalogTaskIdentity(a: CatalogTaskLink, b: CatalogTaskLink): boolean {
+  return a.subjectKey === b.subjectKey && a.taskId === b.taskId && a.sourceRef === b.sourceRef
+    && a.operationRef === b.operationRef && a.sourceRevision === b.sourceRevision && a.projectId === b.projectId
+    && JSON.stringify(a.planIds) === JSON.stringify(b.planIds)
+    && JSON.stringify(a.gateIds) === JSON.stringify(b.gateIds)
+    && JSON.stringify(a.contactIds) === JSON.stringify(b.contactIds)
+    && a.catalogRevision === b.catalogRevision;
 }
 
 function sameCatalogTaskLink(a: CatalogTaskLink, b: CatalogTaskLink): boolean {
@@ -424,6 +468,7 @@ function buildFrontmatter(card: KanbanCard): string {
     assignees: card.assignees,
     ...(card.sourceAdmission ? { source_admission: card.sourceAdmission } : {}),
     ...(card.catalogLink ? { catalog_task_link: parseCatalogTaskLink(card.catalogLink) } : {}),
+    ...(card.catalogLinks?.length ? { catalog_task_links: card.catalogLinks.map(parseCatalogTaskLink) } : {}),
     owner: card.owner ?? 'nikita',
     shared: card.shared ?? false,
   };
@@ -786,14 +831,13 @@ function isTaskExecutionProjectBinding(value: unknown, receiptHostId: unknown): 
   const strings = ['projectId', 'projectRoot', 'rootIdentity', 'policyRevision', 'runtimeInstanceId',
     'hostId', 'harnessVersion', 'model', 'cwd'] as const;
   if (binding.contract !== 'integrator-host-readiness-v1' || strings.some(key => typeof binding[key] !== 'string' || !(binding[key] as string).trim())
-      || binding.hostId !== receiptHostId || !['codex', 'opencode'].includes(String(binding.harness))
+      || binding.hostId !== receiptHostId || !['codex', 'zcode', 'opencode'].includes(String(binding.harness))
       || binding.resourceReady !== true || !Number.isSafeInteger(binding.observedAtMs) || (binding.observedAtMs as number) <= 0
-      || !Array.isArray(binding.requiredTools) || !binding.requiredTools.length
-      || binding.requiredTools.some(item => typeof item !== 'string' || !item.trim())
+      || !Array.isArray(binding.requiredTools) || binding.requiredTools.some(item => typeof item !== 'string' || !item.trim())
       || !Array.isArray(binding.availableTools) || binding.availableTools.some(item => typeof item !== 'string' || !item.trim())
       || !Array.isArray(binding.availableModels) || binding.availableModels.some(item => typeof item !== 'string' || !item.trim())
       || !binding.requiredTools.every(item => (binding.availableTools as string[]).includes(item as string))
-      || !(binding.availableModels as string[]).includes(binding.model as string)) return false;
+      || !(binding.availableModels as string[]).includes(String(binding.model))) return false;
   if (typeof paths.requestedCwd !== 'string' || typeof paths.canonicalCwd !== 'string'
       || typeof paths.rootPath !== 'string' || paths.contained !== true || paths.identityMatches !== true
       || paths.rootPath !== binding.projectRoot || paths.canonicalCwd !== binding.cwd) return false;
@@ -814,9 +858,9 @@ function normalizeTaskExecutionProjectBinding(value: unknown): NonNullable<TaskE
     observedAtMs: value.observedAtMs as number,
     runtimeInstanceId: value.runtimeInstanceId as string,
     hostId: value.hostId as string,
-    harness: value.harness as 'codex',
+    harness: value.harness as NonNullable<TaskExecutionReceipt['projectBinding']>['harness'],
     harnessVersion: value.harnessVersion as string,
-    model: value.model as 'gpt-6-luna',
+    model: value.model as string,
     requiredTools: [...value.requiredTools as string[]],
     availableTools: [...value.availableTools as string[]],
     availableModels: [...value.availableModels as string[]],

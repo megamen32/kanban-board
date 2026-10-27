@@ -82,9 +82,9 @@ export function TaskListView({ cards, authoritativeCards = cards, highlightCardI
               <div
                 key={card.id}
                 ref={card.id === highlightCardId ? highlightedRef : undefined}
-                className={`group py-2 ${card.id === highlightCardId ? 'rounded-md bg-primary/5 ring-2 ring-primary/60' : ''}`}
+                className={`group flex min-h-12 items-start gap-3 py-2 ${card.id === highlightCardId ? 'rounded-md bg-primary/5 ring-2 ring-primary/60' : ''}`}
               >
-                <div className="flex min-h-12 items-center gap-3">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
                 <button
                   type="button"
                   aria-label={needsReview ? 'Открыть результат для приёмки' : done ? 'Вернуть задачу' : 'Отметить выполненной'}

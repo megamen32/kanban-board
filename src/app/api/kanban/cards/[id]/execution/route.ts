@@ -9,6 +9,7 @@ import { taskExecutionSnapshot } from '@/lib/kanban/task-execution';
 import { callOwnerHerderTool, type HerderToolResult } from '@/lib/kanban/task-execution-client';
 import { validateTransition } from '@/lib/kanban/transition-policy';
 import { markSourceIntentConsumed } from '../../../../../../lib/kanban/source-operation';
+import { currentNativeProjectContext } from '../../../../../../lib/kanban/native-request-context';
 import type { KanbanCard, KanbanCardUpdates, TaskDecisionRequestReference, TaskExecutionContinuation, TaskExecutionProjectBinding, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls } from '@/lib/kanban/types';
 import type { NativeProjectAccessContext } from '@/lib/kanban/native-project-access';
 
@@ -16,7 +17,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 type RecordValue = Record<string, unknown>;
-const LEGACY_SESSION_MODEL = 'gpt-6-luna';
+const SESSION_MODEL = 'gpt-6-luna';
 const MAX_TASK_TEXT = 48_000;
 const MAX_TASK_EXECUTION_HISTORY = 32;
 const NOTICE_TASK_DECISION_URL = 'https://notify.bezrabotnyi.com/v1/task-decisions';
@@ -27,6 +28,11 @@ const MAX_CONTINUATION_TEXT = 4_000;
 const MAX_SESSION_CONTROL_MESSAGE = 4_000;
 const PROJECT_READINESS_CONTRACT = 'integrator-host-readiness-v1' as const;
 const PROJECT_READINESS_MAX_AGE_MS = 30_000;
+/** The harnesses the owner MCP accepts for one project launch. */
+const ROUTE_HARNESSES = ['codex', 'zcode', 'opencode'] as const;
+type RouteHarness = (typeof ROUTE_HARNESSES)[number];
+/** The route states that name a usable project route; every other state is a refusal. */
+const ROUTE_READY_STATES = ['ready', 'available', 'resolved'];
 
 const isRecord = (value: unknown): value is RecordValue => !!value && typeof value === 'object' && !Array.isArray(value);
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -47,7 +53,6 @@ function jsonFromTool(result: HerderToolResult): RecordValue | undefined {
     return undefined;
   }
 }
-
 function taskOwner(card: KanbanCard, username: string): boolean {
   return (card.owner ?? 'nikita') === username || card.assignee === username || card.assignees.includes(username);
 }
@@ -56,8 +61,7 @@ function taskFingerprint(card: KanbanCard, actor: string, hostId: string, cwd: s
   const identity = {
     id: card.id, title: card.title, description: card.description, project: card.project,
     owner: card.owner ?? 'nikita', assignee: card.assignee ?? null, assignees: card.assignees,
-    actor, hostId, harness: projectBinding?.harness ?? 'codex', cwd,
-    model: projectBinding?.model ?? LEGACY_SESSION_MODEL,
+    actor, hostId, harness: projectBinding?.harness ?? 'codex', cwd, model: projectBinding?.model ?? SESSION_MODEL,
     ...(projectBinding ? { projectBinding } : {}),
   };
   return sha256(JSON.stringify(identity));
@@ -65,20 +69,20 @@ function taskFingerprint(card: KanbanCard, actor: string, hostId: string, cwd: s
 
 function scopedProjectReadiness(nodeInfo: RecordValue | undefined, savedProject: string, atMs = Date.now()): TaskExecutionProjectBinding | undefined {
   if (!nodeInfo || nodeInfo.projectReadinessContract !== PROJECT_READINESS_CONTRACT || typeof savedProject !== 'string' || !savedProject.trim()) return undefined;
+  // The binding is built from the route the herder reported: its harness and its model, never a
+  // codex constant. A route the board cannot name is a refusal, not a default.
+  const routeOutcome = projectRouteFromNodeInfo(nodeInfo);
+  if ('reason' in routeOutcome) return undefined;
+  const route = routeOutcome.route;
   const readiness = isRecord(nodeInfo.projectReadiness) ? nodeInfo.projectReadiness : undefined;
   const paths = readiness && isRecord(readiness.pathResolution) ? readiness.pathResolution : undefined;
-  const harness = readiness?.harness;
-  const model = readiness?.model;
-  const stringFields = ['projectId', 'projectRoot', 'rootIdentity', 'policyRevision', 'runtimeInstanceId', 'hostId', 'harnessVersion', 'cwd'];
+  const stringFields = ['projectId', 'projectRoot', 'rootIdentity', 'policyRevision', 'runtimeInstanceId', 'hostId', 'cwd'];
   if (!readiness || !paths || readiness.state !== 'ready'
       || stringFields.some(field => typeof readiness[field] !== 'string' || !(readiness[field] as string).trim())
       || readiness.projectId !== savedProject || readiness.hostId !== nodeInfo.hostId
       || typeof nodeInfo.hostId !== 'string' || !nodeInfo.hostId.trim()
       || typeof nodeInfo.nativeUser !== 'string' || !nodeInfo.nativeUser.trim()
-      || (harness !== 'codex' && harness !== 'opencode')
-      || typeof model !== 'string' || !model.trim()
-      || harness === 'codex' && model !== LEGACY_SESSION_MODEL
-      || readiness.resourceReady !== true
+      || readiness.harness !== route.harness || readiness.model !== route.model || readiness.resourceReady !== true
       || typeof readiness.observedAtMs !== 'number' || !Number.isSafeInteger(readiness.observedAtMs)
       || readiness.observedAtMs > atMs + 30_000 || atMs - readiness.observedAtMs > PROJECT_READINESS_MAX_AGE_MS
       || readiness.cwd !== paths.canonicalCwd || paths.rootPath !== readiness.projectRoot
@@ -88,14 +92,17 @@ function scopedProjectReadiness(nodeInfo: RecordValue | undefined, savedProject:
       || paths.requestedCwd !== paths.canonicalCwd || paths.canonicalCwd !== readiness.projectRoot
       || !path.isAbsolute(readiness.projectRoot as string) || !path.isAbsolute(readiness.cwd as string)
       || !path.isAbsolute(paths.requestedCwd)) return undefined;
+  // A harness without a scoped host probe reports no version; the codex route keeps its own.
+  if (route.harness === 'codex' && (typeof readiness.harnessVersion !== 'string' || !readiness.harnessVersion.trim())) return undefined;
   const requiredTools = readiness.requiredTools;
   const availableTools = readiness.availableTools;
   const availableModels = readiness.availableModels;
-  if (!Array.isArray(requiredTools) || requiredTools.length !== 1 || requiredTools[0] !== 'web_search'
+  if (!Array.isArray(requiredTools) || requiredTools.some(tool => typeof tool !== 'string' || !tool.trim())
+      || (route.harness === 'codex' && (requiredTools.length !== 1 || requiredTools[0] !== 'web_search'))
       || !Array.isArray(availableTools) || availableTools.some(tool => typeof tool !== 'string' || !tool.trim())
       || !requiredTools.every(tool => availableTools.includes(tool))
       || !Array.isArray(availableModels) || availableModels.some(model => typeof model !== 'string' || !model.trim())
-      || !availableModels.includes(model)) return undefined;
+      || !availableModels.includes(route.model)) return undefined;
   return {
     contract: PROJECT_READINESS_CONTRACT,
     projectId: readiness.projectId as string,
@@ -105,9 +112,9 @@ function scopedProjectReadiness(nodeInfo: RecordValue | undefined, savedProject:
     observedAtMs: readiness.observedAtMs,
     runtimeInstanceId: readiness.runtimeInstanceId as string,
     hostId: readiness.hostId as string,
-    harness,
-    harnessVersion: readiness.harnessVersion as string,
-    model,
+    harness: route.harness,
+    harnessVersion: typeof readiness.harnessVersion === 'string' ? readiness.harnessVersion : '',
+    model: route.model,
     requiredTools: [...requiredTools] as string[],
     availableTools: [...availableTools] as string[],
     availableModels: [...availableModels] as string[],
@@ -121,6 +128,24 @@ function scopedProjectReadiness(nodeInfo: RecordValue | undefined, savedProject:
       identityMatches: true,
     },
   };
+}
+
+/**
+ * The project route the owner herder reported for this project. The board never
+ * substitutes a harness of its own: an absent, refused or unknown route is a
+ * concrete refusal instead of a silent default.
+ */
+function projectRouteFromNodeInfo(nodeInfo: RecordValue | undefined): { route: { harness: RouteHarness; model: string } } | { reason: string } {
+  const raw = nodeInfo && isRecord(nodeInfo.projectRoute) ? nodeInfo.projectRoute : undefined;
+  if (!raw) return { reason: 'project_route_unavailable' };
+  const state = typeof raw.state === 'string' ? raw.state.trim().toLowerCase() : '';
+  const herderReason = typeof raw.reason === 'string' ? raw.reason.trim() : '';
+  if (!ROUTE_READY_STATES.includes(state)) return { reason: herderReason || 'project_route_unavailable' };
+  const harness = typeof raw.harness === 'string' ? raw.harness.trim() : '';
+  if (!(ROUTE_HARNESSES as readonly string[]).includes(harness)) return { reason: 'project_route_harness_unknown' };
+  const model = typeof raw.model === 'string' ? raw.model.trim() : '';
+  if (!model) return { reason: 'project_route_model_unavailable' };
+  return { route: { harness: harness as RouteHarness, model } };
 }
 
 function sameProjectBinding(left: TaskExecutionProjectBinding, right: TaskExecutionProjectBinding): boolean {
@@ -405,7 +430,7 @@ function commitTaskContinuationResult(input: {
       || child.phase !== 'running' || child.nativeTurnId !== input.expectedChild.nativeTurnId
       || child.inputId !== input.expectedChild.inputId || child.requestHash !== input.expectedChild.requestHash
       || child.instruction !== input.expectedChild.instruction
-      || taskFingerprint(current, parent.startedBy, parent.hostId, input.cwd, input.expectedParent.projectBinding) !== parent.requestHash) {
+      || taskFingerprint(current, parent.startedBy, parent.hostId, input.cwd, parent.projectBinding) !== parent.requestHash) {
     return { conflict: true, serverCard: current };
   }
   const continuations = [...(parent.continuations ?? [])];
@@ -484,7 +509,7 @@ async function startTaskFollowUp(
   const session = isRecord(sessionPayload?.session) ? sessionPayload.session : undefined;
   const lastTurn = isRecord(session?.meta) && isRecord(session.meta.nativeLastTurn) ? session.meta.nativeLastTurn : undefined;
   if (!nodeInfo || nodeInfo.hostId !== parent.hostId || !session || session.id !== parent.nativeSessionId
-      || session.harness !== parent.harness || session.cwd !== cwd || session.model !== executionModel(parent)
+      || session.harness !== parent.harness || session.cwd !== cwd || session.model !== expectedModel(parent)
       || session.status !== 'idle' || !lastTurn || lastTurn.turnId !== parent.nativeTurnId
       || lastTurn.status !== 'completed' || lastTurn.assistantSucceeded === false
       || lastTurn.cancelledByUser === true || lastTurn.transportLost === true) {
@@ -571,7 +596,7 @@ async function syncTaskFollowUp(context: AuthorizedTaskCard, body: RecordValue):
   try { before = await readExactTurn(); }
   catch { return continuationResponse(context.card, parent.operationId, child.id, 202); }
   if (!before.session || before.session.id !== parent.nativeSessionId || before.session.harness !== parent.harness
-      || before.session.cwd !== cwd || before.session.model !== executionModel(parent) || !before.turn
+      || before.session.cwd !== cwd || before.session.model !== expectedModel(parent) || !before.turn
       || before.turn.turnId !== child.nativeTurnId || before.turn.status !== 'completed'
       || before.turn.assistantSucceeded === false || before.turn.cancelledByUser === true || before.turn.transportLost === true) {
     return continuationResponse(context.card, parent.operationId, child.id, 202);
@@ -583,7 +608,7 @@ async function syncTaskFollowUp(context: AuthorizedTaskCard, body: RecordValue):
   const details = isRecord(view?.details) ? view.details : undefined;
   const native = isRecord(details?.session) ? details.session : undefined;
   if (!details || view?.hostId !== parent.hostId || native?.id !== parent.nativeSessionId
-      || native?.harness !== parent.harness || native.cwd !== cwd || native.model !== executionModel(parent)
+      || native?.harness !== parent.harness || native.cwd !== cwd || native.model !== expectedModel(parent)
       || details.historyUnavailable === true || !Array.isArray(details.messages)) {
     return continuationResponse(context.card, parent.operationId, child.id, 202);
   }
@@ -613,11 +638,18 @@ async function syncTaskFollowUp(context: AuthorizedTaskCard, body: RecordValue):
   return continuationResponse(saved, parent.operationId, child.id, 200);
 }
 
-function executionModel(receipt: TaskExecutionReceipt): string {
-  return receipt.projectBinding?.model ?? LEGACY_SESSION_MODEL;
+/** The model the launch route designated. A legacy receipt without a binding keeps the codex model. */
+function expectedModel(attempt: TaskExecutionReceipt): string {
+  return attempt.projectBinding?.model ?? SESSION_MODEL;
 }
 
-function exactSessionView(result: HerderToolResult, hostId: string, sessionId: string, cwd: string, harness: string, model: string): boolean {
+/** The harness the launch route designated. A legacy receipt without a binding keeps its own harness. */
+function expectedHarness(attempt: TaskExecutionReceipt): RouteHarness {
+  return attempt.projectBinding?.harness ?? attempt.harness;
+}
+
+function exactSessionView(result: HerderToolResult, hostId: string, sessionId: string, cwd: string,
+  harness: RouteHarness, model: string): boolean {
   const view = isRecord(result.structuredContent) ? result.structuredContent : undefined;
   const details = isRecord(view?.details) ? view.details : undefined;
   const native = isRecord(details?.session) ? details.session : undefined;
@@ -653,20 +685,16 @@ function consumeLaunchIntent(
 }
 
 /**
- * B04d: one policy for the fate of a source launch intent.
- *
- * Only a receipt that proves no native session was created (`not_attempted`)
- * leaves the intent PENDING, so a repeat launch stays allowed. Every other
- * outcome — an ambiguous one, or a receipt that already carries a native
- * session — spends the intent, because the same work must never be issued
- * twice: the session may exist even when the answer never arrived.
+ * B04d: an ambiguous launch outcome may already have produced a native session,
+ * so the source launch intent is spent and is never issued again. Only a receipt
+ * that proves the launch did not happen (phase `stopped`) keeps the intent PENDING.
  */
-function closeLaunchIntent(
+function closeLaunchIntentOnUnknownOutcome(
   card: KanbanCard,
   tasksDir: string,
   operationId: string,
   requestHash: string,
-  phase: 'create-unknown' | 'dispatch-unknown' | 'stopped',
+  phase: 'create-unknown' | 'dispatch-unknown',
   note: string,
 ): KanbanCard {
   const binding = card.sourceAdmission;
@@ -691,14 +719,14 @@ async function dispatchCreatedTask(input: {
   operationId: string;
   requestHash: string;
   nativeSessionId: string;
-  projectBinding?: TaskExecutionProjectBinding;
   messageInputId: string;
   admittedStatus: number;
+  harness: RouteHarness;
 }): Promise<NextResponse> {
   let dispatchTool: HerderToolResult;
   try {
     dispatchTool = await callOwnerHerderTool('send_message', {
-      sessionId: input.nativeSessionId, harness: input.projectBinding?.harness ?? 'codex', inputId: input.messageInputId,
+      sessionId: input.nativeSessionId, harness: input.harness, inputId: input.messageInputId,
       message: taskPrompt(input.card), mode: 'steer', humanRequested: true,
     });
   } catch {
@@ -708,7 +736,7 @@ async function dispatchCreatedTask(input: {
     });
     // B04d: the native session already exists, so an ambiguous dispatch closes the
     // launch intent; the same work is never issued a second time.
-    const closed = saved ? closeLaunchIntent(saved, input.tasksDir, input.operationId, input.requestHash,
+    const closed = saved ? closeLaunchIntentOnUnknownOutcome(saved, input.tasksDir, input.operationId, input.requestHash,
       'dispatch-unknown', 'Исход передачи не подтверждён; сессия уже создана, intent источника закрыт — повторный запуск запрещён.') : undefined;
     return NextResponse.json({ ...(closed ? taskExecutionSnapshot(closed) : (saved ? taskExecutionSnapshot(saved) : { cardId: input.card.id, state: 'unknown' as const })), operationId: input.operationId, retryable: false }, {
       status: 202, headers: { 'Cache-Control': 'no-store' },
@@ -743,7 +771,7 @@ async function dispatchCreatedTask(input: {
   if (updated && admitted) {
     launchedCard = consumeLaunchIntent(input.card, input.tasksDir, input.operationId, input.requestHash) ?? updated;
   } else if (updated) {
-    launchedCard = closeLaunchIntent(updated, input.tasksDir, input.operationId, input.requestHash,
+    launchedCard = closeLaunchIntentOnUnknownOutcome(updated, input.tasksDir, input.operationId, input.requestHash,
       'dispatch-unknown', 'Передача задания не подтверждена; сессия уже создана, intent источника закрыт — повторный запуск запрещён.');
   }
   const snapshot = launchedCard ? taskExecutionSnapshot(launchedCard) : { cardId: input.card.id, state: 'unknown' as const };
@@ -941,7 +969,7 @@ async function createTaskQuestion(
   const history = context.card.taskExecutionHistory ?? [];
   const attempt = history.at(-1);
   if (!attempt || attempt.operationId !== operationId || !['running', 'waiting'].includes(attempt.phase)
-      || !attempt.nativeTurnId || attempt.harness !== 'codex') {
+      || !attempt.nativeTurnId || !(ROUTE_HARNESSES as readonly string[]).includes(attempt.harness)) {
     return NextResponse.json({ error: 'current task execution cannot receive a question' }, { status: 409 });
   }
   const config = noticeConfig(true);
@@ -1084,7 +1112,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   let context: AuthorizedTaskCardResult;
   try {
     const { id } = await params;
-    context = await authorizedTaskCard(request, id);
+    context = await authorizedTaskCard(request, id, 'write', currentNativeProjectContext());
   } catch {
     return NextResponse.json({ error: 'task execution identity unavailable' }, { status: 400 });
   }
@@ -1147,6 +1175,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return unavailable('project_scoped_readiness_unavailable');
     }
     const nodeInfo = jsonFromTool(nodeInfoResult);
+    // The launch harness and model are the project route the herder reported; a
+    // route the board cannot name is refused, never guessed.
+    const routeOutcome = projectRouteFromNodeInfo(nodeInfo);
+    if ('reason' in routeOutcome) {
+      return unavailable(routeOutcome.reason);
+    }
+    const projectRoute = routeOutcome.route;
     const projectBinding = scopedProjectReadiness(nodeInfo, context.card.project);
     if (!projectBinding) {
       return unavailable('project_scoped_execution_not_ready');
@@ -1156,7 +1191,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const requestHash = taskFingerprint(context.card, context.actor, hostId, cwd, projectBinding);
     const intent: TaskExecutionReceipt = {
       operationId, requestHash, lastBoardVersion: context.card.version + 1, createInputId, messageInputId, phase: 'intent',
-      hostId, harness: projectBinding.harness, projectBinding, startedBy: context.actor,
+      hostId, harness: projectRoute.harness, projectBinding, startedBy: context.actor,
       ...(context.native ? { requestedBy: context.actor } : {}),
       createdAt: now(), updatedAt: now(),
     };
@@ -1169,7 +1204,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let createTool: HerderToolResult;
     try {
       createTool = await callOwnerHerderTool('fleet_create_session', {
-        inputId: createInputId, harness: projectBinding.harness, name, cwd, model: projectBinding.model, project: context.card.project,
+        inputId: createInputId, harness: projectRoute.harness, name, cwd, model: projectRoute.model, project: context.card.project,
         projectReadinessContract: projectBinding.contract,
         projectReadiness: {
           state: 'ready',
@@ -1189,7 +1224,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       });
       // B04d: an unknown create outcome may already have produced a native session,
       // so the launch intent is closed and no new operation may start it again.
-      const closed = saved ? closeLaunchIntent(saved, context.tasksDir, operationId, requestHash,
+      const closed = saved ? closeLaunchIntentOnUnknownOutcome(saved, context.tasksDir, operationId, requestHash,
         'create-unknown', 'Исход создания сессии не подтверждён; intent источника закрыт — повторный запуск запрещён.') : undefined;
       const snapshot = closed ? taskExecutionSnapshot(closed) : { cardId: context.card.id, state: 'unknown' as const };
       return NextResponse.json({ ...snapshot, operationId, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
@@ -1212,7 +1247,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       });
       // B04d: the create receipt did not prove a scoped session, so the outcome stays
       // ambiguous and the launch intent is closed instead of being issued again.
-      const closed = saved ? closeLaunchIntent(saved, context.tasksDir, operationId, requestHash,
+      const closed = saved ? closeLaunchIntentOnUnknownOutcome(saved, context.tasksDir, operationId, requestHash,
         'create-unknown', 'Создание сессии не подтверждено; intent источника закрыт — повторный запуск запрещён.') : undefined;
       const snapshot = closed ? taskExecutionSnapshot(closed) : { cardId: context.card.id, state: 'unknown' as const };
       return NextResponse.json({ ...snapshot, operationId, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
@@ -1222,38 +1257,37 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       phase: 'created', nativeSessionId: createdSessionId, createReceiptText: createText,
     });
     if (!createdCard) return NextResponse.json({ error: 'native session exists but its Board receipt could not be committed', operationId, retryable: false }, { status: 202 });
+    // The native session now exists and its receipt is durable. Spend an admitted
+    // source intent before any readback/dispatch branch can return; a mismatch
+    // must never cause the same source task to launch a second session.
+    const launchReceiptCard = consumeLaunchIntent(createdCard, context.tasksDir, operationId, requestHash) ?? createdCard;
     const currentCard = findCardById(context.card.id, context.tasksDir);
-    if (!currentCard || currentCard.version !== createdCard.version
+    if (!currentCard || currentCard.version !== launchReceiptCard.version
       || taskFingerprint(currentCard, context.actor, hostId, cwd, projectBinding) !== requestHash) {
-      return NextResponse.json({ ...taskExecutionSnapshot(createdCard), operationId, retryable: false, error: 'task changed after native session creation; no task prompt was sent' }, { status: 409 });
+      return NextResponse.json({ ...taskExecutionSnapshot(launchReceiptCard), operationId, retryable: false, error: 'task changed after native session creation; no task prompt was sent' }, { status: 409 });
     }
 
     // Verify exact native host/session/CWD/model before sending any task text.
     let viewTool: HerderToolResult;
     try {
-      viewTool = await callOwnerHerderTool('fleet_session_view', { harness: projectBinding.harness, sessionId: createdSessionId });
+      viewTool = await callOwnerHerderTool('fleet_session_view', { harness: projectRoute.harness, sessionId: createdSessionId });
     } catch {
-      return NextResponse.json({ ...taskExecutionSnapshot(createdCard), operationId,
+      return NextResponse.json({ ...taskExecutionSnapshot(launchReceiptCard), operationId,
         waitReason: 'Сессия создана; проверка её параметров временно недоступна. Повторите проверку этой же операции.',
         retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
-    if (!exactSessionView(viewTool, hostId, createdSessionId, cwd, projectBinding.harness, projectBinding.model)) {
-      let saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
+    if (!exactSessionView(viewTool, hostId, createdSessionId, cwd, projectRoute.harness, projectRoute.model)) {
+      const saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
         phase: 'stopped', nativeSessionId: createdSessionId,
         lastProgress: 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено.',
         lastProgressAt: now(),
       });
-      // B04d: the native session exists, so the launch intent is spent and the same
-      // work is never launched a second time under a new operation.
-      if (saved) saved = closeLaunchIntent(saved, context.tasksDir, operationId, requestHash,
-        'stopped', 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено. Intent источника закрыт — повторный запуск запрещён.');
-      return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : taskExecutionSnapshot(createdCard)), operationId, retryable: false }, { status: 409 });
+      return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : taskExecutionSnapshot(launchReceiptCard)), operationId, retryable: false }, { status: 409 });
     }
     return dispatchCreatedTask({
-      card: createdCard, tasksDir: context.tasksDir, actor: context.actor,
+      card: launchReceiptCard, tasksDir: context.tasksDir, actor: context.actor,
       operationId, requestHash, nativeSessionId: createdSessionId,
-      projectBinding,
-      messageInputId, admittedStatus: 201,
+      messageInputId, admittedStatus: 201, harness: projectRoute.harness,
     });
   } catch {
     return NextResponse.json({ error: 'task execution request could not be processed safely' }, { status: 400 });
@@ -1426,6 +1460,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
     if (attempt.phase === 'result') return NextResponse.json(taskExecutionSnapshot(context.card), { headers: { 'Cache-Control': 'no-store' } });
     if (attempt.phase === 'created' && attempt.nativeSessionId) {
+      const intentUpdate = consumeLaunchIntent(context.card, context.tasksDir, operationId, attempt.requestHash);
+      if (intentUpdate) {
+        return NextResponse.json({ ...taskExecutionSnapshot(intentUpdate), operationId, retryable: false,
+          error: 'source launch intent could not be closed; replay is denied' }, { status: 409 });
+      }
       const cwd = executionReceiptCwd(attempt);
       if (!cwd) return NextResponse.json({ error: 'task execution project is not configured' }, { status: 503 });
       if (!process.env.AGENT_HERDER_HTTP_TOKEN?.trim()) return NextResponse.json({ error: 'protected task execution channel is not configured' }, { status: 503 });
@@ -1455,16 +1494,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           waitReason: 'Сессия создана; проверка её параметров временно недоступна. Повторите проверку этой же операции.',
           retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
       }
-      if (!exactSessionView(viewTool, attempt.hostId, attempt.nativeSessionId, cwd,
-        attempt.projectBinding?.harness ?? attempt.harness, executionModel(attempt))) {
-        let saved = saveReceiptProgress(id, context.tasksDir, operationId, attempt.requestHash, {
+      if (!exactSessionView(viewTool, attempt.hostId, attempt.nativeSessionId, cwd, expectedHarness(attempt), expectedModel(attempt))) {
+        const saved = saveReceiptProgress(id, context.tasksDir, operationId, attempt.requestHash, {
           phase: 'stopped', nativeSessionId: attempt.nativeSessionId,
           lastProgress: 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено.',
           lastProgressAt: now(),
         });
-        // B04d: the native session exists, so the launch intent is spent here too.
-        if (saved) saved = closeLaunchIntent(saved, context.tasksDir, operationId, attempt.requestHash,
-          'stopped', 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено. Intent источника закрыт — повторный запуск запрещён.');
         return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : taskExecutionSnapshot(context.card)), operationId, retryable: false }, { status: 409 });
       }
       const current = findCardById(id, context.tasksDir);
@@ -1475,9 +1510,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return dispatchCreatedTask({
         card: current, tasksDir: context.tasksDir, actor: attempt.startedBy,
         operationId, requestHash: attempt.requestHash,
-        nativeSessionId: attempt.nativeSessionId, projectBinding: attempt.projectBinding,
-        messageInputId: attempt.messageInputId,
-        admittedStatus: 202,
+        nativeSessionId: attempt.nativeSessionId, messageInputId: attempt.messageInputId,
+        admittedStatus: 202, harness: expectedHarness(attempt),
       });
     }
     if (!['running', 'waiting'].includes(attempt.phase) || !attempt.nativeSessionId) {
@@ -1490,7 +1524,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const attemptCwd = executionReceiptCwd(attempt);
     if (!session || session.id !== attempt.nativeSessionId || session.harness !== attempt.harness
       || !attemptCwd || session.cwd !== attemptCwd
-        || session.model !== executionModel(attempt) || typeof session.status !== 'string') {
+      || session.model !== expectedModel(attempt) || typeof session.status !== 'string') {
       return NextResponse.json({ error: 'native session identity could not be verified' }, { status: 502 });
     }
     const nativeLastTurn = isRecord(session.meta) && isRecord(session.meta.nativeLastTurn)
@@ -1552,7 +1586,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const confirmedLastTurn = isRecord(confirmedSession?.meta) && isRecord(confirmedSession.meta.nativeLastTurn)
       ? confirmedSession.meta.nativeLastTurn : undefined;
     if (!confirmedSession || confirmedSession.id !== attempt.nativeSessionId || confirmedSession.harness !== attempt.harness
-      || confirmedSession.cwd !== session.cwd || confirmedSession.model !== executionModel(attempt) || confirmedSession.status !== 'idle'
+      || confirmedSession.cwd !== session.cwd || confirmedSession.model !== expectedModel(attempt) || confirmedSession.status !== 'idle'
       || !confirmedLastTurn || confirmedLastTurn.turnId !== attempt.nativeTurnId || confirmedLastTurn.status !== 'completed'
       || confirmedLastTurn.assistantSucceeded === false || confirmedLastTurn.cancelledByUser === true
       || confirmedLastTurn.transportLost === true) {

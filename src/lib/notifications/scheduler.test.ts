@@ -7,16 +7,22 @@ import { upsertSubscription } from './store';
 
 const sendNotification = vi.hoisted(() => vi.fn().mockResolvedValue({}));
 const setVapidDetails = vi.hoisted(() => vi.fn());
+const consumeSourceIntentLaunchOnce = vi.hoisted(() => vi.fn(async () => ({ status: 'idle' as const, scope: 'work' as const })));
 
 vi.mock('web-push', () => ({
   default: { sendNotification, setVapidDetails },
 }));
+
+// The source-intent launch is wired into the existing tick; the launch entry
+// itself is covered by src/lib/kanban/source-launch.test.ts.
+vi.mock('../kanban/source-launch', () => ({ consumeSourceIntentLaunchOnce }));
 
 const roots: string[] = [];
 
 afterEach(() => {
   sendNotification.mockClear();
   setVapidDetails.mockClear();
+  consumeSourceIntentLaunchOnce.mockClear();
   delete process.env.VAPID_PUBLIC_KEY;
   delete process.env.VAPID_PRIVATE_KEY;
   delete process.env.VAPID_SUBJECT;
@@ -46,5 +52,20 @@ describe('due reminder scheduler', () => {
     expect(await runDueReminderTick(now, { scopes: ['work'], tasksDir: () => tasksDir, storePath })).toBe(1);
     expect(await runDueReminderTick(now, { scopes: ['work'], tasksDir: () => tasksDir, storePath })).toBe(0);
     expect(sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  test('consumes one source intent per scope from the existing tick', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-source-launch-tick-'));
+    const storePath = path.join(root, 'subscriptions.json');
+    const tasksDir = path.join(root, 'tasks');
+    roots.push(root);
+    fs.mkdirSync(tasksDir, { recursive: true });
+
+    const now = new Date('2030-01-02T03:05:00.000Z');
+    expect(await runDueReminderTick(now, { scopes: ['work', 'personal'], tasksDir: () => tasksDir, storePath })).toBe(0);
+
+    expect(consumeSourceIntentLaunchOnce).toHaveBeenCalledTimes(2);
+    expect(consumeSourceIntentLaunchOnce).toHaveBeenCalledWith('work', { tasksDir });
+    expect(consumeSourceIntentLaunchOnce).toHaveBeenCalledWith('personal', { tasksDir });
   });
 });

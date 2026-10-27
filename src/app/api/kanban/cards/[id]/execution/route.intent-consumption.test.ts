@@ -106,6 +106,7 @@ function scopedReadiness(project = 'Demo') {
   return {
     hostId: 'roomhacker-server-100', nativeUser: 'operator',
     projectReadinessContract: 'integrator-host-readiness-v1',
+    projectRoute: { harness: mocks.readiness.harness, model: mocks.readiness.model, state: 'ready' },
     projectReadiness: {
       state: 'ready', projectId: project, projectRoot: scopedProjectRoot,
       rootIdentity: 'exmanager-workspace-root-v1', policyRevision: 'scope-policy-7',

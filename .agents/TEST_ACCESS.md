@@ -48,7 +48,6 @@ for this hostname. Do not map it to `127.0.0.1`: there is no listener on
 `auth_request` and proxies only to the loopback QA container on port `43330`;
 it does not route to production Todo (`43327`). If server-100's LAN address
 changes, update this resolver rule to the current ingress address.
-
 Use the native `agent-browser` CLI that owns that exact session. Confirm the
 visible login name is `testlogin`, snapshot after the helper, submit the visible
 button once, then verify `/api/auth/session` reports `authenticated: true`.

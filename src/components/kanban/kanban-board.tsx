@@ -331,15 +331,7 @@ export function KanbanBoard() {
           </TabsContent>
           <TabsContent value="execution" className="order-1 min-h-0 min-w-0 overflow-y-auto md:order-2">
             {view === 'list' ? (
-          <div className="grid min-w-0 gap-4 overflow-y-auto p-3 sm:p-6 md:grid-cols-3">
-            {PRIMARY_BOARD_COLUMNS.map((column, index) => {
-              const lane = index === 0 ? 'incoming' : index === 1 ? 'in-progress' : 'review';
-              return <section key={column.id} aria-label={column.title} className="min-w-0 space-y-2">
-                <h2 className="sticky top-0 z-10 border-b bg-background/95 py-2 text-sm font-semibold backdrop-blur">{column.title}</h2>
-                <PlanningCardList cards={getPrimaryBoardLaneCards(visibleCards, lane)} roles={roles} onOpen={setSelectedCard} empty="Задач нет" />
-              </section>;
-            })}
-          </div>
+              <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} authoritativeCards={cards} highlightCardId={highlightCardId} username={username} onRefresh={refresh} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
             ) : (
           <div className="flex gap-3 sm:gap-4 p-3 sm:p-6 overflow-x-auto overscroll-x-contain flex-1">
               {PRIMARY_BOARD_COLUMNS.map((col, index) => (

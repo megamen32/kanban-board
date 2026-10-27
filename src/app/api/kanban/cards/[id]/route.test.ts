@@ -82,6 +82,33 @@ describe('PATCH /api/kanban/cards/[id]', () => {
     dispatchCardEvent.mockResolvedValue({ sent: 1, failed: 0, removed: 0, skipped: false });
   });
 
+  it('rejects an invalid blocker reason before transition or persistence', async () => {
+    const response = await PATCH(new NextRequest('http://localhost/api/kanban/cards/card-1', {
+      method: 'PATCH',
+      body: JSON.stringify({ blockerReason: 'x'.repeat(2001) }),
+      headers: { 'content-type': 'application/json' },
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'blocker_reason_invalid' });
+    expect(validateTransition).not.toHaveBeenCalled();
+    expect(updateCard).not.toHaveBeenCalled();
+  });
+
+  it('validates and persists the trimmed blocker reason through the transition policy', async () => {
+    validateTransition.mockReturnValue({ kind: 'accepted', patch: { blockerReason: 'Waiting for vendor file' } });
+
+    const response = await PATCH(new NextRequest('http://localhost/api/kanban/cards/card-1', {
+      method: 'PATCH',
+      body: JSON.stringify({ blockerReason: '  Waiting for vendor file  ' }),
+      headers: { 'content-type': 'application/json' },
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+
+    expect(response.status).toBe(200);
+    expect(validateTransition).toHaveBeenCalledWith(existingCard, expect.objectContaining({ blockerReason: 'Waiting for vendor file' }), expect.anything());
+    expect(updateCard).toHaveBeenCalledWith('card-1', { blockerReason: 'Waiting for vendor file' }, undefined, '/scoped/work');
+  });
+
   it('returns 400 and does not persist an inferred assignee change', async () => {
     validateTransition.mockReturnValue({ kind: 'rejected', reason: 'assignee_change_requires_owner_authorization' });
 
@@ -318,6 +345,26 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(await response.json()).toEqual({ card: otherProjectCard });
   });
 
+  it('denies an unrelated test participant from the isolated QA project', async () => {
+    authenticated.current = { username: 'qa_exmanager_outsider', scope: 'work' };
+    identity.current = { username: 'qa_exmanager_outsider', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'ExManager QA' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), { params: Promise.resolve({ id: 'card-1' }) });
+    expect(response.status).toBe(404);
+    expect(findCardById).not.toHaveBeenCalled();
+  });
+
+  it('does not return a known card id from another project', async () => {
+    authenticated.current = { username: 'oleg', scope: 'work' };
+    identity.current = { username: 'oleg', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'Alpha' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/known-other-card'), {
+      params: Promise.resolve({ id: 'known-other-card' }),
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'not found' });
+  });
+
   it('denies a server-verified username outside the two named project identities', async () => {
     authenticated.current = { username: 'other-user', scope: 'work' };
     identity.current = { username: 'other-user', scope: 'work' };
@@ -478,7 +525,7 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(findCardById).not.toHaveBeenCalled();
 
     nativeProjectAccessContextFromRequest.mockResolvedValue(null);
-    authenticated.current = { username: 'oleg', scope: 'work' };
+    authenticated.current = null;
     identity.current = { username: 'anonymous', scope: 'work' };
     const legacy = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), {
       params: Promise.resolve({ id: 'card-1' }),
