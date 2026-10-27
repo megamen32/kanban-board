@@ -12,7 +12,7 @@ const { createCard, updateCard, getAllCards, listProjects, validateTransition, d
   startDueReminderScheduler: vi.fn(),
   tasksDirForScope: vi.fn(),
   identity: { current: { username: 'nikita', scope: 'work' as const } },
-  authenticated: { current: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' } | null },
+  authenticated: { current: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' | 'personal' } | null },
   managerAuthorized: { current: false },
   nativeAccess: { current: null as null | { userId: string; forProject: ReturnType<typeof vi.fn> } },
   nativeProjectAccessContextFromRequest: vi.fn(async () => nativeAccess.current),
