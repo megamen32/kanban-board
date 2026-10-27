@@ -82,29 +82,31 @@ export function TaskListView({ cards, authoritativeCards = cards, highlightCardI
               <div
                 key={card.id}
                 ref={card.id === highlightCardId ? highlightedRef : undefined}
-                className={`group flex min-h-12 items-start gap-3 py-2 ${card.id === highlightCardId ? 'rounded-md bg-primary/5 ring-2 ring-primary/60' : ''}`}
+                className={`group grid min-h-12 grid-cols-[1.25rem_minmax(0,1fr)] items-start gap-x-3 gap-y-2 py-2 ${card.id === highlightCardId ? 'rounded-md bg-primary/5 ring-2 ring-primary/60' : ''}`}
               >
-                <div className="flex min-w-0 flex-1 items-center gap-3">
                 <button
                   type="button"
                   aria-label={needsReview ? 'Открыть результат для приёмки' : done ? 'Вернуть задачу' : 'Отметить выполненной'}
                   disabled={Boolean(pendingStatuses[card.id])}
                   onClick={() => needsReview ? onOpen(displayCard) : changeStatus(displayCard, done ? 'todo' : 'done')}
-                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${done ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-muted-foreground/50 hover:border-foreground'}`}
+                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${done ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-muted-foreground/50 hover:border-foreground'}`}
                 >
                   {done && <Check className="h-3.5 w-3.5" />}
                 </button>
-                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(displayCard)}>
-                  <span className={`block text-sm sm:text-base ${done ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{card.title}</span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">{status}{needsReview ? ' · ожидает решения человека' : ''}{card.parent ? ` · подзадача ${card.parent}` : ''}</span>
-                  {card.nextAction && <span className="mt-0.5 block truncate text-xs text-muted-foreground">Следующий шаг: {card.nextAction}</span>}
-                  {card.column === 'blocked' && card.blockerReason && <span className="mt-0.5 block text-xs text-amber-700 dark:text-amber-300">Что мешает: {card.blockerReason}</span>}
-                </button>
-                {card.assignees.length > 0 && (
-                  <span className="hidden shrink-0 text-xs text-muted-foreground sm:block">{card.assignees.join(', ')}</span>
-                )}
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(displayCard)}>
+                      <span className={`block text-sm sm:text-base ${done ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{card.title}</span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">{status}{needsReview ? ' · ожидает решения человека' : ''}{card.parent ? ` · подзадача ${card.parent}` : ''}</span>
+                      {card.nextAction && <span className="mt-0.5 block truncate text-xs text-muted-foreground">Следующий шаг: {card.nextAction}</span>}
+                      {card.column === 'blocked' && card.blockerReason && <span className="mt-0.5 block text-xs text-amber-700 dark:text-amber-300">Что мешает: {card.blockerReason}</span>}
+                    </button>
+                    {card.assignees.length > 0 && (
+                      <span className="hidden max-w-40 shrink-0 truncate text-xs text-muted-foreground sm:block">{card.assignees.join(', ')}</span>
+                    )}
+                  </div>
+                  <ReviewRecoveryControl card={displayCard} username={username} onDone={onRefresh} />
                 </div>
-                <ReviewRecoveryControl card={displayCard} username={username} onDone={onRefresh} />
               </div>
             );
           })}
