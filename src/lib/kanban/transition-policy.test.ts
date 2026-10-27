@@ -143,6 +143,41 @@ describe('kanban transition policy', () => {
     expect(decision).not.toMatchObject({ patch: { completedAt: '2000-01-01T00:00:00.000Z' } });
   });
 
+  test('accepts only an exact trusted owner completion from review and records owner audit evidence', () => {
+    const authorization = {
+      actor: 'nikita',
+      evidence: { type: 'signed-owner-command', actor: 'nikita', confirmation: 'exact-card-completion' },
+    };
+    for (const state of [
+      { column: 'review' as const, needsReview: true },
+      { column: 'in-progress' as const, needsReview: true },
+    ]) {
+      const waiting: KanbanCard = {
+        ...baseCard, ...state, owner: 'nikita', requiresApprovalFrom: ['nikita'],
+      };
+      const context = { origin: 'mcp' as const, actor: 'mcp', ownerCompletionAuthorization: authorization };
+      const decision = validateTransition(waiting, { column: 'done' }, context);
+      expect(decision).toMatchObject({ kind: 'accepted', patch: {
+        column: 'done', needsReview: false, requiresApprovalFrom: [], completedBy: 'nikita',
+        completedAt: expect.any(String),
+        completionEvidence: [{ type: 'owner_confirmed_completion', actor: 'nikita', origin: 'mcp', evidence: authorization.evidence }],
+      } });
+
+      expect(validateTransition(waiting, { column: 'done', title: 'Mixed edit' }, context)).toMatchObject({
+        kind: 'rejected', reason: 'review_requires_explicit_decision',
+      });
+      expect(validateTransition(waiting, { column: 'done' }, {
+        ...context, ownerCompletionAuthorization: { ...authorization, actor: 'oleg' },
+      })).toMatchObject({ kind: 'rejected', reason: 'review_requires_explicit_decision' });
+      expect(validateTransition({ ...waiting, requiresApprovalFrom: ['oleg'] }, { column: 'done' }, context)).toMatchObject({
+        kind: 'rejected', reason: 'review_requires_explicit_decision',
+      });
+      expect(validateTransition(waiting, { column: 'done' }, { origin: 'mcp', actor: 'mcp' })).toMatchObject({
+        kind: 'rejected', reason: 'review_requires_explicit_decision',
+      });
+    }
+  });
+
   test.each(['automation', 'mcp'] as const)('does not trust caller-supplied machine evidence for %s DONE', (origin) => {
     const evidence = { type: 'machine-verifiable' as const, check: 'caller-claimed' };
     const decision = validateTransition(baseCard, {

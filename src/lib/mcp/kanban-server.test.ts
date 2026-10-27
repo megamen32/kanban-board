@@ -202,39 +202,53 @@ describe('kanban.change MCP transition policy', () => {
     expect(findCardById(card.id, tasksDir)).toEqual(done);
   });
 
-  it('rejects service owner flags from every state awaiting review', async () => {
+  it('allows only a signed exact owner completion from review and preserves CAS and audit', async () => {
     await client.close(); await server.close();
     const [ct, st] = InMemoryTransport.createLinkedPair();
     server = createKanbanMcpServer('work', { allowConfirmedOwnerCommands: true });
-    client = new Client({ name: 'trusted-owner-review-bypass-regression', version: '1' });
+    client = new Client({ name: 'trusted-owner-review-completion-regression', version: '1' });
     await server.connect(st); await client.connect(ct);
 
     const { updateCard } = await import('../kanban/file-store');
     const inReview = createCard('Column review gate', '', 'review', 'medium', [], 'alpha', [], tasksDir);
-    updateCard(inReview.id, { owner: 'nikita', needsReview: false, requiresApprovalFrom: ['nikita'] }, inReview.version, tasksDir);
+    updateCard(inReview.id, { owner: 'nikita', needsReview: true, requiresApprovalFrom: ['nikita'] }, inReview.version, tasksDir);
     const reviewBefore = findCardById(inReview.id, tasksDir)!;
     const withOwnerFlags = { mode: 'edit', cardId: reviewBefore.id, expectedVersion: reviewBefore.version,
       column: 'done', ownerCommandConfirmed: true, ownerCompletionConfirmed: true };
-    expect((await client.callTool({ name: 'kanban.change', arguments: withOwnerFlags })).isError).toBe(true);
-    expect(findCardById(inReview.id, tasksDir)).toEqual(reviewBefore);
-    const intermediate = { ...withOwnerFlags, column: 'in-progress', ownerCompletionConfirmed: false,
-      needsReview: false, requiresApprovalFrom: ['marina'] };
-    expect((await client.callTool({ name: 'kanban.change', arguments: intermediate })).isError).toBe(true);
-    expect(findCardById(inReview.id, tasksDir)).toEqual(reviewBefore);
-
-    const needsReview = createCard('Needs review flag gate', '', 'in-progress', 'medium', [], 'alpha', [], tasksDir);
-    updateCard(needsReview.id, { needsReview: true, requiresApprovalFrom: ['nikita'] }, needsReview.version, tasksDir);
-    const needsReviewBefore = findCardById(needsReview.id, tasksDir)!;
-    const attempts = [
-      { mode: 'edit', cardId: needsReview.id, expectedVersion: needsReviewBefore.version, column: 'in-progress',
-        needsReview: false, requiresApprovalFrom: ['marina'], ownerCommandConfirmed: true },
-      { mode: 'edit', cardId: needsReview.id, expectedVersion: needsReviewBefore.version, column: 'done',
-        ownerCommandConfirmed: true, ownerCompletionConfirmed: true },
-    ];
-    for (const args of attempts) {
-      expect((await client.callTool({ name: 'kanban.change', arguments: args })).isError).toBe(true);
-      expect(findCardById(needsReview.id, tasksDir)).toEqual(needsReviewBefore);
+    for (const bad of [
+      { ...withOwnerFlags, expectedVersion: undefined },
+      { ...withOwnerFlags, expectedVersion: reviewBefore.version - 1 },
+      { ...withOwnerFlags, ownerCommandConfirmed: false },
+      { ...withOwnerFlags, ownerCompletionConfirmed: false },
+      { ...withOwnerFlags, title: 'Mixed edit' },
+      { ...withOwnerFlags, column: 'in-progress', ownerCompletionConfirmed: false,
+        needsReview: false, requiresApprovalFrom: ['marina'] },
+    ]) {
+      expect((await client.callTool({ name: 'kanban.change', arguments: bad })).isError).toBe(true);
+      expect(findCardById(inReview.id, tasksDir)).toEqual(reviewBefore);
     }
+    const otherReviewer = createCard('Other reviewer gate', '', 'review', 'medium', [], 'alpha', [], tasksDir);
+    updateCard(otherReviewer.id, { owner: 'nikita', needsReview: true, requiresApprovalFrom: ['oleg'] }, otherReviewer.version, tasksDir);
+    const otherReviewerBefore = findCardById(otherReviewer.id, tasksDir)!;
+    expect((await client.callTool({ name: 'kanban.change', arguments: {
+      ...withOwnerFlags, cardId: otherReviewer.id, expectedVersion: otherReviewerBefore.version,
+    } })).isError).toBe(true);
+    expect(findCardById(otherReviewer.id, tasksDir)).toEqual(otherReviewerBefore);
+
+    const result = await client.callTool({ name: 'kanban.change', arguments: withOwnerFlags });
+    expect(result.isError, textFromResult(result)).not.toBe(true);
+    const payload = JSON.parse(textFromResult(result));
+    expect(payload.card).toMatchObject({ column: 'done', needsReview: false,
+      requiresApprovalFrom: [], completedBy: 'nikita', completedAt: expect.any(String),
+      completionEvidence: [expect.objectContaining({
+        type: 'owner_confirmed_completion', actor: 'nikita', origin: 'mcp',
+        evidence: expect.objectContaining({ type: 'airlock_confirmed_command', service: 'exmanager-airlock-service' }),
+      })] });
+    expect(payload.card.version).toBe(reviewBefore.version + 1);
+    const completed = findCardById(inReview.id, tasksDir)!;
+    expect(completed).toEqual(payload.card);
+    expect((await client.callTool({ name: 'kanban.change', arguments: withOwnerFlags })).isError).toBe(true);
+    expect(findCardById(inReview.id, tasksDir)).toEqual(completed);
   });
 
   it('rejects invalid planning metadata before creating a new Markdown card', async () => {

@@ -77,6 +77,15 @@ export function validateTransition(
   context: TransitionContext,
 ): TransitionDecision {
   const waitingForHumanReview = before.column === 'review' || before.needsReview;
+  const ownerCompletion = context.ownerCompletionAuthorization;
+  const exactOwnerCompletion = context.origin === 'mcp'
+    && ownerCompletion?.actor === NIKITA_ACTOR
+    && Object.keys(ownerCompletion.evidence).length > 0
+    && before.owner === NIKITA_ACTOR
+    && Object.keys(requested).length === 1
+    && Object.hasOwn(requested, 'column')
+    && requested.column === 'done'
+    && (before.requiresApprovalFrom ?? []).every(actor => actor === NIKITA_ACTOR);
   const reviewStateKeys = [
     'column', 'needsReview', 'requiresApprovalFrom', 'completedBy', 'completedAt',
     'completionEvidence', 'reviewHistory', 'resultHistory', 'executorResult',
@@ -88,7 +97,7 @@ export function validateTransition(
   // Review-state decisions use the authenticated human review endpoint and its
   // expected-version CAS. The board owner may change only the designated reviewer;
   // accepting, rejecting, completing, and all other review-state writes remain gated.
-  if (waitingForHumanReview && !ownerReviewerAssignmentOnly
+  if (waitingForHumanReview && !ownerReviewerAssignmentOnly && !exactOwnerCompletion
     && reviewStateKeys.some((key) => Object.hasOwn(requested, key))) {
     return { kind: 'rejected', reason: 'review_requires_explicit_decision' };
   }
@@ -173,7 +182,7 @@ export function validateTransition(
     };
   }
 
-  if ((before.column === 'review' || before.needsReview)
+  if (!exactOwnerCompletion && waitingForHumanReview
     && policyRequested.column !== undefined && policyRequested.column !== before.column) {
     return { kind: 'rejected', reason: 'review_requires_explicit_decision' };
   }
@@ -233,11 +242,7 @@ export function validateTransition(
     } };
   }
 
-  const ownerCompletion = context.ownerCompletionAuthorization;
-  if (context.origin === 'mcp' && ownerCompletion?.actor === NIKITA_ACTOR
-    && Object.keys(ownerCompletion.evidence).length > 0 && before.owner === NIKITA_ACTOR
-    && Object.keys(policyRequested).every(key => key === 'column')
-    && (before.requiresApprovalFrom ?? []).every(actor => actor === NIKITA_ACTOR)) {
+  if (exactOwnerCompletion) {
     return {
       kind: 'accepted',
       patch: { ...patch, completedBy: NIKITA_ACTOR, completedAt: new Date().toISOString(),
