@@ -27,8 +27,8 @@ export function InboxCapture({ owner, onCaptured }: { owner: string; onCaptured:
     finally { busy.current = false; setSending(false); }
   };
   return <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
-    <div className="flex items-center gap-2 text-sm font-medium"><Mic className="h-4 w-4" />Выгрузить в Inbox</div>
-    <Textarea value={text} onChange={event => { setText(event.target.value); setAudio(null); }} placeholder="Вставь расшифровку — разберём потом" rows={3} />
-    <div className="flex flex-wrap items-center gap-2"><input aria-label="Аудиофайл для транскрипции" type="file" accept="audio/*" disabled={sending} onChange={event => { setAudio(event.target.files?.[0] ?? null); setText(''); }} /><Button size="sm" onClick={() => void send()} disabled={sending || (!text.trim() && !audio)}><Send className="mr-2 h-4 w-4" />{sending ? 'Сохраняем…' : audio ? 'Расшифровать' : 'В Inbox'}</Button>{status && <span role="status" className="text-xs text-muted-foreground">{status}</span>}</div>
+    <div className="flex items-center gap-2 text-sm font-medium"><Mic className="h-4 w-4" />Добавить задачу во входящие</div>
+    <Textarea value={text} onChange={event => { setText(event.target.value); setAudio(null); }} placeholder="Опишите задачу или вставьте расшифровку — приоритет уточним позже" rows={3} />
+    <div className="flex flex-wrap items-center gap-2"><input aria-label="Аудиофайл для транскрипции" type="file" accept="audio/*" disabled={sending} onChange={event => { setAudio(event.target.files?.[0] ?? null); setText(''); }} /><Button size="sm" onClick={() => void send()} disabled={sending || (!text.trim() && !audio)}><Send className="mr-2 h-4 w-4" />{sending ? 'Сохраняем…' : audio ? 'Расшифровать' : 'Добавить во входящие'}</Button>{status && <span role="status" className="text-xs text-muted-foreground">{status}</span>}</div>
   </div>;
 }

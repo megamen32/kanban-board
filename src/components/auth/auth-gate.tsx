@@ -2,14 +2,43 @@
 
 import { FormEvent, ReactNode, useEffect, useState } from 'react';
 
+export type UnauthenticatedAuthMode = 'loopback-preview' | 'verified-login-required';
+
+export function unauthenticatedAuthMode(hostname: string): UnauthenticatedAuthMode {
+  const host = hostname.toLowerCase();
+  if (host === '127.0.0.1' || host === '::1' || host === '[::1]' || host === 'localhost') return 'loopback-preview';
+  return 'verified-login-required';
+}
+
 export function AuthGate({ children }: { children: ReactNode }) {
   const [checking, setChecking] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [error, setError] = useState('');
+  const [redirectingToAirlock, setRedirectingToAirlock] = useState(false);
 
   useEffect(() => {
     fetch('/api/auth/session')
-      .then((response) => setAuthenticated(response.ok))
+      .then(async (response) => {
+        if (response.ok) {
+          setAuthenticated(true);
+          return;
+        }
+        const mode = unauthenticatedAuthMode(window.location.hostname);
+        if (mode === 'loopback-preview') {
+          // The QA endpoint itself only serves its isolated read-only loopback store.
+          setAuthenticated(true);
+          return;
+        }
+        if (response.status === 401) {
+          const relay = await fetch('/api/auth/airlock/status', { cache: 'no-store' }).catch(() => null);
+          if (relay?.status === 204) {
+            setRedirectingToAirlock(true);
+            window.location.replace('/api/auth/airlock/login?next=%2F');
+            return;
+          }
+        }
+        setAuthenticated(false);
+      })
       .catch(() => setAuthenticated(false))
       .finally(() => setChecking(false));
   }, []);
@@ -30,7 +59,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     setAuthenticated(true);
   }
 
-  if (checking) return <main className="grid min-h-screen place-items-center">Проверяем вход…</main>;
+  if (checking || redirectingToAirlock) return <main aria-live="polite" className="grid min-h-screen place-items-center">{redirectingToAirlock ? 'Входим через Airlock…' : 'Проверяем вход…'}</main>;
   if (authenticated) return <>{children}</>;
   return (
     <main className="grid min-h-screen place-items-center bg-background p-4">

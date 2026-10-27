@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canCreateTaskQuestion, isTaskQuestionOwner, matchesTaskExecutionOperation, parseTaskQuestion, taskQuestionCreateRequest } from './notice-question-model';
+import { canCreateTaskQuestion, isTaskQuestionOwner, matchesTaskExecutionOperation, parseTaskQuestion, taskQuestionCreateRequest, taskQuestionStateLabel } from './notice-question-model';
 
 const view = {
   requestId: 'opaque-should-not-render', purpose: 'clarification', version: 8, state: 'pending',
@@ -20,6 +20,13 @@ describe('Notice task-question UI model', () => {
     const withHumanDecision = parseTaskQuestion({ ...view, decision: { source: 'human', value: 'b', decidedAt: 1800 } });
     expect(withHumanDecision).toMatchObject({ kind: 'ready', view: { decision: { source: 'human', value: 'b', decidedAt: 1800 } } });
     expect(withHumanDecision.kind === 'ready' && 'control' in withHumanDecision.view).toBe(false);
+  });
+
+  it('labels the backend human-answer DTO state as a received answer', () => {
+    const resolvedDto = { ...view, state: 'resolved', decision: { source: 'human', value: 'all', decidedAt: 789 } };
+    const parsed = parseTaskQuestion(resolvedDto);
+    expect(parsed).toMatchObject({ kind: 'ready', view: { state: 'resolved', decision: { source: 'human', value: 'all', decidedAt: 789 } } });
+    expect(taskQuestionStateLabel(parsed.kind === 'ready' ? parsed.view.state : '')).toBe('Ответ получен');
   });
 
   it('matches the server owner/assignee rule and constructs only the accepted explicit PATCH body', () => {

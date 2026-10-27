@@ -135,6 +135,7 @@ export function taskQuestionStateLabel(state: string): string {
   return ({
     pending: 'Ожидается ответ',
     decided: 'Ответ получен',
+    resolved: 'Ответ получен',
     expired: 'Срок ответа истёк',
     cancelled: 'Вопрос отменён',
     closed: 'Вопрос закрыт',

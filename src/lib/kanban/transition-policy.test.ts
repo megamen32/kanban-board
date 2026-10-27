@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { validateTransition } from './transition-policy';
+import { decideHumanReview, validateTransition } from './transition-policy';
 import type { KanbanCard } from './types';
 
 const baseCard: KanbanCard = {
@@ -21,6 +21,22 @@ const baseCard: KanbanCard = {
 };
 
 describe('kanban transition policy', () => {
+  test('owner recovers only a malformed in-progress review gate without accepting results', () => {
+    const malformed: KanbanCard = { ...baseCard, column: 'in-progress', needsReview: true, requiresApprovalFrom: [], resultHistory: [] };
+    const decision = decideHumanReview(malformed, 'recover-rework', 'nikita', 'Проверить статус и продолжить работу');
+    expect(decision).toMatchObject({ kind: 'accepted', patch: {
+      column: 'in-progress', needsReview: false, nextAction: 'Проверить статус и продолжить работу',
+      reviewHistory: [{ decision: 'rework', actor: 'nikita', note: 'Проверить статус и продолжить работу' }],
+    } });
+    expect((decision as { patch?: Record<string, unknown> }).patch).not.toHaveProperty('resultHistory');
+    expect(decideHumanReview(malformed, 'recover-rework', 'oleg', 'Проверить')).toMatchObject({ kind: 'rejected', reason: 'task_not_waiting_for_review' });
+    expect(decideHumanReview({ ...malformed, requiresApprovalFrom: ['nikita'] }, 'recover-rework', 'nikita', 'Проверить')).toMatchObject({ kind: 'rejected', reason: 'task_not_waiting_for_review' });
+    expect(decideHumanReview({ ...malformed, resultHistory: [{ summary: 'Done', evidenceRefs: [], submittedBy: 'worker', submittedAt: new Date().toISOString() }] }, 'recover-rework', 'nikita', 'Проверить')).toMatchObject({ kind: 'rejected', reason: 'task_not_waiting_for_review' });
+    expect(decideHumanReview({ ...malformed, taskExecutionHistory: [{ operationId: 'op', requestHash: 'hash', lastBoardVersion: 1, createInputId: 'create', messageInputId: 'message', phase: 'running', hostId: 'host', harness: 'codex', startedBy: 'nikita', createdAt: '', updatedAt: '' }] }, 'recover-rework', 'nikita', 'Проверить')).toMatchObject({ kind: 'rejected', reason: 'task_not_waiting_for_review' });
+    expect(decideHumanReview({ ...malformed, column: 'review' }, 'recover-rework', 'nikita', 'Проверить')).toMatchObject({ kind: 'rejected', reason: 'task_not_waiting_for_review' });
+    expect(decideHumanReview(malformed, 'recover-rework', 'nikita', '   ')).toMatchObject({ kind: 'rejected', reason: 'rework_note_required' });
+  });
+
   test('records manual confirmation for a human UI DONE transition', () => {
     const decision = validateTransition(baseCard, { column: 'done' }, {
       origin: 'human-ui',

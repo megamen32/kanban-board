@@ -5,18 +5,20 @@ import { CSS } from '@dnd-kit/utilities';
 import { CalendarClock, GripVertical, Flag } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { CardEditDialog } from './card-edit-dialog';
-import { CardPreview } from './card-preview';
+import { MarkdownCardPreview } from './markdown-card-preview';
+import { ReviewRecoveryControl } from './review-recovery-control';
 import { shouldOpenCardAfterPointer, type PointerCoordinates } from './card-interaction';
 import { PRIORITY_COLORS } from '@/lib/kanban/types';
 import type { KanbanCard as CardType, KanbanCardUpdates, RoleDefinition } from '@/lib/kanban/types';
 import * as React from 'react';
-import { useState, createContext, useContext, useRef } from 'react';
+import { useCallback, useEffect, useState, createContext, useContext, useRef } from 'react';
 
 // Context for update/delete without prop drilling
 interface CardActionsCtx {
   roles?: RoleDefinition[];
   username: string | null;
   refresh: () => Promise<void>;
+  highlightCardId?: string | null;
   onUpdate: (id: string, updates: KanbanCardUpdates, version?: number) => Promise<CardType | null>;
   onDelete: (id: string) => Promise<unknown>;
 }
@@ -32,11 +34,22 @@ export function KanbanCard({ card, columnId }: Props) {
   const [editing, setEditing] = useState(false);
   const pointerStart = useRef<{ x: number; y: number } | null>(null);
   const suppressClick = useRef(false);
-  const { onUpdate, onDelete, roles, username, refresh } = useCardActions();
+  const { onUpdate, onDelete, roles, username, refresh, highlightCardId } = useCardActions();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
     data: { card, columnId },
   });
+  const highlighted = highlightCardId === card.id;
+  const highlightedRef = useRef<HTMLDivElement | null>(null);
+  const attachRefs = useCallback((node: HTMLDivElement | null) => {
+    setNodeRef(node);
+    highlightedRef.current = node;
+  }, [setNodeRef]);
+  useEffect(() => {
+    // A freshly created card has to reach the eye without a manual hunt.
+    if (!highlighted) return;
+    highlightedRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [highlighted]);
 
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
 
@@ -53,11 +66,11 @@ export function KanbanCard({ card, columnId }: Props) {
   return (
     <>
       <div
-        ref={setNodeRef}
+        ref={attachRefs}
         style={style}
         {...attributes}
         {...listeners}
-        className="group relative bg-background rounded-md border border-border p-3 cursor-grab active:cursor-grabbing hover:shadow-sm transition-all hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary touch-pan-y"
+        className={`group relative bg-background rounded-md border border-border p-3 cursor-grab active:cursor-grabbing hover:shadow-sm transition-all hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary touch-pan-y ${highlighted ? 'ring-2 ring-primary/70 bg-primary/5' : ''}`}
         onPointerDownCapture={event => {
           pointerStart.current = { x: event.clientX, y: event.clientY };
           suppressClick.current = false;
@@ -89,7 +102,8 @@ export function KanbanCard({ card, columnId }: Props) {
           </span>
           <div className="flex-1 min-w-0">
             <div className="font-medium text-sm leading-tight truncate mb-1">{card.title}</div>
-            <CardPreview title={card.title} description={card.description} />
+            <MarkdownCardPreview title={card.title} description={card.description} />
+            <ReviewRecoveryControl card={card} username={username} onDone={refresh} />
             <div className="flex items-center gap-1.5 flex-wrap">
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{card.project || 'Без проекта'}</Badge>
               <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${PRIORITY_COLORS[card.priority]}`}>

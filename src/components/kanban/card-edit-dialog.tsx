@@ -23,7 +23,6 @@ import { ReviewActionGate, reviewActionAccess } from './review-action-gate';
 interface Props {
   card: KanbanCard;
   open: boolean;
-  /** Server-verified by /api/auth/session; never the selected person filter. */
   username?: string | null;
   onRefresh?: () => Promise<unknown> | void;
   roles?: RoleDefinition[];
@@ -154,8 +153,6 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     finally { setSaving(false); }
   };
 
-  const reviewAccess = reviewActionAccess(card, username);
-
   const addTag = () => {
     const t = tagInput.trim();
     if (t && !tags.includes(t)) setTags([...tags, t]);
@@ -163,6 +160,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   };
 
   const catalogLink = card.catalogLink;
+  const reviewAccess = reviewActionAccess(card, username);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -200,16 +198,16 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
                 {review.decision === 'accepted' ? 'Принято' : 'На доработку'} · {review.actor} · {new Date(review.decidedAt).toLocaleString()}{review.note ? ` · ${review.note}` : ''}
               </p>)}
             </div>}
-            {reviewAccess !== 'not-awaiting-review' && onReviewDecision && <div className="space-y-2 border-t pt-3">
-              <ReviewActionGate card={card} verifiedUsername={username}>
-                <p className="text-xs text-muted-foreground">Решение проверяется сервером по текущему списку согласующих.</p>
+            {reviewAccess !== 'not-awaiting-review' && <ReviewActionGate card={card} verifiedUsername={username}>
+              {onReviewDecision && <div className="space-y-2 border-t pt-3">
+                <p className="text-xs text-muted-foreground">{reviewAccess === 'owner-recovery' ? 'Проверка задачи заблокировала запуск без назначенного проверяющего. Владелец может вернуть задачу на доработку.' : 'Решение проверяется сервером по текущему списку согласующих.'}</p>
                 <Textarea aria-label="Комментарий к доработке" placeholder="Что нужно исправить" value={reviewNote} onChange={event => setReviewNote(event.target.value)} rows={2} />
                 <div className="flex flex-wrap gap-2">
-                  <Button disabled={saving} onClick={() => void handleReview('accept')}>Принять результат</Button>
-                  <Button variant="outline" disabled={saving || !reviewNote.trim()} onClick={() => void handleReview('rework')}>Вернуть на доработку</Button>
+                  {reviewAccess === 'authorized' && <Button disabled={saving} onClick={() => void handleReview('accept')}>Принять результат</Button>}
+                  <Button variant="outline" disabled={saving || !reviewNote.trim()} onClick={() => void handleReview(reviewAccess === 'owner-recovery' ? 'recover-rework' : 'rework')}>Вернуть на доработку</Button>
                 </div>
-              </ReviewActionGate>
-            </div>}
+              </div>}
+            </ReviewActionGate>}
           </section>
           <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />
           {catalogLink && <CatalogLinkPanel link={catalogLink} />}

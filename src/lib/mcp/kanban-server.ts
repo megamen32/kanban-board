@@ -3,8 +3,6 @@ import { z } from 'zod';
 import { ensureProject, listProjects, projectInput } from '../kanban/project-store';
 import { createAdmittedCard, createCard, deleteCard, findCardById, getAllCards, updateCard } from '../kanban/file-store';
 import { admitSourceTask } from '../kanban/source-operation';
-import { commitVerifiedCatalogTaskLink } from '../kanban/catalog-link';
-import { catalogResultDigest, type CatalogLinkClaims, type SignedCatalogLinkEnvelope } from './catalog-link-resolver';
 import type { SourceAdmissionRequest } from '../kanban/source-operation';
 import type { SignedSourceAdmissionEnvelope } from './source-resolver';
 import type { SignedTodoMcpReadScope, TodoMcpProjectEnsureClaims, TodoMcpReadScopeClaims, TodoMcpWriteScopeClaims } from './todo-caller-scope';
@@ -189,8 +187,6 @@ export interface KanbanMcpOptions {
   allowInternalTeamCommands?: boolean;
   /** Verifies an ExManager server-signed source request; never trust service bearer input alone. */
   verifySourceAdmission?: (envelope: SignedSourceAdmissionEnvelope) => SourceAdmissionRequest;
-  /** Verifies the server-only canonical owner receipt bound to one current Board result. */
-  verifyCatalogLink?: (envelope: SignedCatalogLinkEnvelope) => CatalogLinkClaims;
   /** Requires per-call current ExManager user/project authority on the shared service MCP. */
   requireExManagerReadScope?: boolean;
   verifyExManagerReadScope?: (
@@ -455,40 +451,6 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
         card => createAdmittedCard(card, tasksDir),
       );
       return textResult({ ...result, scope });
-    });
-  }
-
-  if (options.verifyCatalogLink) {
-    server.registerTool('kanban.catalog.link', {
-      title: 'Link a verified integrator result to the canonical partner catalog',
-      description: 'Persist only canonical Airlockplan IDs for one exact admitted source, result revision, and integrator subject. Caller-supplied IDs or unsigned requests are never accepted.',
-      inputSchema: {
-        envelope: z.object({
-          payload: z.string().min(1).max(90_000), purpose: z.literal('catalog-link'),
-          issuedAtMs: z.number().int().safe(), expiresAtMs: z.number().int().safe(),
-          signature: z.string().min(1).max(128),
-        }).strict(),
-      },
-      annotations: { idempotentHint: true, openWorldHint: false },
-    }, async ({ envelope }) => {
-      const claims = options.verifyCatalogLink!(envelope);
-      const card = findCardById(claims.taskId, tasksDir);
-      const latestResult = card?.resultHistory?.at(-1);
-      if (!card || card.version !== claims.expectedBoardVersion || card.project !== claims.boardProject
-          || card.sourceAdmission?.classification !== 'explicit-task'
-          || card.sourceAdmission.sourceEventId !== claims.sourceRef
-          || card.sourceAdmission.sourceRevision !== claims.sourceRevision
-          || card.sourceAdmission.requestedProject !== claims.boardProject
-          || !latestResult?.evidenceRefs.includes(claims.subjectEvidenceRef)
-          || catalogResultDigest(latestResult) !== claims.resultDigest) {
-        throw new Error('current admitted source, Board version, or result digest does not match the signed catalog link');
-      }
-      const { actorId: _verifiedActorId, subjectEvidenceRef: _verifiedEvidenceRef, ...linkRequest } = claims;
-      // These canonical fields came from the fixed Go→Airlockplan MCP receipt,
-      // authenticated by the per-call Ed25519 envelope. Recheck exact local
-      // Board facts above and let the existing store perform the version CAS.
-      const result = commitVerifiedCatalogTaskLink(linkRequest, { tasksDir });
-      return textResult(result);
     });
   }
 

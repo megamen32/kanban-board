@@ -8,14 +8,15 @@ import { findCardById, updateCard } from '@/lib/kanban/file-store';
 import { taskExecutionSnapshot } from '@/lib/kanban/task-execution';
 import { callOwnerHerderTool, type HerderToolResult } from '@/lib/kanban/task-execution-client';
 import { validateTransition } from '@/lib/kanban/transition-policy';
-import type { KanbanCard, KanbanCardUpdates, TaskDecisionRequestReference, TaskExecutionContinuation, TaskExecutionProjectBinding, TaskExecutionReceipt } from '@/lib/kanban/types';
+import { markSourceIntentConsumed } from '../../../../../../lib/kanban/source-operation';
+import type { KanbanCard, KanbanCardUpdates, TaskDecisionRequestReference, TaskExecutionContinuation, TaskExecutionProjectBinding, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls } from '@/lib/kanban/types';
 import type { NativeProjectAccessContext } from '@/lib/kanban/native-project-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 type RecordValue = Record<string, unknown>;
-const SESSION_MODEL = 'gpt-6-luna';
+const LEGACY_SESSION_MODEL = 'gpt-6-luna';
 const MAX_TASK_TEXT = 48_000;
 const MAX_TASK_EXECUTION_HISTORY = 32;
 const NOTICE_TASK_DECISION_URL = 'https://notify.bezrabotnyi.com/v1/task-decisions';
@@ -23,6 +24,7 @@ const MAX_NOTICE_RESPONSE_BYTES = 1_000_000;
 const MAX_NOTICE_MESSAGE_CHARS = 4_000;
 const TASK_FOLLOW_UP_KIND = 'task-follow-up-v1' as const;
 const MAX_CONTINUATION_TEXT = 4_000;
+const MAX_SESSION_CONTROL_MESSAGE = 4_000;
 const PROJECT_READINESS_CONTRACT = 'integrator-host-readiness-v1' as const;
 const PROJECT_READINESS_MAX_AGE_MS = 30_000;
 
@@ -54,7 +56,8 @@ function taskFingerprint(card: KanbanCard, actor: string, hostId: string, cwd: s
   const identity = {
     id: card.id, title: card.title, description: card.description, project: card.project,
     owner: card.owner ?? 'nikita', assignee: card.assignee ?? null, assignees: card.assignees,
-    actor, hostId, harness: 'codex', cwd, model: SESSION_MODEL,
+    actor, hostId, harness: projectBinding?.harness ?? 'codex', cwd,
+    model: projectBinding?.model ?? LEGACY_SESSION_MODEL,
     ...(projectBinding ? { projectBinding } : {}),
   };
   return sha256(JSON.stringify(identity));
@@ -64,13 +67,18 @@ function scopedProjectReadiness(nodeInfo: RecordValue | undefined, savedProject:
   if (!nodeInfo || nodeInfo.projectReadinessContract !== PROJECT_READINESS_CONTRACT || typeof savedProject !== 'string' || !savedProject.trim()) return undefined;
   const readiness = isRecord(nodeInfo.projectReadiness) ? nodeInfo.projectReadiness : undefined;
   const paths = readiness && isRecord(readiness.pathResolution) ? readiness.pathResolution : undefined;
+  const harness = readiness?.harness;
+  const model = readiness?.model;
   const stringFields = ['projectId', 'projectRoot', 'rootIdentity', 'policyRevision', 'runtimeInstanceId', 'hostId', 'harnessVersion', 'cwd'];
   if (!readiness || !paths || readiness.state !== 'ready'
       || stringFields.some(field => typeof readiness[field] !== 'string' || !(readiness[field] as string).trim())
       || readiness.projectId !== savedProject || readiness.hostId !== nodeInfo.hostId
       || typeof nodeInfo.hostId !== 'string' || !nodeInfo.hostId.trim()
       || typeof nodeInfo.nativeUser !== 'string' || !nodeInfo.nativeUser.trim()
-      || readiness.harness !== 'codex' || readiness.model !== SESSION_MODEL || readiness.resourceReady !== true
+      || (harness !== 'codex' && harness !== 'opencode')
+      || typeof model !== 'string' || !model.trim()
+      || harness === 'codex' && model !== LEGACY_SESSION_MODEL
+      || readiness.resourceReady !== true
       || typeof readiness.observedAtMs !== 'number' || !Number.isSafeInteger(readiness.observedAtMs)
       || readiness.observedAtMs > atMs + 30_000 || atMs - readiness.observedAtMs > PROJECT_READINESS_MAX_AGE_MS
       || readiness.cwd !== paths.canonicalCwd || paths.rootPath !== readiness.projectRoot
@@ -87,7 +95,7 @@ function scopedProjectReadiness(nodeInfo: RecordValue | undefined, savedProject:
       || !Array.isArray(availableTools) || availableTools.some(tool => typeof tool !== 'string' || !tool.trim())
       || !requiredTools.every(tool => availableTools.includes(tool))
       || !Array.isArray(availableModels) || availableModels.some(model => typeof model !== 'string' || !model.trim())
-      || !availableModels.includes(SESSION_MODEL)) return undefined;
+      || !availableModels.includes(model)) return undefined;
   return {
     contract: PROJECT_READINESS_CONTRACT,
     projectId: readiness.projectId as string,
@@ -97,9 +105,9 @@ function scopedProjectReadiness(nodeInfo: RecordValue | undefined, savedProject:
     observedAtMs: readiness.observedAtMs,
     runtimeInstanceId: readiness.runtimeInstanceId as string,
     hostId: readiness.hostId as string,
-    harness: 'codex',
+    harness,
     harnessVersion: readiness.harnessVersion as string,
-    model: SESSION_MODEL,
+    model,
     requiredTools: [...requiredTools] as string[],
     availableTools: [...availableTools] as string[],
     availableModels: [...availableModels] as string[],
@@ -387,7 +395,7 @@ function commitTaskContinuationResult(input: {
       || child.phase !== 'running' || child.nativeTurnId !== input.expectedChild.nativeTurnId
       || child.inputId !== input.expectedChild.inputId || child.requestHash !== input.expectedChild.requestHash
       || child.instruction !== input.expectedChild.instruction
-      || taskFingerprint(current, parent.startedBy, parent.hostId, input.cwd) !== parent.requestHash) {
+      || taskFingerprint(current, parent.startedBy, parent.hostId, input.cwd, input.expectedParent.projectBinding) !== parent.requestHash) {
     return { conflict: true, serverCard: current };
   }
   const continuations = [...(parent.continuations ?? [])];
@@ -466,7 +474,7 @@ async function startTaskFollowUp(
   const session = isRecord(sessionPayload?.session) ? sessionPayload.session : undefined;
   const lastTurn = isRecord(session?.meta) && isRecord(session.meta.nativeLastTurn) ? session.meta.nativeLastTurn : undefined;
   if (!nodeInfo || nodeInfo.hostId !== parent.hostId || !session || session.id !== parent.nativeSessionId
-      || session.harness !== parent.harness || session.cwd !== cwd || session.model !== SESSION_MODEL
+      || session.harness !== parent.harness || session.cwd !== cwd || session.model !== executionModel(parent)
       || session.status !== 'idle' || !lastTurn || lastTurn.turnId !== parent.nativeTurnId
       || lastTurn.status !== 'completed' || lastTurn.assistantSucceeded === false
       || lastTurn.cancelledByUser === true || lastTurn.transportLost === true) {
@@ -553,7 +561,7 @@ async function syncTaskFollowUp(context: AuthorizedTaskCard, body: RecordValue):
   try { before = await readExactTurn(); }
   catch { return continuationResponse(context.card, parent.operationId, child.id, 202); }
   if (!before.session || before.session.id !== parent.nativeSessionId || before.session.harness !== parent.harness
-      || before.session.cwd !== cwd || before.session.model !== SESSION_MODEL || !before.turn
+      || before.session.cwd !== cwd || before.session.model !== executionModel(parent) || !before.turn
       || before.turn.turnId !== child.nativeTurnId || before.turn.status !== 'completed'
       || before.turn.assistantSucceeded === false || before.turn.cancelledByUser === true || before.turn.transportLost === true) {
     return continuationResponse(context.card, parent.operationId, child.id, 202);
@@ -565,7 +573,7 @@ async function syncTaskFollowUp(context: AuthorizedTaskCard, body: RecordValue):
   const details = isRecord(view?.details) ? view.details : undefined;
   const native = isRecord(details?.session) ? details.session : undefined;
   if (!details || view?.hostId !== parent.hostId || native?.id !== parent.nativeSessionId
-      || native?.harness !== parent.harness || native.cwd !== cwd || native.model !== SESSION_MODEL
+      || native?.harness !== parent.harness || native.cwd !== cwd || native.model !== executionModel(parent)
       || details.historyUnavailable === true || !Array.isArray(details.messages)) {
     return continuationResponse(context.card, parent.operationId, child.id, 202);
   }
@@ -595,12 +603,75 @@ async function syncTaskFollowUp(context: AuthorizedTaskCard, body: RecordValue):
   return continuationResponse(saved, parent.operationId, child.id, 200);
 }
 
-function exactSessionView(result: HerderToolResult, hostId: string, sessionId: string, cwd: string): boolean {
+function executionModel(receipt: TaskExecutionReceipt): string {
+  return receipt.projectBinding?.model ?? LEGACY_SESSION_MODEL;
+}
+
+function exactSessionView(result: HerderToolResult, hostId: string, sessionId: string, cwd: string, harness: string, model: string): boolean {
   const view = isRecord(result.structuredContent) ? result.structuredContent : undefined;
   const details = isRecord(view?.details) ? view.details : undefined;
   const native = isRecord(details?.session) ? details.session : undefined;
-  return view?.hostId === hostId && native?.id === sessionId && native?.harness === 'codex'
-    && native.cwd === cwd && native.model === SESSION_MODEL;
+  return view?.hostId === hostId && native?.id === sessionId && native?.harness === harness
+    && native.cwd === cwd && native.model === model;
+}
+
+/**
+ * B04c: once the launch receipt is durable the source launch intent is spent.
+ * This transition owns only the journal state, so it never starts work and never
+ * invalidates the running session; a refused transition is recorded on the card.
+ */
+function consumeLaunchIntent(
+  card: KanbanCard,
+  tasksDir: string,
+  operationId: string,
+  requestHash: string,
+): KanbanCard | undefined {
+  const binding = card.sourceAdmission;
+  if (!binding || typeof binding.operationKey !== 'string' || typeof binding.intentId !== 'string') return undefined;
+  let refusal: string | undefined;
+  try {
+    const result = markSourceIntentConsumed(tasksDir, { operationKey: binding.operationKey, intentId: binding.intentId });
+    if (result.status === 'not-consumable') refusal = result.reason;
+  } catch {
+    refusal = 'intent-transition-refused';
+  }
+  if (!refusal) return undefined;
+  return saveReceiptProgress(card.id, tasksDir, operationId, requestHash, {
+    lastProgress: `Запуск выполнен, но intent источника не закрыт (${refusal}); повторный запуск запрещён.`,
+    lastProgressAt: now(),
+  });
+}
+
+/**
+ * B04d: one policy for the fate of a source launch intent.
+ *
+ * Only a receipt that proves no native session was created (`not_attempted`)
+ * leaves the intent PENDING, so a repeat launch stays allowed. Every other
+ * outcome — an ambiguous one, or a receipt that already carries a native
+ * session — spends the intent, because the same work must never be issued
+ * twice: the session may exist even when the answer never arrived.
+ */
+function closeLaunchIntent(
+  card: KanbanCard,
+  tasksDir: string,
+  operationId: string,
+  requestHash: string,
+  phase: 'create-unknown' | 'dispatch-unknown' | 'stopped',
+  note: string,
+): KanbanCard {
+  const binding = card.sourceAdmission;
+  if (!binding || typeof binding.operationKey !== 'string' || typeof binding.intentId !== 'string') return card;
+  let refusal: string | undefined;
+  try {
+    const result = markSourceIntentConsumed(tasksDir, { operationKey: binding.operationKey, intentId: binding.intentId });
+    if (result.status === 'not-consumable') refusal = result.reason;
+  } catch {
+    refusal = 'intent-transition-refused';
+  }
+  const lastProgress = refusal ? `${note} Intent источника не закрыт (${refusal}).` : note;
+  return saveReceiptProgress(card.id, tasksDir, operationId, requestHash, {
+    phase, lastProgress, lastProgressAt: now(),
+  }) ?? card;
 }
 
 async function dispatchCreatedTask(input: {
@@ -610,13 +681,14 @@ async function dispatchCreatedTask(input: {
   operationId: string;
   requestHash: string;
   nativeSessionId: string;
+  projectBinding?: TaskExecutionProjectBinding;
   messageInputId: string;
   admittedStatus: number;
 }): Promise<NextResponse> {
   let dispatchTool: HerderToolResult;
   try {
     dispatchTool = await callOwnerHerderTool('send_message', {
-      sessionId: input.nativeSessionId, harness: 'codex', inputId: input.messageInputId,
+      sessionId: input.nativeSessionId, harness: input.projectBinding?.harness ?? 'codex', inputId: input.messageInputId,
       message: taskPrompt(input.card), mode: 'steer', humanRequested: true,
     });
   } catch {
@@ -624,7 +696,11 @@ async function dispatchCreatedTask(input: {
       phase: 'dispatch-unknown', nativeSessionId: input.nativeSessionId,
       dispatchReceiptText: 'owner MCP dispatch outcome unknown; never replay this operation',
     });
-    return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : { cardId: input.card.id, state: 'unknown' as const }), operationId: input.operationId, retryable: false }, {
+    // B04d: the native session already exists, so an ambiguous dispatch closes the
+    // launch intent; the same work is never issued a second time.
+    const closed = saved ? closeLaunchIntent(saved, input.tasksDir, input.operationId, input.requestHash,
+      'dispatch-unknown', 'Исход передачи не подтверждён; сессия уже создана, intent источника закрыт — повторный запуск запрещён.') : undefined;
+    return NextResponse.json({ ...(closed ? taskExecutionSnapshot(closed) : (saved ? taskExecutionSnapshot(saved) : { cardId: input.card.id, state: 'unknown' as const })), operationId: input.operationId, retryable: false }, {
       status: 202, headers: { 'Cache-Control': 'no-store' },
     });
   }
@@ -649,7 +725,18 @@ async function dispatchCreatedTask(input: {
     const startTransition = validateTransition(current, { column: 'in-progress' }, { origin: 'automation', actor: input.actor });
     return startTransition.kind === 'accepted' ? startTransition.patch : {};
   } : undefined);
-  const snapshot = updated ? taskExecutionSnapshot(updated) : { cardId: input.card.id, state: 'unknown' as const };
+  // B04c: the launch receipt is durable now, so the source launch intent is spent.
+  // A refused transition never invalidates the running session.
+  // B04d: an unconfirmed dispatch is an ambiguous outcome — the native session
+  // already exists, so the launch intent is closed there as well.
+  let launchedCard = updated;
+  if (updated && admitted) {
+    launchedCard = consumeLaunchIntent(input.card, input.tasksDir, input.operationId, input.requestHash) ?? updated;
+  } else if (updated) {
+    launchedCard = closeLaunchIntent(updated, input.tasksDir, input.operationId, input.requestHash,
+      'dispatch-unknown', 'Передача задания не подтверждена; сессия уже создана, intent источника закрыт — повторный запуск запрещён.');
+  }
+  const snapshot = launchedCard ? taskExecutionSnapshot(launchedCard) : { cardId: input.card.id, state: 'unknown' as const };
   return NextResponse.json({ ...snapshot, operationId: input.operationId, retryable: false }, {
     status: admitted ? input.admittedStatus : 202,
     headers: { 'Cache-Control': 'no-store' },
@@ -1059,7 +1146,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const requestHash = taskFingerprint(context.card, context.actor, hostId, cwd, projectBinding);
     const intent: TaskExecutionReceipt = {
       operationId, requestHash, lastBoardVersion: context.card.version + 1, createInputId, messageInputId, phase: 'intent',
-      hostId, harness: 'codex', projectBinding, startedBy: context.actor,
+      hostId, harness: projectBinding.harness, projectBinding, startedBy: context.actor,
       ...(context.native ? { requestedBy: context.actor } : {}),
       createdAt: now(), updatedAt: now(),
     };
@@ -1072,7 +1159,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let createTool: HerderToolResult;
     try {
       createTool = await callOwnerHerderTool('fleet_create_session', {
-        inputId: createInputId, harness: 'codex', name, cwd, model: SESSION_MODEL, project: context.card.project,
+        inputId: createInputId, harness: projectBinding.harness, name, cwd, model: projectBinding.model, project: context.card.project,
         projectReadinessContract: projectBinding.contract,
         projectReadiness: {
           state: 'ready',
@@ -1090,7 +1177,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       const saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
         phase: 'create-unknown', createReceiptText: 'owner MCP create outcome unknown; never replay under a new operation',
       });
-      const snapshot = saved ? taskExecutionSnapshot(saved) : { cardId: context.card.id, state: 'unknown' as const };
+      // B04d: an unknown create outcome may already have produced a native session,
+      // so the launch intent is closed and no new operation may start it again.
+      const closed = saved ? closeLaunchIntent(saved, context.tasksDir, operationId, requestHash,
+        'create-unknown', 'Исход создания сессии не подтверждён; intent источника закрыт — повторный запуск запрещён.') : undefined;
+      const snapshot = closed ? taskExecutionSnapshot(closed) : { cardId: context.card.id, state: 'unknown' as const };
       return NextResponse.json({ ...snapshot, operationId, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
     const createText = textOf(createTool);
@@ -1109,7 +1200,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       const saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
         phase: 'create-unknown', createReceiptText: createText,
       });
-      const snapshot = saved ? taskExecutionSnapshot(saved) : { cardId: context.card.id, state: 'unknown' as const };
+      // B04d: the create receipt did not prove a scoped session, so the outcome stays
+      // ambiguous and the launch intent is closed instead of being issued again.
+      const closed = saved ? closeLaunchIntent(saved, context.tasksDir, operationId, requestHash,
+        'create-unknown', 'Создание сессии не подтверждено; intent источника закрыт — повторный запуск запрещён.') : undefined;
+      const snapshot = closed ? taskExecutionSnapshot(closed) : { cardId: context.card.id, state: 'unknown' as const };
       return NextResponse.json({ ...snapshot, operationId, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
 
@@ -1126,28 +1221,163 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // Verify exact native host/session/CWD/model before sending any task text.
     let viewTool: HerderToolResult;
     try {
-      viewTool = await callOwnerHerderTool('fleet_session_view', { harness: 'codex', sessionId: createdSessionId });
+      viewTool = await callOwnerHerderTool('fleet_session_view', { harness: projectBinding.harness, sessionId: createdSessionId });
     } catch {
       return NextResponse.json({ ...taskExecutionSnapshot(createdCard), operationId,
         waitReason: 'Сессия создана; проверка её параметров временно недоступна. Повторите проверку этой же операции.',
         retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
-    if (!exactSessionView(viewTool, hostId, createdSessionId, cwd)) {
-      const saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
+    if (!exactSessionView(viewTool, hostId, createdSessionId, cwd, projectBinding.harness, projectBinding.model)) {
+      let saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
         phase: 'stopped', nativeSessionId: createdSessionId,
         lastProgress: 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено.',
         lastProgressAt: now(),
       });
+      // B04d: the native session exists, so the launch intent is spent and the same
+      // work is never launched a second time under a new operation.
+      if (saved) saved = closeLaunchIntent(saved, context.tasksDir, operationId, requestHash,
+        'stopped', 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено. Intent источника закрыт — повторный запуск запрещён.');
       return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : taskExecutionSnapshot(createdCard)), operationId, retryable: false }, { status: 409 });
     }
     return dispatchCreatedTask({
       card: createdCard, tasksDir: context.tasksDir, actor: context.actor,
       operationId, requestHash, nativeSessionId: createdSessionId,
+      projectBinding,
       messageInputId, admittedStatus: 201,
     });
   } catch {
     return NextResponse.json({ error: 'task execution request could not be processed safely' }, { status: 400 });
   }
+}
+
+type SessionControlAction = keyof TaskExecutionSessionControls;
+
+function exactActiveOpenCodeReceipt(card: KanbanCard): TaskExecutionReceipt | undefined {
+  const active = (card.taskExecutionHistory ?? []).filter(receipt => ['running', 'waiting'].includes(receipt.phase));
+  if (active.length !== 1) return undefined;
+  const receipt = active[0]!;
+  if (receipt.harness !== 'opencode' || !/^[a-f0-9]{64}$/.test(receipt.operationId)
+      || !receipt.nativeTurnId || !receipt.nativeSessionId?.trim() || receipt.nativeSessionId.length > 512
+      || /[\r\n\x00]/.test(receipt.nativeSessionId) || !receipt.hostId.trim() || receipt.hostId.length > 512
+      || /[/:\r\n\x00]/.test(receipt.hostId)) return undefined;
+  return receipt;
+}
+
+function updateSessionControl(
+  cardId: string,
+  tasksDir: string,
+  operationId: string,
+  requestHash: string,
+  action: SessionControlAction,
+  phase: TaskExecutionSessionControl['phase'],
+  expectedVersion?: number,
+): KanbanCard | { conflict: true; serverCard: KanbanCard } | undefined {
+  for (let attemptNumber = 0; attemptNumber < 5; attemptNumber++) {
+    const current = findCardById(cardId, tasksDir);
+    if (!current) return undefined;
+    if (expectedVersion !== undefined && current.version !== expectedVersion) return { conflict: true, serverCard: current };
+    const history = [...(current.taskExecutionHistory ?? [])];
+    const index = history.findIndex(receipt => receipt.operationId === operationId);
+    const receipt = history[index];
+    if (!receipt || receipt.harness !== 'opencode'
+        || phase === 'intent' && !['running', 'waiting'].includes(receipt.phase)) return undefined;
+    const controls = receipt.sessionControls ?? {};
+    const old = action === 'direct'
+      ? controls.direct?.find(control => control.requestHash === requestHash)
+      : controls.stop;
+    if (phase === 'intent') {
+      if (old) return current;
+    } else if (!old || old.requestHash !== requestHash || old.phase !== 'intent') {
+      return current;
+    }
+    const state: TaskExecutionSessionControl = { requestHash, phase, updatedAt: now() };
+    const sessionControls: TaskExecutionSessionControls = action === 'direct'
+      ? { ...controls, direct: phase === 'intent'
+        ? [...(controls.direct ?? []), state]
+        : (controls.direct ?? []).map(control => control.requestHash === requestHash ? state : control) }
+      : { ...controls, stop: state };
+    history[index] = { ...receipt, sessionControls, lastBoardVersion: current.version + 1, updatedAt: now() };
+    const saved = updateCard(cardId, { taskExecutionHistory: history }, current.version, tasksDir);
+    if (!('conflict' in saved)) return saved;
+    if (expectedVersion !== undefined) return saved;
+  }
+  return undefined;
+}
+
+function sessionControlResponse(cardId: string, receipt: TaskExecutionReceipt, action: SessionControlAction, requestHash: string, status: number): NextResponse {
+  const control = action === 'direct'
+    ? receipt.sessionControls?.direct?.find(item => item.requestHash === requestHash)
+    : receipt.sessionControls?.stop;
+  return NextResponse.json({ cardId, boardOperationId: receipt.operationId, action, requestHash, state: control?.phase ?? 'unknown' }, {
+    status, headers: { 'Cache-Control': 'no-store' },
+  });
+}
+
+async function controlTaskSession(context: AuthorizedTaskCard, body: RecordValue): Promise<NextResponse> {
+  const action = body.action === 'session-direct' ? 'direct' : body.action === 'session-stop' ? 'stop' : undefined;
+  const expectedKeys = action === 'direct' ? ['action', 'expectedVersion', 'message'] : ['action', 'expectedVersion'];
+  if (!action || Object.keys(body).length !== expectedKeys.length || Object.keys(body).some(key => !expectedKeys.includes(key))
+      || !Number.isSafeInteger(body.expectedVersion)
+      || action === 'direct' && (typeof body.message !== 'string' || !body.message.trim()
+        || body.message.length > MAX_SESSION_CONTROL_MESSAGE || /[\x00-\x08\x0b-\x1f\x7f]/.test(body.message))) {
+    return NextResponse.json({ error: 'invalid session control request' }, { status: 400 });
+  }
+  if (body.expectedVersion !== context.card.version) return NextResponse.json({ conflict: true, serverCard: context.card }, { status: 409 });
+  const receipt = exactActiveOpenCodeReceipt(context.card);
+  if (!receipt) return NextResponse.json({ error: 'one exact running or waiting OpenCode receipt is required' }, { status: 409 });
+  const message = action === 'direct' ? (body.message as string).trim() : '';
+  const requestHash = sha256(JSON.stringify({ cardId: context.card.id, operationId: receipt.operationId, action, message }));
+  const prior = action === 'direct'
+    ? receipt.sessionControls?.direct?.find(item => item.requestHash === requestHash)
+    : receipt.sessionControls?.stop;
+  if (prior) {
+    return sessionControlResponse(context.card.id, receipt, action, requestHash, prior.phase === 'accepted' ? 200 : 202);
+  }
+  if (action === 'stop' && receipt.sessionControls?.stop) {
+    return NextResponse.json({ error: 'this stop action already has a durable outcome; do not retry it' }, { status: 409 });
+  }
+  if (!process.env.AGENT_HERDER_HTTP_TOKEN?.trim()) return NextResponse.json({ error: 'protected session control channel is not configured' }, { status: 503 });
+
+  const savedIntent = updateSessionControl(context.card.id, context.tasksDir, receipt.operationId,
+    requestHash, action, 'intent', context.card.version);
+  if (!savedIntent || 'conflict' in savedIntent) {
+    return NextResponse.json({ conflict: true, ...(savedIntent && 'conflict' in savedIntent ? { serverCard: savedIntent.serverCard } : {}) }, { status: 409 });
+  }
+  const durableReceipt = savedIntent.taskExecutionHistory?.find(item => item.operationId === receipt.operationId);
+  const exactDurableReceipt = exactActiveOpenCodeReceipt(savedIntent);
+  if (!durableReceipt || exactDurableReceipt?.operationId !== receipt.operationId) {
+    const unknownCard = updateSessionControl(context.card.id, context.tasksDir, receipt.operationId, requestHash, action, 'unknown');
+    const finalReceipt = unknownCard && !('conflict' in unknownCard)
+      ? unknownCard.taskExecutionHistory?.find(item => item.operationId === receipt.operationId) : undefined;
+    return finalReceipt ? sessionControlResponse(context.card.id, finalReceipt, action, requestHash, 202)
+      : NextResponse.json({ cardId: context.card.id, boardOperationId: receipt.operationId, action, requestHash, state: 'unknown' }, { status: 202 });
+  }
+
+  let toolResult: HerderToolResult | undefined;
+  try {
+    toolResult = await callOwnerHerderTool(action === 'direct' ? 'todo_task_direct' : 'todo_task_stop', {
+      card_id: context.card.id,
+      project: context.card.project,
+      board_operation_id: durableReceipt.operationId,
+      ...(action === 'direct' ? { message } : {}),
+    });
+  } catch {
+    // The durable intent is terminal for dispatch: transport failure may follow a
+    // successful provider call, so this request is never sent a second time.
+  }
+  const result = isRecord(toolResult?.structuredContent) ? toolResult.structuredContent : undefined;
+  const response = isRecord(result?.response) ? result.response : undefined;
+  const accepted = !!result && toolResult?.isError !== true
+    && result.card_id === context.card.id && result.board_operation_id === durableReceipt.operationId
+    && result.action === action && typeof response?.result === 'string' && !!response.result.trim();
+  const saved = updateSessionControl(context.card.id, context.tasksDir, receipt.operationId,
+    requestHash, action, accepted ? 'accepted' : 'unknown');
+  const finalReceipt = saved && !('conflict' in saved)
+    ? saved.taskExecutionHistory?.find(item => item.operationId === receipt.operationId) : undefined;
+  if (finalReceipt) return sessionControlResponse(context.card.id, finalReceipt, action, requestHash, accepted ? 200 : 202);
+  return NextResponse.json({ cardId: context.card.id, boardOperationId: receipt.operationId, action, requestHash, state: accepted ? 'accepted' : 'unknown' }, {
+    status: accepted ? 200 : 202, headers: { 'Cache-Control': 'no-store' },
+  });
 }
 
 /** Sync one exact completed native result into the existing human-review card flow. */
@@ -1166,6 +1396,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (referenced && referenced.startedBy !== context.actor && !['continue-task', 'sync-task-continuation'].includes(String(body.action))) {
         return NextResponse.json({ error: 'saved execution receipt owner does not match native identity; do not replay or remap this receipt' }, { status: 409 });
       }
+    }
+    if (isRecord(body) && (body.action === 'session-direct' || body.action === 'session-stop')) {
+      return await controlTaskSession(context, body);
     }
     if (isRecord(body) && body.action === 'create-question') return await createTaskQuestion(context, body);
     if (isRecord(body) && body.action === 'continue-task') return await startTaskFollowUp(context, body);
@@ -1212,12 +1445,16 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           waitReason: 'Сессия создана; проверка её параметров временно недоступна. Повторите проверку этой же операции.',
           retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
       }
-      if (!exactSessionView(viewTool, attempt.hostId, attempt.nativeSessionId, cwd)) {
-        const saved = saveReceiptProgress(id, context.tasksDir, operationId, attempt.requestHash, {
+      if (!exactSessionView(viewTool, attempt.hostId, attempt.nativeSessionId, cwd,
+        attempt.projectBinding?.harness ?? attempt.harness, executionModel(attempt))) {
+        let saved = saveReceiptProgress(id, context.tasksDir, operationId, attempt.requestHash, {
           phase: 'stopped', nativeSessionId: attempt.nativeSessionId,
           lastProgress: 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено.',
           lastProgressAt: now(),
         });
+        // B04d: the native session exists, so the launch intent is spent here too.
+        if (saved) saved = closeLaunchIntent(saved, context.tasksDir, operationId, attempt.requestHash,
+          'stopped', 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено. Intent источника закрыт — повторный запуск запрещён.');
         return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : taskExecutionSnapshot(context.card)), operationId, retryable: false }, { status: 409 });
       }
       const current = findCardById(id, context.tasksDir);
@@ -1228,7 +1465,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return dispatchCreatedTask({
         card: current, tasksDir: context.tasksDir, actor: attempt.startedBy,
         operationId, requestHash: attempt.requestHash,
-        nativeSessionId: attempt.nativeSessionId, messageInputId: attempt.messageInputId,
+        nativeSessionId: attempt.nativeSessionId, projectBinding: attempt.projectBinding,
+        messageInputId: attempt.messageInputId,
         admittedStatus: 202,
       });
     }
@@ -1242,7 +1480,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const attemptCwd = executionReceiptCwd(attempt);
     if (!session || session.id !== attempt.nativeSessionId || session.harness !== attempt.harness
       || !attemptCwd || session.cwd !== attemptCwd
-      || session.model !== SESSION_MODEL || typeof session.status !== 'string') {
+        || session.model !== executionModel(attempt) || typeof session.status !== 'string') {
       return NextResponse.json({ error: 'native session identity could not be verified' }, { status: 502 });
     }
     const nativeLastTurn = isRecord(session.meta) && isRecord(session.meta.nativeLastTurn)
@@ -1304,7 +1542,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const confirmedLastTurn = isRecord(confirmedSession?.meta) && isRecord(confirmedSession.meta.nativeLastTurn)
       ? confirmedSession.meta.nativeLastTurn : undefined;
     if (!confirmedSession || confirmedSession.id !== attempt.nativeSessionId || confirmedSession.harness !== attempt.harness
-      || confirmedSession.cwd !== session.cwd || confirmedSession.model !== SESSION_MODEL || confirmedSession.status !== 'idle'
+      || confirmedSession.cwd !== session.cwd || confirmedSession.model !== executionModel(attempt) || confirmedSession.status !== 'idle'
       || !confirmedLastTurn || confirmedLastTurn.turnId !== attempt.nativeTurnId || confirmedLastTurn.status !== 'completed'
       || confirmedLastTurn.assistantSucceeded === false || confirmedLastTurn.cancelledByUser === true
       || confirmedLastTurn.transportLost === true) {

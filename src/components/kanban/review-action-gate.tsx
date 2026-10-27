@@ -4,12 +4,20 @@ export type ReviewActionCard = {
   column: string;
   needsReview?: boolean;
   requiresApprovalFrom?: string[];
+  resultHistory?: unknown[];
+  taskExecutionHistory?: unknown[];
 };
 
-export type ReviewActionAccess = 'not-awaiting-review' | 'login-required' | 'reviewer-required' | 'authorized';
+export type ReviewActionAccess = 'not-awaiting-review' | 'login-required' | 'reviewer-required' | 'authorized' | 'owner-recovery';
 
 /** Decide the UI affordance from server-verified identity, never the selected board persona. */
 export function reviewActionAccess(card: ReviewActionCard, verifiedUsername: string | null | undefined): ReviewActionAccess {
+  const malformedRecovery = card.column === 'in-progress' && card.needsReview === true
+    && !(card.requiresApprovalFrom?.length) && !(card.resultHistory?.length) && !(card.taskExecutionHistory?.length);
+  if (malformedRecovery) {
+    if (!verifiedUsername) return 'login-required';
+    return verifiedUsername === 'nikita' ? 'owner-recovery' : 'reviewer-required';
+  }
   if (card.column !== 'review' || card.needsReview !== true) return 'not-awaiting-review';
   if (!verifiedUsername) return 'login-required';
   return (card.requiresApprovalFrom ?? []).includes(verifiedUsername) ? 'authorized' : 'reviewer-required';
@@ -31,5 +39,6 @@ export function ReviewActionGate({
   if (access === 'reviewer-required') {
     return <p role="status">Решение доступно только назначенному проверяющему этой задачи.</p>;
   }
+  if (access === 'owner-recovery') return <>{children}</>;
   return null;
 }

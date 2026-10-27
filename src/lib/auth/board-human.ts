@@ -20,7 +20,7 @@ export async function boardHumanIdentityFromRequest(request: NextRequest): Promi
     });
     if (result.status !== 204) return null;
     const user = result.headers.get('X-GPTAdmin-User')?.trim();
-    if (!user) return null;
+    if (!user || user.length > 256 || /[\u0000-\u001f\u007f]/.test(user)) return null;
     // The existing fleet owner login and board owner are the same configured
     // human. Other verified accounts retain their own username, never Nikita's.
     return { username: user === 'roomhacker' ? 'nikita' : user, scope: uiScope() };

@@ -48,8 +48,6 @@ export interface KanbanCard {
   sourceAdmission?: SourceAdmissionBinding;
   /** Immutable canonical catalog references; IDs and causal revisions only. */
   catalogLink?: CatalogTaskLink;
-  /** Subject-keyed links for multiple integrators researched under one task. */
-  catalogLinks?: readonly CatalogTaskLink[];
   /** Unknown frontmatter is retained internally so unrelated edits are lossless. */
   rawFrontmatter?: Record<string, unknown>;
 }
@@ -76,14 +74,11 @@ export interface SourceAdmissionBinding {
  */
 export interface CatalogTaskLink {
   readonly version: 1;
-  readonly subjectKey?: string;
   readonly taskId: string;
   readonly operationRef: string;
   readonly boardVersion: number;
   readonly sourceRef: string;
   readonly sourceRevision: string;
-  /** SHA-256 of the exact current resultHistory entry bound at commit. */
-  readonly resultDigest?: string;
   readonly projectId: string;
   readonly planIds: readonly string[];
   readonly gateIds: readonly string[];
@@ -94,15 +89,14 @@ export interface CatalogTaskLink {
 export function parseCatalogTaskLink(value: unknown): CatalogTaskLink {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid canonical catalog link');
   const raw = value as Record<string, unknown>;
-  const allowed = new Set(['version', 'subjectKey', 'taskId', 'operationRef', 'boardVersion', 'sourceRef', 'sourceRevision', 'resultDigest', 'projectId', 'planIds', 'gateIds', 'contactIds', 'catalogRevision']);
+  const allowed = new Set(['version', 'taskId', 'operationRef', 'boardVersion', 'sourceRef', 'sourceRevision', 'projectId', 'planIds', 'gateIds', 'contactIds', 'catalogRevision']);
   if (Object.keys(raw).some(key => !allowed.has(key)) || raw.version !== 1
-      || !Number.isSafeInteger(raw.boardVersion) || (raw.boardVersion as number) < 1
-      || (raw.resultDigest !== undefined && (typeof raw.resultDigest !== 'string' || !/^[a-f0-9]{64}$/.test(raw.resultDigest)))) {
+      || !Number.isSafeInteger(raw.boardVersion) || (raw.boardVersion as number) < 1) {
     throw new Error('invalid canonical catalog link');
   }
   const id = (candidate: unknown): candidate is string => typeof candidate === 'string'
     && candidate.length > 0 && candidate.length <= 512 && !/\s/.test(candidate);
-  if ((raw.subjectKey !== undefined && !id(raw.subjectKey)) || !id(raw.taskId) || !id(raw.operationRef) || !id(raw.sourceRef) || !id(raw.sourceRevision)
+  if (!id(raw.taskId) || !id(raw.operationRef) || !id(raw.sourceRef) || !id(raw.sourceRevision)
       || !id(raw.projectId) || !id(raw.catalogRevision)) throw new Error('invalid canonical catalog link IDs');
   const ids = (candidate: unknown): string[] => {
     if (!Array.isArray(candidate) || candidate.some(item => !id(item)) || new Set(candidate).size !== candidate.length) {
@@ -112,13 +106,11 @@ export function parseCatalogTaskLink(value: unknown): CatalogTaskLink {
   };
   return Object.freeze({
     version: 1 as const,
-    ...(raw.subjectKey !== undefined ? { subjectKey: raw.subjectKey } : {}),
     taskId: raw.taskId,
     operationRef: raw.operationRef,
     boardVersion: raw.boardVersion as number,
     sourceRef: raw.sourceRef,
     sourceRevision: raw.sourceRevision,
-    ...(raw.resultDigest !== undefined ? { resultDigest: raw.resultDigest } : {}),
     projectId: raw.projectId,
     planIds: Object.freeze(ids(raw.planIds)),
     gateIds: Object.freeze(ids(raw.gateIds)),
@@ -177,6 +169,17 @@ export interface TaskExecutionContinuation {
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+export type TaskExecutionSessionControlPhase = 'intent' | 'accepted' | 'unknown';
+/** One fail-closed, user-issued control action bound to an exact OpenCode receipt. */
+export interface TaskExecutionSessionControl {
+  requestHash: string;
+  phase: TaskExecutionSessionControlPhase;
+  updatedAt: string;
+}
+export interface TaskExecutionSessionControls {
+  direct?: readonly TaskExecutionSessionControl[];
+  stop?: TaskExecutionSessionControl;
+}
 /** Opaque Notice request identity attached to the exact execution operation. */
 export interface TaskDecisionRequestReference {
   requestId: string;
@@ -194,9 +197,9 @@ export interface TaskExecutionProjectBinding {
   observedAtMs: number;
   runtimeInstanceId: string;
   hostId: string;
-  harness: 'codex';
+  harness: 'codex' | 'opencode';
   harnessVersion: string;
-  model: 'gpt-6-luna';
+  model: string;
   requiredTools: string[];
   availableTools: string[];
   availableModels: string[];
@@ -234,6 +237,8 @@ export interface TaskExecutionReceipt {
   lastProgressAt?: string;
   /** Append-only task-scoped follow-up turns; never replaces the initial receipt. */
   continuations?: readonly TaskExecutionContinuation[];
+  /** At most one direct and one stop per exact execution receipt; UNKNOWN is terminal. */
+  sessionControls?: TaskExecutionSessionControls;
   startedBy: string;
   createdAt: string;
   updatedAt: string;

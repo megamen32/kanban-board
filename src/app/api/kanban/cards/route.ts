@@ -26,6 +26,12 @@ function anonymousQaReadAllowed(req: NextRequest): boolean {
   return hostname === '127.0.0.1' || hostname === '::1' || hostname === 'localhost';
 }
 
+function qaTestloginSelfReadAllowed(identity: { username: string; scope: 'work' | 'personal' } | null): identity is { username: 'testlogin'; scope: 'work' } {
+  return process.env.KANBAN_QA_ANONYMOUS_READS === '1'
+    && identity?.scope === 'work'
+    && identity.username === 'testlogin';
+}
+
 export async function GET(req: NextRequest) {
   try {
     const nativeContext = await nativeProjectAccessContextFromRequest(req);
@@ -56,6 +62,13 @@ export async function GET(req: NextRequest) {
     }
     const authenticatedIdentity = await boardHumanIdentityFromRequest(req);
     const allowedProject = authenticatedIdentity ? boardReadProject(authenticatedIdentity) : null;
+    if (!allowedProject && qaTestloginSelfReadAllowed(authenticatedIdentity)) {
+      const tasksDir = tasksDirForScope(authenticatedIdentity.scope);
+      const cards = getAllCards(tasksDir).filter(card => card.owner?.trim() === authenticatedIdentity.username);
+      const ownedProjects = new Set(cards.map(card => card.project.trim()).filter(Boolean));
+      const projects = listProjects(tasksDir).filter(project => ownedProjects.has(project.name.trim()));
+      return NextResponse.json({ cards, projects });
+    }
     if (!allowedProject) {
       if (!authenticatedIdentity && anonymousQaReadAllowed(req)) {
         const tasksDir = tasksDirForScope('work');
@@ -100,7 +113,7 @@ export async function POST(req: NextRequest) {
     const requested: KanbanCardUpdates = {};
     for (const [key, value] of Object.entries({
       title, description, column, priority, tags, project, assignees, dueAt,
-      owner: body.owner,
+      owner: authenticatedIdentity?.username ?? (managerAuthorized ? body.owner : undefined),
       shared: body.shared,
       planningVersion: body.planningVersion,
       type: body.type,

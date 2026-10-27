@@ -12,7 +12,7 @@ interface Props {
   title: string;
   color: string;
   cards: KanbanCardType[];
-  onAddCard: () => void;
+  onAddCard?: () => void;
 }
 
 export function KanbanColumnComponent(props: Props) {
@@ -45,14 +45,14 @@ export function KanbanColumnComponent(props: Props) {
           </div>
         )}
 
-        <Button
+        {onAddCard && <Button
           variant="ghost"
           size="sm"
           className="w-full mt-2 text-muted-foreground hover:text-foreground"
           onClick={onAddCard}
         >
           <Plus className="h-4 w-4 mr-1" /> Добавить
-        </Button>
+        </Button>}
       </div>
     </div>
   );

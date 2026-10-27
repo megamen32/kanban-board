@@ -89,6 +89,33 @@ describe('filesystem kanban contract', () => {
     expect(fs.readFileSync(path.join(root, created.fileName), 'utf8')).toContain('task_execution_history:');
   });
 
+  test('persists the direct/stop no-replay states on the exact execution receipt', () => {
+    const created = store.createCard('Controlled execution', 'Research brief', 'todo', 'medium', [], 'alpha');
+    const receipt = {
+      operationId: 'a'.repeat(64), requestHash: 'b'.repeat(64), lastBoardVersion: created.version + 1,
+      createInputId: 'c'.repeat(64), messageInputId: 'd'.repeat(64), phase: 'running' as const,
+      hostId: 'roomhacker-server-100', harness: 'opencode' as const, nativeSessionId: 'native-session-1', nativeTurnId: 'native-turn-1',
+      startedBy: 'nikita', createdAt: '2026-10-20T12:00:00.000Z', updatedAt: '2026-10-20T12:00:00.000Z',
+      sessionControls: {
+        direct: [{ requestHash: 'e'.repeat(64), phase: 'unknown' as const, updatedAt: '2026-10-20T12:01:00.000Z' },
+          { requestHash: '9'.repeat(64), phase: 'accepted' as const, updatedAt: '2026-10-20T12:02:00.000Z' }],
+        stop: { requestHash: 'f'.repeat(64), phase: 'accepted' as const, updatedAt: '2026-10-20T12:02:00.000Z' },
+      },
+    };
+    const saved = store.updateCard(created.id, { taskExecutionHistory: [receipt] }, created.version);
+    if (!saved || 'conflict' in saved) throw new Error('session control receipt save failed');
+    const reopened = store.readCardFile(path.join(root, saved.fileName));
+    expect(reopened?.taskExecutionHistory?.[0]?.sessionControls).toEqual(receipt.sessionControls);
+    expect(fs.readFileSync(path.join(root, saved.fileName), 'utf8')).toContain('sessionControls:');
+
+    expect(() => store.updateCard(created.id, { taskExecutionHistory: [{ ...receipt,
+      sessionControls: { direct: [{ ...receipt.sessionControls.direct[0]!, phase: 'replay' }] },
+    } as unknown as typeof receipt] }, saved.version)).toThrow('task_execution_history');
+    expect(() => store.updateCard(created.id, { taskExecutionHistory: [{ ...receipt,
+      sessionControls: { direct: [receipt.sessionControls.direct[0]!, receipt.sessionControls.direct[0]!] },
+    }] }, saved.version)).toThrow('task_execution_history');
+  });
+
   test('persists and reopens the opaque Notice request reference on its exact execution receipt', () => {
     const created = store.createCard('Question-linked execution', 'Research brief', 'todo', 'medium', [], 'alpha');
     const receipt = {

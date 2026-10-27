@@ -69,6 +69,7 @@ function signedNativeCardGet(privateKey: KeyObject, cardId: string, userId: stri
 describe('PATCH /api/kanban/cards/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
     nativeAccess.current = null;
     identity.current = { username: 'nikita', scope: 'work' };
     authenticated.current = { username: 'nikita', scope: 'work' };
@@ -277,6 +278,33 @@ describe('GET /api/kanban/cards/[id]', () => {
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ card: { ...existingCard, project: 'ExManager QA' } });
+  });
+
+  it('lets verified testlogin read its own card only on the isolated QA host', async () => {
+    authenticated.current = { username: 'testlogin', scope: 'work' };
+    vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
+    const ownCard = { ...existingCard, owner: 'testlogin', project: 'UX QA 2026-10-26' };
+    findCardById.mockReturnValue(ownCard);
+
+    const response = await GET(new NextRequest('http://qa-upstream/api/kanban/cards/card-1'), {
+      params: Promise.resolve({ id: 'card-1' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ card: ownCard });
+    expect(findCardById).toHaveBeenCalledWith('card-1', '/scoped/work');
+  });
+
+  it('does not let testlogin read another owner card on the QA host', async () => {
+    authenticated.current = { username: 'testlogin', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, owner: 'nikita', project: 'UX QA 2026-10-26' });
+
+    const response = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards/card-1'), {
+      params: Promise.resolve({ id: 'card-1' }),
+    });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'not found' });
   });
 
   it('does not return a known card id from another project', async () => {

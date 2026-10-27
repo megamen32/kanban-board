@@ -286,6 +286,34 @@ describe('GET /api/kanban/cards', () => {
     expect(await response.json()).toEqual({ cards: [qaCard], projects: [{ id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }] });
   });
 
+  it('lets the verified QA testlogin read only its own cards on the isolated QA host', async () => {
+    authenticated.current = { username: 'testlogin', scope: 'work' };
+    vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
+    const own = { ...qaCard, owner: 'testlogin' };
+    const anotherOwner = { ...qaCard, id: 'another-owner-card', owner: 'nikita' };
+    getAllCards.mockReturnValue([own, anotherOwner, alpha]);
+
+    const response = await GET(new NextRequest('http://qa-upstream/api/kanban/cards'));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      cards: [own],
+      projects: [{ id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }],
+    });
+    expect(tasksDirForScope).toHaveBeenCalledWith('work');
+  });
+
+  it('does not enable testlogin self-read when the QA runtime flag is absent', async () => {
+    authenticated.current = { username: 'testlogin', scope: 'work' };
+
+    const response = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards'));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cards: [], projects: [] });
+    expect(getAllCards).not.toHaveBeenCalled();
+    expect(listProjects).not.toHaveBeenCalled();
+  });
+
   it('fails closed for another verified identity without reading the shared store', async () => {
     identity.current = { username: 'other-user', scope: 'work' };
     authenticated.current = { username: 'other-user', scope: 'work' };

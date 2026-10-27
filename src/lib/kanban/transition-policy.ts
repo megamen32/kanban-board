@@ -34,7 +34,7 @@ export interface TransitionContext {
   };
 }
 
-export type HumanReviewAction = 'accept' | 'rework';
+export type HumanReviewAction = 'accept' | 'rework' | 'recover-rework';
 export type HumanReviewDecision =
   | { kind: 'accepted'; patch: KanbanCardUpdates }
   | { kind: 'rejected'; reason: 'task_not_waiting_for_review' | 'reviewer_not_authorized' | 'rework_note_required' };
@@ -202,7 +202,8 @@ export function validateTransition(
     return { kind: 'accepted', patch };
   }
 
-  if (hasInternalTeamAuthorization(context) && (requested.completionEvidence ?? []).some(item =>
+  // An integrator-process card never completes on an automatic transition.
+  if (!isIntegratorProcessCard(before) && hasInternalTeamAuthorization(context) && (requested.completionEvidence ?? []).some(item =>
     typeof item.type === 'string' && item.type.trim() && Object.keys(item).some(key => key !== 'type')
   ) && !(before.requiresApprovalFrom ?? []).length && !(policyRequested.requiresApprovalFrom ?? []).length) {
     return { kind: 'accepted', patch: { ...patch, completedBy: context.internalTeamAuthorization!.actor,
@@ -252,7 +253,8 @@ export function validateTransition(
   }
 
   const completionEvidence = context.trustedCompletionEvidence ?? [];
-  if (completionEvidence.some(isMachineVerifiableEvidence)) {
+  // An integrator-process card never completes on an automatic transition.
+  if (!isIntegratorProcessCard(before) && completionEvidence.some(isMachineVerifiableEvidence)) {
     return {
       kind: 'accepted',
       patch: {
@@ -289,6 +291,25 @@ export function decideHumanReview(
   actor: string,
   note = '',
 ): HumanReviewDecision {
+  if (action === 'recover-rework') {
+    if (actor !== NIKITA_ACTOR || before.column !== 'in-progress' || !before.needsReview
+      || (before.requiresApprovalFrom?.length ?? 0) > 0 || (before.resultHistory?.length ?? 0) > 0
+      || (before.taskExecutionHistory?.length ?? 0) > 0) {
+      return { kind: 'rejected', reason: 'task_not_waiting_for_review' };
+    }
+    if (!note.trim()) return { kind: 'rejected', reason: 'rework_note_required' };
+    const decidedAt = new Date().toISOString();
+    const review: TaskReviewRecord = { decision: 'rework', actor, decidedAt, note: note.trim() };
+    return {
+      kind: 'accepted',
+      patch: {
+        column: 'in-progress',
+        needsReview: false,
+        nextAction: note.trim(),
+        reviewHistory: [...(before.reviewHistory ?? []), review],
+      },
+    };
+  }
   if (before.column !== 'review' || !before.needsReview) {
     return { kind: 'rejected', reason: 'task_not_waiting_for_review' };
   }
@@ -369,6 +390,18 @@ function hasInternalTeamAuthorization(context: TransitionContext): boolean {
 function hasOwnerAuthorization(context: TransitionContext): boolean {
   return context.ownerAuthorization?.actor === NIKITA_ACTOR
     && Object.keys(context.ownerAuthorization.evidence).length > 0;
+}
+
+/**
+ * Identify an integrator-process card by its immutable source-admission binding.
+ * The canonical catalog-link path already recognizes an admitted integrator task
+ * by exactly this classification, and the binding can never be added later.
+ *
+ * @param card Card state before the requested transition.
+ * @returns True when the card belongs to the integrator process.
+ */
+function isIntegratorProcessCard(card: KanbanCard): boolean {
+  return card.sourceAdmission?.classification === 'explicit-task';
 }
 
 /**

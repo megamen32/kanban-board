@@ -104,4 +104,34 @@ describe('POST /api/kanban/cards/[id]/review', () => {
     }), 3, '/tmp/disposable-work');
     expect(dispatchCardEvent).not.toHaveBeenCalled();
   });
+
+  it('recovers only the owner-controlled malformed gate with CAS and without push or result acceptance', async () => {
+    const malformed = { ...reviewCard, column: 'in-progress', needsReview: true, requiresApprovalFrom: [], resultHistory: [] } as KanbanCard;
+    findCardById.mockReturnValue(malformed);
+    decideHumanReview.mockReturnValue({ kind: 'accepted', patch: {
+      column: 'in-progress', needsReview: false, nextAction: 'Проверить задачу',
+      reviewHistory: [{ decision: 'rework', actor: 'nikita', note: 'Проверить задачу' }],
+    } });
+    updateCard.mockReturnValue({ ...malformed, needsReview: false, version: 4 });
+    const response = await POST(request({ action: 'recover-rework', expectedVersion: 3, note: 'Проверить задачу' }), {
+      params: Promise.resolve({ id: malformed.id }),
+    });
+    expect(response.status).toBe(200);
+    expect(decideHumanReview).toHaveBeenCalledWith(malformed, 'recover-rework', 'nikita', 'Проверить задачу');
+    expect(updateCard).toHaveBeenCalledWith(malformed.id, expect.objectContaining({ column: 'in-progress', needsReview: false }), 3, '/tmp/disposable-work');
+    expect(dispatchCardEvent).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed-gate recovery for non-owner and rejects missing note before update', async () => {
+    const malformed = { ...reviewCard, column: 'in-progress', needsReview: true, requiresApprovalFrom: [], resultHistory: [] } as KanbanCard;
+    findCardById.mockReturnValue(malformed);
+    human.current = { username: 'oleg', scope: 'work' };
+    const forbidden = await POST(request({ action: 'recover-rework', expectedVersion: 3, note: 'Retry safely' }), { params: Promise.resolve({ id: malformed.id }) });
+    expect(forbidden.status).toBe(403);
+    expect(updateCard).not.toHaveBeenCalled();
+    human.current = { username: 'nikita', scope: 'work' };
+    const missingNote = await POST(request({ action: 'recover-rework', expectedVersion: 3, note: '  ' }), { params: Promise.resolve({ id: malformed.id }) });
+    expect(missingNote.status).toBe(400);
+    expect(updateCard).not.toHaveBeenCalled();
+  });
 });

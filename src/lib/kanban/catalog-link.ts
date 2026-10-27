@@ -4,13 +4,10 @@ import { parseCatalogTaskLink, type CatalogTaskLink } from './types';
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface CatalogTaskLinkRequest {
-  subjectKey: string;
   taskId: string;
   expectedBoardVersion: number;
   sourceRef: string;
   sourceRevision: string;
-  resultDigest: string;
-  boardProject: string;
   projectId: string;
   planIds: string[];
   gateIds: string[];
@@ -26,7 +23,7 @@ export interface CatalogLinkEntity {
 }
 
 export interface CatalogLinkOwnerContext {
-  task: { id: string; version: number; projectId: string; resultDigest: string };
+  task: { id: string; version: number; projectId: string };
   source: { ref: string; revision: string; state: string; projectId: string };
   catalog: {
     revision: string;
@@ -57,32 +54,6 @@ export interface CatalogLinkOwnerReader {
 
 export type CatalogTaskLinkResult = { status: 'created' | 'reused'; link: CatalogTaskLink };
 
-/** Persist an exact Go-signed owner receipt after the caller has rechecked the current Board source/result. */
-export function commitVerifiedCatalogTaskLink(
-  request: CatalogTaskLinkRequest,
-  options: { tasksDir?: string } = {},
-): CatalogTaskLinkResult {
-  const normalized = normalizeRequest(request);
-  const requestedLink = linkFromRequest(normalized);
-  const existing = findCatalogTaskLink(normalized.taskId, normalized.subjectKey, options.tasksDir);
-  if (existing) {
-    if (!sameCatalogTaskIdentity(existing, requestedLink)) throw new Error('conflicting immutable catalog link');
-    const replay = readCatalogTaskLinkForReplay(normalized.taskId, normalized.expectedBoardVersion, requestedLink, options.tasksDir);
-    if (replay.status !== 'reused') throw new Error('canonical catalog link could not be read back');
-    return { status: 'reused', link: replay.link };
-  }
-  const result = persistCatalogTaskLink(normalized.taskId, normalized.expectedBoardVersion, requestedLink, options.tasksDir);
-  if (result.status === 'conflict') throw new Error('conflicting immutable catalog link');
-  if (result.status === 'stale') {
-    const replay = readCatalogTaskLinkForReplay(normalized.taskId, normalized.expectedBoardVersion, requestedLink, options.tasksDir);
-    if (replay.status !== 'reused') throw new Error('stale board version');
-    return { status: 'reused', link: replay.link };
-  }
-  const readback = findCatalogTaskLink(normalized.taskId, normalized.subjectKey, options.tasksDir);
-  if (!readback || !sameCatalogTaskLink(readback, requestedLink)) throw new Error('canonical Board readback mismatch');
-  return { status: result.status, link: readback };
-}
-
 export async function linkTaskToCatalog(
   request: CatalogTaskLinkRequest,
   options: { owner?: CatalogLinkOwnerReader; tasksDir?: string },
@@ -95,19 +66,16 @@ export async function linkTaskToCatalog(
 
   let status: CatalogTaskLinkResult['status'] = 'created';
   const receipt = await options.owner.withLinkCommitGuard(normalized, async context => {
-    const existing = findCatalogTaskLink(normalized.taskId, normalized.subjectKey, options.tasksDir);
+    const existing = findCatalogTaskLink(normalized.taskId, options.tasksDir);
     if (existing) {
-      if (!sameCatalogTaskIdentity(existing, requestedLink)) throw new Error('conflicting immutable catalog link');
+      if (!sameCatalogTaskLink(existing, requestedLink)) throw new Error('conflicting immutable catalog link');
       verifyOwnerContext(context, normalized, null);
-      if (context.task.version !== existing.boardVersion + 1 && context.task.version !== normalized.expectedBoardVersion) {
-        throw new Error('stale board version for historical replay');
-      }
       // The link commit itself increments the Board version exactly once. An
       // exact replay may observe that +1; any later card edit advances it again
       // and makes replay stale. This branch never authorizes a new write.
       const replay = readCatalogTaskLinkForReplay(normalized.taskId, normalized.expectedBoardVersion, requestedLink, options.tasksDir);
       if (replay.status === 'conflict') throw new Error('conflicting immutable catalog link');
-      if (replay.status !== 'reused') throw new Error('canonical catalog link disappeared');
+      if (replay.status !== 'reused') throw new Error('stale board version for historical replay');
       status = 'reused';
       return replay.link;
     }
@@ -123,12 +91,12 @@ export async function linkTaskToCatalog(
     if (result.status === 'conflict') throw new Error('conflicting immutable catalog link');
     if (!('link' in result)) throw new Error('unexpected canonical catalog write result');
     status = result.status;
-    const readback = findCatalogTaskLink(normalized.taskId, normalized.subjectKey, options.tasksDir);
+    const readback = findCatalogTaskLink(normalized.taskId, options.tasksDir);
     if (!readback || !sameCatalogTaskLink(readback, result.link)) throw new Error('canonical Board readback mismatch');
     return readback;
   });
   if (!receipt || receipt.operationRef !== normalized.operationRef || !receipt.link
-      || !sameCatalogTaskIdentity(receipt.link, requestedLink)) {
+      || !sameCatalogTaskLink(receipt.link, requestedLink)) {
     throw new Error('trusted owner guard receipt is not bound to the requested link');
   }
   return { status, link: receipt.link };
@@ -136,16 +104,13 @@ export async function linkTaskToCatalog(
 
 function normalizeRequest(request: CatalogTaskLinkRequest): CatalogTaskLinkRequest {
   if (!request || typeof request !== 'object' || Array.isArray(request)) throw new Error('invalid canonical catalog link request');
-  const allowed = new Set(['subjectKey', 'taskId', 'expectedBoardVersion', 'sourceRef', 'sourceRevision', 'resultDigest', 'boardProject', 'projectId', 'planIds', 'gateIds', 'contactIds', 'catalogRevision', 'operationRef']);
+  const allowed = new Set(['taskId', 'expectedBoardVersion', 'sourceRef', 'sourceRevision', 'projectId', 'planIds', 'gateIds', 'contactIds', 'catalogRevision', 'operationRef']);
   if (Object.keys(request).some(key => !allowed.has(key))) throw new Error('unknown canonical catalog link field');
   for (const name of ['taskId', 'sourceRef', 'sourceRevision', 'projectId', 'catalogRevision', 'operationRef'] as const) {
     const value = request[name];
     if (typeof value !== 'string' || !value || value.length > 512 || /\s/.test(value)) throw new Error(`invalid ${name}`);
   }
-  if (typeof request.subjectKey !== 'string' || !/^[a-f0-9]{64}$/.test(request.subjectKey)) throw new Error('invalid integrator subject key');
   if (!CANONICAL_UUID.test(request.taskId) || !CANONICAL_UUID.test(request.sourceRef)) throw new Error('task and source references must be UUIDs');
-  if (typeof request.boardProject !== 'string' || !request.boardProject.trim() || request.boardProject.length > 160) throw new Error('invalid Board project');
-  if (typeof request.resultDigest !== 'string' || !/^[a-f0-9]{64}$/.test(request.resultDigest)) throw new Error('invalid Board result digest');
   if (!Number.isSafeInteger(request.expectedBoardVersion) || request.expectedBoardVersion < 1) throw new Error('invalid expected board version');
   return {
     ...request,
@@ -167,13 +132,11 @@ function normalizeIds(ids: unknown, label: string): string[] {
 function linkFromRequest(request: CatalogTaskLinkRequest): CatalogTaskLink {
   return parseCatalogTaskLink({
     version: 1,
-    subjectKey: request.subjectKey,
     taskId: request.taskId,
     operationRef: request.operationRef,
     boardVersion: request.expectedBoardVersion,
     sourceRef: request.sourceRef,
     sourceRevision: request.sourceRevision,
-    resultDigest: request.resultDigest,
     projectId: request.projectId,
     planIds: request.planIds,
     gateIds: request.gateIds,
@@ -185,9 +148,8 @@ function linkFromRequest(request: CatalogTaskLinkRequest): CatalogTaskLink {
 function verifyOwnerContext(context: CatalogLinkOwnerContext | null, request: CatalogTaskLinkRequest, expectedVersion: number | null): void {
   if (!context) throw new Error('current canonical owner scope is denied');
   if (context.task.id !== request.taskId || (expectedVersion !== null && context.task.version !== expectedVersion)) throw new Error('stale board task version');
-  if (context.task.projectId !== request.boardProject || context.source.projectId !== request.boardProject) throw new Error('board task project mismatch');
-  if (context.task.resultDigest !== request.resultDigest) throw new Error('stale Board result digest');
-  if (context.source.ref !== request.sourceRef || context.source.revision !== request.sourceRevision || context.source.state !== 'ADMITTED') {
+  if (context.task.projectId !== request.projectId || context.source.projectId !== request.projectId) throw new Error('board task project mismatch');
+  if (context.source.ref !== request.sourceRef || context.source.revision !== request.sourceRevision || context.source.state !== 'DECIDED') {
     throw new Error('source origin or causal revision mismatch');
   }
   if (context.catalog.revision !== request.catalogRevision || context.catalog.project.id !== request.projectId) {
@@ -221,13 +183,4 @@ function assertUniqueOrigin(origins: string[], sourceRef: string, kind: string):
 
 function sameCatalogTaskLink(a: CatalogTaskLink, b: CatalogTaskLink): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
-}
-
-function sameCatalogTaskIdentity(a: CatalogTaskLink, b: CatalogTaskLink): boolean {
-  return a.subjectKey === b.subjectKey && a.taskId === b.taskId && a.sourceRef === b.sourceRef
-    && a.operationRef === b.operationRef && a.sourceRevision === b.sourceRevision && a.projectId === b.projectId
-    && JSON.stringify(a.planIds) === JSON.stringify(b.planIds)
-    && JSON.stringify(a.gateIds) === JSON.stringify(b.gateIds)
-    && JSON.stringify(a.contactIds) === JSON.stringify(b.contactIds)
-    && a.catalogRevision === b.catalogRevision;
 }

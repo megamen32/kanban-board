@@ -11,7 +11,6 @@ const link: CatalogTaskLink = {
   boardVersion: 4,
   sourceRef: 'source-event-2',
   sourceRevision: 'source-rev-3',
-  resultDigest: 'e'.repeat(64),
   projectId: 'catalog-project-7',
   planIds: ['plan-1'],
   gateIds: ['gate-2'],

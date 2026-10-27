@@ -1,8 +1,40 @@
 import type { KanbanCard, RoleDefinition } from '@/lib/kanban/types';
-import { getExecutionView, getInboxView, getRoleBalance, getTodayView, getWeekView, type RoleBalanceView } from '../../lib/kanban/planning-views';
+import { getExecutionView, getRoleBalance, getTodayView, getWeekView, type RoleBalanceView } from '../../lib/kanban/planning-views';
 
 export type PlanningTab = 'dashboard' | 'execution' | 'inbox' | 'week' | 'today' | 'balance' | 'closed';
 export type WorkspaceView = 'mine' | 'shared' | 'all';
+export type PrimaryBoardLane = 'incoming' | 'in-progress' | 'review';
+
+const INCOMING_COLUMNS = new Set<KanbanCard['column']>(['inbox', 'todo', 'someday']);
+const IN_PROGRESS_COLUMNS = new Set<KanbanCard['column']>(['in-progress', 'blocked']);
+const PRIORITY_ORDER: Record<KanbanCard['priority'], number> = { critical: 0, high: 1, medium: 2, low: 3 };
+
+/** One visible incoming queue for inbox, to-do and backlog cards. */
+export function getPrimaryBoardLaneCards(cards: KanbanCard[], lane: PrimaryBoardLane): KanbanCard[] {
+  const selected = cards.filter(card => lane === 'incoming'
+    ? INCOMING_COLUMNS.has(card.column)
+    : lane === 'in-progress'
+      ? IN_PROGRESS_COLUMNS.has(card.column)
+      : card.column === 'review');
+  return lane === 'incoming' ? sortIncomingCards(selected) : selected;
+}
+
+/** Urgent items come first, then the nearest deadline, priority and oldest creation. */
+export function sortIncomingCards(cards: KanbanCard[]): KanbanCard[] {
+  return [...cards].sort((left, right) => {
+    const leftUrgent = left.urgent || left.priority === 'critical' ? 0 : 1;
+    const rightUrgent = right.urgent || right.priority === 'critical' ? 0 : 1;
+    if (leftUrgent !== rightUrgent) return leftUrgent - rightUrgent;
+    const leftDueParsed = left.dueAt ? Date.parse(left.dueAt) : Number.POSITIVE_INFINITY;
+    const rightDueParsed = right.dueAt ? Date.parse(right.dueAt) : Number.POSITIVE_INFINITY;
+    const leftDue = Number.isNaN(leftDueParsed) ? Number.POSITIVE_INFINITY : leftDueParsed;
+    const rightDue = Number.isNaN(rightDueParsed) ? Number.POSITIVE_INFINITY : rightDueParsed;
+    if (leftDue !== rightDue) return leftDue < rightDue ? -1 : 1;
+    const priorityDifference = PRIORITY_ORDER[left.priority] - PRIORITY_ORDER[right.priority];
+    if (priorityDifference !== 0) return priorityDifference;
+    return Date.parse(left.created) - Date.parse(right.created) || left.id.localeCompare(right.id);
+  });
+}
 
 /** Limits the shared Markdown store to the selected person's useful work. */
 export function filterWorkspaceCards(cards: KanbanCard[], person: string, view: WorkspaceView): KanbanCard[] {
@@ -29,8 +61,8 @@ function normalizePerson(value: string): string {
 
 /** Returns the cards shown by one planning tab, using the shared deterministic predicates. */
 export function getPlanningTabCards(cards: KanbanCard[], tab: PlanningTab, now: string | Date = new Date()): KanbanCard[] {
-  if (tab === 'dashboard') return cards.filter(card => !isClosedCard(card));
-  if (tab === 'inbox') return getInboxView(cards);
+  if (tab === 'dashboard') return sortIncomingCards(cards.filter(card => !isClosedCard(card)));
+  if (tab === 'inbox') return getPrimaryBoardLaneCards(cards, 'incoming');
   if (tab === 'closed') return cards.filter(isClosedCard);
   if (tab === 'week') return getWeekView(cards, now);
   if (tab === 'today') return getTodayView(cards, now);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterCards, getAssigneeOptions, getPlanningTabCards, getProjectOptions, isSmartNotesInbox } from './view-model';
+import { filterCards, getAssigneeOptions, getPlanningTabCards, getPrimaryBoardLaneCards, getProjectOptions, isSmartNotesInbox } from './view-model';
 import type { KanbanCard } from '@/lib/kanban/types';
 
 const card = (overrides: Partial<KanbanCard> = {}): KanbanCard => ({
@@ -51,6 +51,22 @@ describe('kanban view model', () => {
   it('keeps SmartNotes Inbox separate as a view over column inbox', () => {
     expect(isSmartNotesInbox(card())).toBe(true);
     expect(isSmartNotesInbox(card({ column: 'todo' }))).toBe(false);
+  });
+
+  it('groups inbox, to-do and backlog into one incoming queue ordered by urgency and deadline', () => {
+    const cards = [
+      card({ id: 'late', column: 'todo', dueAt: '2026-11-03T12:00:00Z' }),
+      card({ id: 'urgent', column: 'inbox', urgent: true, dueAt: '2026-11-08T12:00:00Z' }),
+      card({ id: 'soon', column: 'someday', dueAt: '2026-10-27T12:00:00Z' }),
+      card({ id: 'working', column: 'in-progress' }),
+      card({ id: 'blocked', column: 'blocked' }),
+      card({ id: 'review', column: 'review' }),
+    ];
+
+    expect(getPrimaryBoardLaneCards(cards, 'incoming').map(item => item.id)).toEqual(['urgent', 'soon', 'late']);
+    expect(getPrimaryBoardLaneCards(cards, 'in-progress').map(item => item.id)).toEqual(['working', 'blocked']);
+    expect(getPrimaryBoardLaneCards(cards, 'review').map(item => item.id)).toEqual(['review']);
+    expect(getPlanningTabCards(cards, 'inbox').map(item => item.id)).toEqual(['urgent', 'soon', 'late']);
   });
 
   it('shows active cards in the dashboard and leaves completed work in the closed view', () => {

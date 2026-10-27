@@ -5,10 +5,9 @@ import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:cryp
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createAdmittedCard, createCard, deleteCard, findCardById, getAllCards, updateCard } from '../kanban/file-store';
-import { admitSourceTask, type SourceAdmissionRequest } from '../kanban/source-operation';
-import { catalogResultDigest, catalogSubjectKey, createCatalogLinkVerifier, type CatalogLinkClaims, type SignedCatalogLinkEnvelope } from './catalog-link-resolver';
+import { createCard, deleteCard, findCardById, getAllCards } from '../kanban/file-store';
 import { createKanbanMcpServer } from './kanban-server';
+import type { SourceAdmissionRequest } from '../kanban/source-operation';
 import { createSourceAdmissionVerifier, type SignedSourceAdmissionEnvelope } from './source-resolver';
 import { createTodoMcpReadScopeVerifier, createTodoMcpWriteScopeVerifier,
   type TodoMcpReadScopeClaims, type TodoMcpWriteScopeClaims } from './todo-caller-scope';
@@ -16,7 +15,6 @@ import { createTodoMcpReadScopeVerifier, createTodoMcpWriteScopeVerifier,
 const SOURCE_SIGNATURE_DOMAIN = Buffer.from('exmanager-source-admission-v1\n', 'utf8');
 const TODO_READ_SCOPE_DOMAIN = Buffer.from('exmanager-todo-board-mcp-read-v1\n', 'utf8');
 const TODO_WRITE_SCOPE_DOMAIN = Buffer.from('exmanager-todo-board-mcp-write-v1\n', 'utf8');
-const CATALOG_LINK_DOMAIN = Buffer.from('exmanager-catalog-link-v1\n', 'utf8');
 
 function signSourceRequest(privateKey: KeyObject, sourceRef: string, request: SourceAdmissionRequest): SignedSourceAdmissionEnvelope {
   const payload = Buffer.from(JSON.stringify({ sourceRef, request }), 'utf8');
@@ -35,15 +33,6 @@ function signTodoReadScope(privateKey: KeyObject, claims: TodoMcpReadScopeClaims
 function signTodoWriteScope(privateKey: KeyObject, claims: TodoMcpWriteScopeClaims) {
   const payload = Buffer.from(JSON.stringify(claims), 'utf8');
   return { payload: payload.toString('base64url'), signature: sign(null, Buffer.concat([TODO_WRITE_SCOPE_DOMAIN, payload]), privateKey).toString('base64url') };
-}
-
-function signCatalogLink(privateKey: KeyObject, claims: CatalogLinkClaims): SignedCatalogLinkEnvelope {
-  const payload = Buffer.from(JSON.stringify(claims), 'utf8');
-  const issuedAtMs = Date.now();
-  const expiresAtMs = issuedAtMs + 120_000;
-  const authorization = Buffer.from(`\ncatalog-link\n${issuedAtMs}\n${expiresAtMs}`, 'utf8');
-  return { payload: payload.toString('base64url'), purpose: 'catalog-link', issuedAtMs, expiresAtMs,
-    signature: sign(null, Buffer.concat([CATALOG_LINK_DOMAIN, payload, authorization]), privateKey).toString('base64url') };
 }
 
 function textFromResult(result: unknown): string {
@@ -505,134 +494,5 @@ describe('shared ExManager MCP write scope', () => {
     const cross = await client.callTool({ name: 'kanban.change', arguments: { ...crossArgs, exmanagerScope: signTodoWriteScope(privateKey, crossClaims) } });
     expect(cross.isError).toBe(true);
     expect(findCardById(beta.id, tasksDir)?.title).toBe('Beta task');
-  });
-});
-
-describe('signed integrator catalog link MCP', () => {
-  let tasksDir: string;
-  let client: Client;
-  let server: ReturnType<typeof createKanbanMcpServer>;
-  let privateKey: KeyObject;
-  const sourceRef = '60b43881-8ee7-45a5-9a17-979d50643cb7';
-
-  beforeEach(async () => {
-    tasksDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-catalog-mcp-'));
-    vi.stubEnv('TASKS_DIR', tasksDir);
-    const keys = generateKeyPairSync('ed25519');
-    privateKey = keys.privateKey;
-    const publicKey = Buffer.from(keys.publicKey.export({ format: 'der', type: 'spki' })).subarray(-32).toString('base64url');
-    server = createKanbanMcpServer('work', { verifyCatalogLink: createCatalogLinkVerifier(publicKey)! });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    client = new Client({ name: 'kanban-catalog-link-test', version: '1.0.0' });
-    await server.connect(serverTransport);
-    await client.connect(clientTransport);
-  });
-
-  afterEach(async () => {
-    await client.close();
-    await server.close();
-    vi.unstubAllEnvs();
-    fs.rmSync(tasksDir, { recursive: true, force: true });
-  });
-
-  function admittedCard() {
-    const source: SourceAdmissionRequest = {
-      tenant: 'exmanager-team:team-1', sourceOwner: 'native-human-1', sourceEvent: sourceRef,
-      primaryItem: 'primary', sourceRevision: 'b11-original-revision-1', project: 'Олег и Никита',
-      title: 'Research two integrators', description: 'One source, two company subjects', priority: 'medium',
-      assignees: [], classification: 'explicit-task', evidenceRefs: ['https://freshcube.example/about'],
-    };
-    const result = admitSourceTask(source, tasksDir, id => findCardById(id, tasksDir), input => createAdmittedCard(input, tasksDir));
-    if (result.status !== 'committed') throw new Error(`fixture admission failed: ${result.status}`);
-    const current = findCardById(result.cardId, tasksDir)!;
-    const taskResult = { summary: 'Public research result', evidenceRefs: ['https://freshcube.example/about', 'https://lead4sell.example/company'],
-      submittedBy: 'native-human-1', submittedAt: '2026-10-21T08:00:00.000Z' };
-    const updated = updateCard(current.id, { resultHistory: [taskResult] }, current.version, tasksDir);
-    if ('conflict' in updated) throw new Error('fixture result version conflict');
-    return { card: updated, taskResult };
-  }
-
-  function claims(card: ReturnType<typeof admittedCard>['card'], subjectEvidenceRef: string, projectId: string, suffix: string, resultDigest: string): CatalogLinkClaims {
-    return {
-      actorId: 'current-native-manager', subjectKey: catalogSubjectKey(sourceRef, subjectEvidenceRef), subjectEvidenceRef,
-      taskId: card.id, expectedBoardVersion: card.version,
-      sourceRef, sourceRevision: card.sourceAdmission!.sourceRevision, resultDigest, boardProject: card.project,
-      projectId, planIds: [`PLAN-${suffix}`], gateIds: [`GATE-${suffix}`], contactIds: [`CONTACT-${suffix}`],
-      catalogRevision: `catalog-${suffix}`, operationRef: `operation-${suffix}`,
-    };
-  }
-
-  it('requires the signed current source/result proof, links two subjects independently, and reuses both canonical IDs', async () => {
-    const { card, taskResult } = admittedCard();
-    const first = claims(card, 'https://freshcube.example/about', 'P42', 'one', catalogResultDigest(taskResult));
-    const forged = await client.callTool({ name: 'kanban.catalog.link', arguments: { ...first, projectId: 'P999' } });
-    expect(forged.isError).toBe(true);
-    expect(findCardById(card.id, tasksDir)?.catalogLinks).toBeUndefined();
-    const badSignature = signCatalogLink(privateKey, first);
-    const tampered = await client.callTool({ name: 'kanban.catalog.link', arguments: { envelope: { ...badSignature, signature: 'A'.repeat(86) } } });
-    expect(tampered.isError).toBe(true);
-    expect(findCardById(card.id, tasksDir)?.catalogLinks).toBeUndefined();
-
-    const committed = await client.callTool({ name: 'kanban.catalog.link', arguments: { envelope: signCatalogLink(privateKey, first) } });
-    expect(committed.isError, textFromResult(committed)).not.toBe(true);
-    expect(JSON.parse(textFromResult(committed))).toMatchObject({ status: 'created', link: { projectId: 'P42', sourceRef, sourceRevision: 'b11-original-revision-1' } });
-
-    const afterFirst = findCardById(card.id, tasksDir)!;
-    const second = { ...claims(afterFirst, 'https://lead4sell.example/company', 'P43', 'two', catalogResultDigest(taskResult)) };
-    const secondResult = await client.callTool({ name: 'kanban.catalog.link', arguments: { envelope: signCatalogLink(privateKey, second) } });
-    expect(secondResult.isError).not.toBe(true);
-    const savedTwo = findCardById(card.id, tasksDir)!;
-    expect(savedTwo.catalogLinks?.map(link => [link.subjectKey, link.projectId])).toEqual([
-      [catalogSubjectKey(sourceRef, 'https://lead4sell.example/company'), 'P43'],
-      [catalogSubjectKey(sourceRef, 'https://freshcube.example/about'), 'P42'],
-    ]);
-
-    const revised = updateCard(card.id, { resultHistory: [taskResult, { ...taskResult, summary: 'Research result revised' }] }, savedTwo.version, tasksDir);
-    if ('conflict' in revised) throw new Error('fixture result revision conflict');
-    const replay = { ...claims(revised, 'https://freshcube.example/about', 'P42', 'one', catalogResultDigest(revised.resultHistory?.at(-1))) };
-    const replayed = await client.callTool({ name: 'kanban.catalog.link', arguments: { envelope: signCatalogLink(privateKey, replay) } });
-    expect(replayed.isError).not.toBe(true);
-    expect(JSON.parse(textFromResult(replayed))).toMatchObject({ status: 'reused', link: { projectId: 'P42', resultDigest: catalogResultDigest(taskResult) } });
-    expect(findCardById(card.id, tasksDir)?.catalogLinks).toHaveLength(2);
-    expect(findCardById(card.id, tasksDir)?.sourceAdmission?.sourceRevision).toBe('b11-original-revision-1');
-  });
-
-  it('rejects replay of an unchanged catalog result after an unrelated card edit', async () => {
-    const { card, taskResult } = admittedCard();
-    const original = claims(card, 'https://freshcube.example/about', 'P42', 'one', catalogResultDigest(taskResult));
-    const committed = await client.callTool({ name: 'kanban.catalog.link', arguments: { envelope: signCatalogLink(privateKey, original) } });
-    expect(committed.isError, textFromResult(committed)).not.toBe(true);
-
-    const linked = findCardById(card.id, tasksDir)!;
-    const edited = updateCard(card.id, { title: `${linked.title} (renamed)` }, linked.version, tasksDir);
-    if ('conflict' in edited) throw new Error('fixture title edit conflict');
-    const retry = claims(edited, 'https://freshcube.example/about', 'P42', 'one', catalogResultDigest(taskResult));
-    const replayed = await client.callTool({ name: 'kanban.catalog.link', arguments: { envelope: signCatalogLink(privateKey, retry) } });
-
-    expect(replayed.isError).toBe(true);
-    const saved = findCardById(card.id, tasksDir)!;
-    expect(saved.version).toBe(edited.version);
-    expect(saved.catalogLinks).toHaveLength(1);
-    expect(saved.catalogLinks?.[0]).toMatchObject({ boardVersion: card.version, resultDigest: catalogResultDigest(taskResult) });
-  });
-
-  it('reuses a subject after another valid subject link accounts for the intervening card version', async () => {
-    const { card, taskResult } = admittedCard();
-    const digest = catalogResultDigest(taskResult);
-    const first = claims(card, 'https://freshcube.example/about', 'P42', 'one', digest);
-    const firstResult = await client.callTool({ name: 'kanban.catalog.link', arguments: { envelope: signCatalogLink(privateKey, first) } });
-    expect(firstResult.isError, textFromResult(firstResult)).not.toBe(true);
-
-    const afterFirst = findCardById(card.id, tasksDir)!;
-    const second = claims(afterFirst, 'https://lead4sell.example/company', 'P43', 'two', digest);
-    const secondResult = await client.callTool({ name: 'kanban.catalog.link', arguments: { envelope: signCatalogLink(privateKey, second) } });
-    expect(secondResult.isError, textFromResult(secondResult)).not.toBe(true);
-
-    const afterSecond = findCardById(card.id, tasksDir)!;
-    const replay = claims(afterSecond, 'https://freshcube.example/about', 'P42', 'one', digest);
-    const replayed = await client.callTool({ name: 'kanban.catalog.link', arguments: { envelope: signCatalogLink(privateKey, replay) } });
-    expect(replayed.isError, textFromResult(replayed)).not.toBe(true);
-    expect(JSON.parse(textFromResult(replayed))).toMatchObject({ status: 'reused', link: { projectId: 'P42', resultDigest: digest, boardVersion: card.version } });
-    expect(findCardById(card.id, tasksDir)?.catalogLinks).toHaveLength(2);
   });
 });

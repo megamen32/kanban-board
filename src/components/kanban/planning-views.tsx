@@ -8,6 +8,7 @@ import { type KanbanCard, type KanbanColumn, type RoleId, type RoleDefinition } 
 import type { RoleBalanceView as RoleBalanceData } from '../../lib/kanban/planning-views';
 import { getExecutionView, getWeekView } from '../../lib/kanban/planning-views';
 import { getWeeklySelectionState } from './view-model';
+import { MarkdownText } from './markdown-text';
 
 const roleLabels: Record<RoleId, string> = {
   'product-builder': 'Создатель продуктов',
@@ -23,6 +24,20 @@ export function getExecutionColumnCards(cards: KanbanCard[], columnId: KanbanCol
   return getExecutionView(cards)[columnId];
 }
 
+function planningStatusLabel(column: KanbanColumn): string {
+  if (column === 'inbox' || column === 'todo' || column === 'someday') return 'Входящие';
+  if (column === 'blocked') return 'В работе · блокер';
+  if (column === 'in-progress') return 'В работе';
+  if (column === 'review') return 'На проверке';
+  if (column === 'done') return 'Готово';
+  return 'Не планируется';
+}
+
+function dueDateLabel(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('ru-RU');
+}
+
 interface CardListProps {
   cards: KanbanCard[];
   roles?: RoleDefinition[];
@@ -36,15 +51,23 @@ export function PlanningCardList({ cards, roles = [], onOpen, empty }: CardListP
   return (
     <div className="mx-auto w-full max-w-3xl space-y-2">
       {cards.map(card => (
-        <button key={card.id} type="button" onClick={() => onOpen(card)} className="flex w-full items-start gap-3 rounded-xl border bg-background p-3 text-left shadow-sm transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+        <article key={card.id} className="flex items-start gap-3 rounded-xl border bg-background p-3 shadow-sm">
           <Circle className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium">{card.title}</span>
-            <span className="mt-1 block line-clamp-2 text-sm text-muted-foreground">{card.description || 'Без описания'}</span>
-            <span className="mt-1 block text-[11px] text-muted-foreground">{card.project || 'Без проекта'}{card.role ? ` · ${roles.find(role => role.id === card.role)?.label ?? roleLabels[card.role] ?? card.role}` : ''}</span>
-          </span>
-          <Badge variant="outline" className="shrink-0 text-[10px]">{card.column}</Badge>
-        </button>
+          <div className="min-w-0 flex-1">
+            <button type="button" onClick={() => onOpen(card)} className="block max-w-full truncate text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+              {card.title}
+            </button>
+            {card.description.trim()
+              ? <div className="mt-1 max-h-40 overflow-y-auto text-sm text-muted-foreground"><MarkdownText text={card.description} /></div>
+              : <p className="mt-1 text-sm text-muted-foreground">Без описания</p>}
+            <p className="mt-1 text-[11px] text-muted-foreground">{card.project || 'Без проекта'}{card.role ? ` · ${roles.find(role => role.id === card.role)?.label ?? roleLabels[card.role] ?? card.role}` : ''}</p>
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <Badge variant="outline" className="text-[10px]">{planningStatusLabel(card.column)}</Badge>
+            {(card.urgent || card.priority === 'critical') && <Badge variant="destructive" className="text-[10px]">Срочно</Badge>}
+            {card.dueAt && <span className="text-[10px] text-muted-foreground">Срок: {dueDateLabel(card.dueAt)}</span>}
+          </div>
+        </article>
       ))}
     </div>
   );

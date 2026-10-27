@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUpRight, CircleHelp, Clock3, Play } from 'lucide-react';
-import type { KanbanCard } from '@/lib/kanban/types';
+import type { KanbanCard, TaskExecutionSessionControlPhase } from '@/lib/kanban/types';
 import { Button } from '@/components/ui/button';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
+import { MarkdownText } from './markdown-text';
 import {
   canRetrySameOperation,
   canContinueTask,
@@ -33,6 +34,12 @@ function safeSourceUrl(value: string): string | null {
   } catch { return null; }
 }
 
+async function sessionControlRequestHash(cardId: string, operationId: string, action: 'direct' | 'stop', message: string): Promise<string> {
+  const payload = JSON.stringify({ cardId, operationId, action, message });
+  const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
 export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
   const [executions, setExecutions] = useState<Record<string, ExecutionSnapshot | null>>({});
   const [storedOperations, setStoredOperations] = useState<Record<string, StoredOperationState>>({});
@@ -41,8 +48,14 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
   const [syncBusy, setSyncBusy] = useState<Record<string, boolean>>({});
   const [startMessages, setStartMessages] = useState<Record<string, string>>({});
   const [followUpText, setFollowUpText] = useState<Record<string, string>>({});
+  const [sessionControlText, setSessionControlText] = useState<Record<string, string>>({});
+  const [sessionControlHashes, setSessionControlHashes] = useState<Record<string, string | undefined>>({});
+  const [sessionControlBusy, setSessionControlBusy] = useState<Record<string, boolean>>({});
+  const [sessionControlPhase, setSessionControlPhase] = useState<Record<string, TaskExecutionSessionControlPhase | undefined>>({});
   const inFlightStarts = useRef(new Set<string>());
   const inFlightSyncs = useRef(new Set<string>());
+  const inFlightSessionControls = useRef(new Set<string>());
+  const sessionControlDraftSequence = useRef<Record<string, number>>({});
   const counts = getDashboardCounts(cards);
   const cardIdsKey = cards.map(card => card.id).sort().join('\0');
 
@@ -226,6 +239,53 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
     }
   }
 
+  async function controlSession(card: KanbanCard, action: 'direct' | 'stop') {
+    const active = (card.taskExecutionHistory ?? []).filter(receipt => ['running', 'waiting'].includes(receipt.phase));
+    const receipt = active.length === 1 && active[0]?.harness === 'opencode'
+      && active[0].nativeSessionId && active[0].hostId ? active[0] : undefined;
+    if (!receipt) return;
+    const message = action === 'direct' ? sessionControlText[card.id]?.trim() ?? '' : '';
+    if (action === 'direct' && !message) return;
+    if (action === 'stop' && !window.confirm('Остановить активную сессию исполнителя для этой карточки?')) return;
+    let requestHash: string;
+    try { requestHash = await sessionControlRequestHash(card.id, receipt.operationId, action, message); }
+    catch { return; }
+    const controlKey = action === 'direct'
+      ? `${card.id}:${receipt.operationId}:direct:${requestHash}` : `${card.id}:${receipt.operationId}:stop`;
+    if (inFlightSessionControls.current.has(controlKey)) return;
+    const existing = action === 'direct'
+      ? receipt.sessionControls?.direct?.find(item => item.requestHash === requestHash)
+      : receipt.sessionControls?.stop;
+    if (existing) {
+      setSessionControlPhase(previous => ({ ...previous, [controlKey]: existing.phase }));
+      return;
+    }
+    if (sessionControlPhase[controlKey]) return;
+
+    inFlightSessionControls.current.add(controlKey);
+    setSessionControlBusy(previous => ({ ...previous, [controlKey]: true }));
+    setSessionControlPhase(previous => ({ ...previous, [controlKey]: 'intent' }));
+    try {
+      const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: action === 'direct' ? 'session-direct' : 'session-stop', expectedVersion: card.version,
+          ...(action === 'direct' ? { message } : {}) }),
+      });
+      const body: unknown = await response.json().catch(() => null);
+      const state = body && typeof body === 'object' && 'state' in body
+        ? (body as { state?: unknown }).state : undefined;
+      const responseHash = body && typeof body === 'object' && 'requestHash' in body
+        ? (body as { requestHash?: unknown }).requestHash : undefined;
+      setSessionControlPhase(previous => ({ ...previous, [controlKey]: response.status === 200 && state === 'accepted' && responseHash === requestHash ? 'accepted' : 'unknown' }));
+    } catch {
+      setSessionControlPhase(previous => ({ ...previous, [controlKey]: 'unknown' }));
+    } finally {
+      await Promise.resolve(onRefresh()).catch(() => undefined);
+      inFlightSessionControls.current.delete(controlKey);
+      setSessionControlBusy(previous => ({ ...previous, [controlKey]: false }));
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     const candidates = cards.filter(card => !['done', 'archived'].includes(card.column));
@@ -262,18 +322,17 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
   }, [cards, cardIdsKey, clearOperation]);
 
   return (
-    <section aria-labelledby="integrator-dashboard-title" className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-6">
-      <div className="mx-auto max-w-6xl space-y-5">
+    <section aria-labelledby="integrator-dashboard-title" className="min-h-0 flex-1 overflow-y-auto p-2 sm:p-6">
+      <div className="mx-auto max-w-6xl space-y-3 sm:space-y-5">
         <header className="space-y-1">
-          <h2 id="integrator-dashboard-title" className="text-xl font-semibold">Обзор задач</h2>
-          <p className="text-sm text-muted-foreground">Задачи, исполнители и следующий шаг.</p>
+          <h2 id="integrator-dashboard-title" className="text-base font-semibold sm:text-xl">Коротко по задачам</h2>
+          <p className="text-xs text-muted-foreground sm:text-sm">Блокер — работу нельзя продолжить; на проверке — результат готов и ждёт приёмки.</p>
         </header>
 
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Summary label="Активные задачи" value={counts.active} />
-          <Summary label="Ждут проверки" value={counts.review} />
-          <Summary label="Заблокированы" value={counts.blocked} />
-          <Summary label="С сохранённым результатом" value={counts.withResults} />
+        <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
+          <Summary label="Открытые" value={counts.active} />
+          <Summary label="На проверке" value={counts.review} />
+          <Summary label="Блокеры" value={counts.blocked} />
         </div>
 
         {cards.length === 0 ? <p className="rounded-lg border p-6 text-sm text-muted-foreground">В текущем фильтре нет активных задач.</p> : (
@@ -287,10 +346,36 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
               const retryOperation = storageReady && canRetrySameOperation(storedOperation, execution) ? storedOperation : null;
               const canRetry = retryOperation !== null && !startBusy[card.id] && !syncBusy[card.id];
               const executionReceipt = card.taskExecutionHistory?.at(-1);
+              const activeControlReceipts = (card.taskExecutionHistory ?? []).filter(receipt => ['running', 'waiting'].includes(receipt.phase));
+              const controlReceipt = activeControlReceipts.length === 1 && activeControlReceipts[0]?.harness === 'opencode'
+                && activeControlReceipts[0].nativeSessionId && activeControlReceipts[0].hostId ? activeControlReceipts[0] : undefined;
+              const controlHashKey = controlReceipt ? `${card.id}:${controlReceipt.operationId}` : card.id;
+              const directDraftHash = sessionControlHashes[controlHashKey];
+              const directControlKey = controlReceipt && directDraftHash
+                ? `${card.id}:${controlReceipt.operationId}:direct:${directDraftHash}` : '';
+              const stopControlKey = controlReceipt ? `${card.id}:${controlReceipt.operationId}:stop` : '';
+              const existingDirect = controlReceipt && directDraftHash
+                ? controlReceipt.sessionControls?.direct?.find(item => item.requestHash === directDraftHash) : undefined;
+              const directPhase = existingDirect?.phase ?? (directControlKey ? sessionControlPhase[directControlKey] : undefined);
+              const stopPhase = controlReceipt?.sessionControls?.stop?.phase ?? (stopControlKey ? sessionControlPhase[stopControlKey] : undefined);
               const taskFollowUp = executionReceipt?.continuations?.[0];
               const confirmedRequests = confirmedTaskRequests(card);
               const canContinue = canContinueTask(card) && !startBusy[card.id] && !syncBusy[card.id];
-              const column = DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column;
+              const column = ['inbox', 'todo', 'someday'].includes(card.column) ? 'Входящие'
+                : card.column === 'blocked' ? 'В работе · блокер'
+                  : DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column;
+              const waitingFor = [...new Set((card.waitingFor ?? []).map(person => person.trim()).filter(Boolean))];
+              const approvers = [...new Set((card.requiresApprovalFrom ?? []).map(person => person.trim()).filter(Boolean))];
+              const humanWait = /человека|human decision/i.test(execution?.waitReason ?? '')
+                || waitingFor.some(person => /человека|human decision/i.test(person));
+              const namedWaiters = waitingFor.filter(person => !/человека|human decision/i.test(person));
+              const waitLabel = card.column === 'review' && card.needsReview ? '' : humanWait
+                ? approvers.join(', ') || 'проверяющий не назначен'
+                : namedWaiters.join(', ');
+              const nextStep = card.nextAction?.trim()
+                || (card.column === 'review' && card.needsReview
+                  ? approvers.length ? `Проверить результат: ${approvers.join(', ')}` : 'Проверить результат'
+                  : undefined);
               const sourceUrl = card.source ? safeSourceUrl(card.source) : null;
               return (
                 <article key={card.id} className="rounded-lg border bg-card p-4 shadow-sm">
@@ -302,29 +387,35 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
                     {card.column === 'review' && card.needsReview && <Button size="sm" onClick={() => onOpen(card)}>Открыть проверку</Button>}
                   </div>
 
-                  <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                  <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
                     <div>
-                      <dt className="text-xs text-muted-foreground">Ответственный за задачу</dt>
-                      <dd>{card.accountable || card.owner || 'Не указан'}</dd>
+                      <dt className="text-xs text-muted-foreground">Владелец карточки</dt>
+                      <dd>{card.owner || 'Не назначен'}</dd>
                     </div>
+                    {card.accountable && <div>
+                      <dt className="text-xs text-muted-foreground">Ответственный за результат</dt>
+                      <dd>{card.accountable}</dd>
+                    </div>}
                     <div>
                       <dt className="text-xs text-muted-foreground">Исполнитель</dt>
-                      <dd>{card.assignees.length ? card.assignees.join(', ') : card.assignee || 'Не указан'}</dd>
+                      <dd>{card.assignees.length ? card.assignees.join(', ') : card.assignee || 'Не назначен'}</dd>
                     </div>
                   </dl>
 
                     {card.description.trim() && <div className="mt-3 rounded-md bg-muted/40 p-3">
                     <p className="text-xs font-medium text-muted-foreground">Описание и ожидаемый результат</p>
-                    <p className="mt-1 whitespace-pre-wrap text-sm">{card.description}</p>
+                    <MarkdownText text={card.description} className="mt-1 text-sm" />
                   </div>}
 
                   <div className="mt-3 rounded-md border p-3">
                     <div className="flex items-center gap-2 text-sm font-medium">
                       {execution ? <Clock3 aria-hidden className="h-4 w-4" /> : <CircleHelp aria-hidden className="h-4 w-4" />}
-                      <span>Сигнал исполнения по сохранённым данным: {execution ? executionSignalLabel(execution.state) : 'Нет доступного подтверждённого статуса'}</span>
+                      <span>Выполнение: {execution ? executionSignalLabel(execution.state) : 'статус пока не подтверждён'}</span>
                     </div>
                     {execution?.lastProgress && <p className="mt-2 text-sm"><span className="text-muted-foreground">Последняя сохранённая сводка:</span> {execution.lastProgress.summary}</p>}
-                    {execution?.waitReason && <p className="mt-2 text-sm"><span className="text-muted-foreground">Причина ожидания:</span> {execution.waitReason}</p>}
+                    {waitLabel && <p className="mt-2 text-sm"><span className="text-muted-foreground">Ждём:</span> {waitLabel}</p>}
+                    {card.column === 'review' && card.needsReview && <p className="mt-2 text-sm"><span className="text-muted-foreground">Проверяет:</span> {approvers.join(', ') || 'проверяющий не назначен'}</p>}
+                    {execution?.waitReason && !humanWait && <p className="mt-2 text-sm"><span className="text-muted-foreground">Что мешает продолжить:</span> {execution.waitReason}</p>}
                     {execution?.nextAction && <p className="mt-2 text-sm"><span className="text-muted-foreground">Следующий шаг исполнителя:</span> {execution.nextAction}</p>}
                     {execution?.sessionUrl && isVerifiedSessionUrl(execution.sessionUrl) && <a className="mt-2 inline-flex items-center gap-1 text-sm underline" href={execution.sessionUrl} target="_blank" rel="noreferrer">Открыть сессию исполнителя <ArrowUpRight aria-hidden className="h-3.5 w-3.5" /></a>}
                     {confirmedRequests.length > 0 && <div className="mt-3 space-y-2" aria-label="Подтверждённые запросы участников">
@@ -359,6 +450,53 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
                       {!storedOperation && execution && execution.startAvailable === undefined && <p className="text-sm text-muted-foreground">Готовность к запуску пока не подтверждена.</p>}
                       {!storedOperation && !execution && <p className="text-sm text-muted-foreground">Проверяем доступность запуска…</p>}
                       {!storedOperation && startMessages[card.id] && <p role="status" className="text-sm text-muted-foreground">{startMessages[card.id]}</p>}
+                      {controlReceipt && <div className="w-full rounded-md border p-3">
+                        <p className="text-sm font-medium">Управление активной OpenCode-сессией</p>
+                        <label htmlFor={`session-direct-${card.id}`} className="mt-2 block text-xs text-muted-foreground">Сообщение текущему ходу</label>
+                        <textarea id={`session-direct-${card.id}`} className="mt-1 min-h-20 w-full rounded-md border bg-background p-2 text-sm"
+                          maxLength={4000} value={sessionControlText[card.id] ?? ''}
+                          disabled={sessionControlBusy[directControlKey]}
+                          onChange={event => {
+                            const value = event.target.value;
+                            setSessionControlText(previous => ({ ...previous, [card.id]: value }));
+                            setSessionControlHashes(previous => ({ ...previous, [controlHashKey]: undefined }));
+                            const sequence = (sessionControlDraftSequence.current[controlHashKey] ?? 0) + 1;
+                            sessionControlDraftSequence.current[controlHashKey] = sequence;
+                            if (!controlReceipt || !value.trim()) {
+                              return;
+                            }
+                            void sessionControlRequestHash(card.id, controlReceipt.operationId, 'direct', value.trim()).then(hash => {
+                              if (sessionControlDraftSequence.current[controlHashKey] === sequence) {
+                                setSessionControlHashes(previous => ({ ...previous, [controlHashKey]: hash }));
+                              }
+                            }).catch(() => {
+                              if (sessionControlDraftSequence.current[controlHashKey] === sequence) {
+                                setSessionControlHashes(previous => ({ ...previous, [controlHashKey]: undefined }));
+                              }
+                            });
+                          }}
+                          placeholder="Коротко уточните следующий шаг" />
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button size="sm" variant="outline" disabled={!sessionControlText[card.id]?.trim() || !directDraftHash
+                            || sessionControlBusy[directControlKey] || !!existingDirect || !!directPhase}
+                            onClick={() => void controlSession(card, 'direct')}>
+                            {sessionControlBusy[directControlKey] ? 'Передаю…' : 'Передать в текущий ход'}
+                          </Button>
+                          <Button size="sm" variant="outline" disabled={sessionControlBusy[stopControlKey]
+                            || !!controlReceipt.sessionControls?.stop || !!stopPhase}
+                            onClick={() => void controlSession(card, 'stop')}>
+                            {sessionControlBusy[stopControlKey] ? 'Останавливаю…' : 'Остановить исполнителя'}
+                          </Button>
+                        </div>
+                        {directPhase && <p role="status" className="mt-2 text-xs text-muted-foreground">Передача: {directPhase === 'accepted'
+                          ? 'сообщение принято текущим ходом.' : directPhase === 'intent'
+                            ? 'запрос записан; не отправляйте это сообщение повторно.' : 'исход неизвестен; это сообщение нельзя повторять.'}</p>}
+                        {stopPhase && <p role="status" className="mt-2 text-xs text-muted-foreground">Остановка: {stopPhase === 'accepted'
+                          ? 'команда принята; сверьте состояние карточки.' : stopPhase === 'intent'
+                            ? 'действие уже записано; не отправляйте его повторно.' : 'исход неизвестен; команду повторять нельзя.'}</p>}
+                        {(controlReceipt.sessionControls?.direct?.length ?? 0) > 0 && !directPhase
+                          && <p className="mt-2 text-xs text-muted-foreground">Ранее передано отдельных сообщений: {controlReceipt.sessionControls?.direct?.length}.</p>}
+                      </div>}
                       {canContinue && <div className="w-full rounded-md border p-3">
                         <label htmlFor={`task-follow-up-${card.id}`} className="text-sm font-medium">Уточнение исполнителю</label>
                         <textarea id={`task-follow-up-${card.id}`} className="mt-2 min-h-24 w-full rounded-md border bg-background p-2 text-sm"
@@ -387,7 +525,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
                   </div>}
 
                   <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-                    <p><span className="text-muted-foreground">Следующий шаг по карточке:</span> {card.nextAction || card.waitingFor?.join(', ') || (card.column === 'review' && card.needsReview ? 'Нужно решение проверяющего' : 'Не указан')}</p>
+                    {nextStep && <p><span className="text-muted-foreground">Следующий шаг:</span> {nextStep}</p>}
                     {card.dueAt && <p><span className="text-muted-foreground">Срок задачи:</span> {formatDate(card.dueAt)}</p>}
                     {sourceUrl && <a className="inline-flex items-center gap-1 underline" href={sourceUrl} target="_blank" rel="noreferrer">Источник <ArrowUpRight aria-hidden className="h-3.5 w-3.5" /></a>}
                     {(card.resultHistory?.length ?? 0) > 0 && <button type="button" className="underline" onClick={() => onOpen(card)}>Результат и история проверки</button>}
@@ -403,7 +541,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
 }
 
 function Summary({ label, value }: { label: string; value: number }) {
-  return <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-xl font-semibold">{value}</p></div>;
+  return <div className="min-w-0 rounded-lg border p-1.5 sm:p-3"><p className="text-[10px] leading-tight text-muted-foreground sm:text-xs">{label}</p><p className="mt-0.5 text-base font-semibold sm:mt-1 sm:text-xl">{value}</p></div>;
 }
 
 function formatDate(value: string) {

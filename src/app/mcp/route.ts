@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { identityFromRequest } from '../../lib/auth/request';
 import { createKanbanMcpServer } from '../../lib/mcp/kanban-server';
 import { configuredSourceAdmissionVerifier } from '../../lib/mcp/source-resolver';
-import { configuredCatalogLinkVerifier } from '../../lib/mcp/catalog-link-resolver';
 import {
   configuredTodoMcpProjectEnsureVerifier,
   configuredTodoMcpReadScopeVerifier,
@@ -33,9 +32,6 @@ export async function POST(request: NextRequest) {
   const verifySourceAdmission = trustedWorkService && identity.scope === 'work'
     ? configuredSourceAdmissionVerifier()
     : undefined;
-  const verifyCatalogLink = trustedWorkService && identity.scope === 'work'
-    ? configuredCatalogLinkVerifier()
-    : undefined;
   const requireExManagerReadScope = trustedWorkService && identity.scope === 'work';
   const verifyExManagerReadScope = requireExManagerReadScope
     ? configuredTodoMcpReadScopeVerifier()
@@ -58,7 +54,6 @@ export async function POST(request: NextRequest) {
     requireExManagerProjectEnsureScope,
     ...(verifyExManagerProjectEnsureScope ? { verifyExManagerProjectEnsureScope } : {}),
     ...(verifySourceAdmission ? { verifySourceAdmission } : {}),
-    ...(verifyCatalogLink ? { verifyCatalogLink } : {}),
   });
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,

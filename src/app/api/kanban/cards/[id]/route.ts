@@ -27,6 +27,12 @@ function mayReadAnyBoardProject(identity: { username: string; scope: 'work' | 'p
   return boardReadProject(identity) !== null;
 }
 
+function qaTestloginSelfReadAllowed(identity: { username: string; scope: 'work' | 'personal' } | null): identity is { username: 'testlogin'; scope: 'work' } {
+  return process.env.KANBAN_QA_ANONYMOUS_READS === '1'
+    && identity?.scope === 'work'
+    && identity.username === 'testlogin';
+}
+
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let nativeContext: NativeProjectAccessContext | null;
   try {
@@ -60,13 +66,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   }
   const identity = managerAuthorized ? { username: 'manager', scope: 'work' as const } : await boardHumanIdentityFromRequest(req);
   if (!managerAuthorized && !identity) return NextResponse.json({ error: 'not found' }, { status: 404 });
-  if (!managerAuthorized && !mayReadAnyBoardProject(identity!)) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  const qaSelfRead = qaTestloginSelfReadAllowed(identity);
+  if (!managerAuthorized && !mayReadAnyBoardProject(identity!) && !qaSelfRead) return NextResponse.json({ error: 'not found' }, { status: 404 });
   startDueReminderScheduler();
   const tasksDir = tasksDirForScope(identity?.scope ?? 'work');
   const { id } = await params;
   const card = findCardById(id, tasksDir);
   if (!card) return NextResponse.json({ error: 'not found' }, { status: 404 });
-  if (!managerAuthorized && !mayReadBoardProject(identity!, card.project)) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  if (!managerAuthorized && !mayReadBoardProject(identity!, card.project) && !(qaSelfRead && card.owner?.trim() === identity!.username)) {
+    return NextResponse.json({ error: 'not found' }, { status: 404 });
+  }
   return NextResponse.json({ card });
 }
 

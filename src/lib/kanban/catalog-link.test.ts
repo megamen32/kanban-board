@@ -20,13 +20,10 @@ afterEach(() => {
 function fixture() {
   const sourceRef = '2f56316e-c4bd-4d83-b143-d02a1f9b8852';
   const request: CatalogTaskLinkRequest = {
-    subjectKey: 'a'.repeat(64),
     taskId: '073cae06-840b-44b2-8cca-32d94cfa8211',
     expectedBoardVersion: 4,
     sourceRef,
     sourceRevision: 'source-revision-19',
-    resultDigest: 'b'.repeat(64),
-    boardProject: 'Олег и Никита',
     projectId: 'P42',
     planIds: ['PLAN-7'],
     gateIds: ['GATE-3'],
@@ -35,8 +32,8 @@ function fixture() {
     operationRef: 'b13-operation-1',
   };
   const context: CatalogLinkOwnerContext = {
-    task: { id: request.taskId, version: request.expectedBoardVersion, projectId: request.boardProject, resultDigest: request.resultDigest },
-    source: { ref: sourceRef, revision: request.sourceRevision, state: 'ADMITTED', projectId: request.boardProject },
+    task: { id: request.taskId, version: request.expectedBoardVersion, projectId: request.projectId },
+    source: { ref: sourceRef, revision: request.sourceRevision, state: 'DECIDED', projectId: request.projectId },
     catalog: {
       revision: request.catalogRevision,
       project: { id: request.projectId, originRefs: [sourceRef] },
@@ -99,7 +96,7 @@ describe('canonical task catalog link storage', () => {
     expect(findCardById(card.id, root)?.version).toBe(card.version + 1);
   });
 
-  test('reopens exact replay after link commit; unrelated later edits remain stale', async () => {
+  test('reopens current Markdown for exact retry after its own version increment; later edits make replay stale', async () => {
     const root = makeRoot();
     const card = createCard('Replay version', 'body', 'todo', 'medium', [], 'alpha', [], root);
     const f = fixture();
@@ -112,7 +109,7 @@ describe('canonical task catalog link storage', () => {
     const first = await linkTaskToCatalog(f.request, { owner: f.owner, tasksDir: root });
     const reopened = readCardFile(path.join(root, card.fileName), root)!;
     expect(reopened.version).toBe(card.version + 1);
-    expect(reopened.catalogLinks?.[0]).toEqual(first.link);
+    expect(reopened.catalogLink).toEqual(first.link);
     const retry = await linkTaskToCatalog(f.request, { owner: f.owner, tasksDir: root });
     expect(retry.status).toBe('reused');
     expect(retry.link).toEqual(first.link);
@@ -123,7 +120,7 @@ describe('canonical task catalog link storage', () => {
     const edited = updateCard(card.id, { title: 'Unrelated later edit' }, card.version + 1, root);
     expect('conflict' in edited).toBe(false);
     await expect(linkTaskToCatalog(f.request, { owner: f.owner, tasksDir: root })).rejects.toThrow(/stale/i);
-    expect(findCardById(card.id, root)?.catalogLinks?.[0]).toEqual(first.link);
+    expect(findCardById(card.id, root)?.catalogLink).toEqual(first.link);
     expect(findCardById(card.id, root)?.version).toBe(card.version + 2);
   });
 
@@ -150,7 +147,7 @@ describe('canonical task catalog link storage', () => {
     alter(f);
     await expect(linkTaskToCatalog(f.request, { owner: f.owner, tasksDir: root })).rejects.toThrow();
     expect(findCardById(card.id, root)?.version).toBe(card.version);
-    expect(findCardById(card.id, root)?.catalogLinks).toBeUndefined();
+    expect(findCardById(card.id, root)?.catalogLink).toBeUndefined();
   });
 
   test('stale CAS and a different immutable link are no-write conflicts', async () => {
@@ -168,7 +165,7 @@ describe('canonical task catalog link storage', () => {
     const changed = { ...f.request, gateIds: ['GATE-OTHER'] };
     await expect(linkTaskToCatalog(changed, { owner: f.owner, tasksDir: root })).rejects.toThrow();
     expect(findCardById(card.id, root)?.version).toBe(card.version + 1);
-    expect(findCardById(card.id, root)?.catalogLinks?.[0]?.gateIds).toEqual(['GATE-3']);
+    expect(findCardById(card.id, root)?.catalogLink?.gateIds).toEqual(['GATE-3']);
   });
 
   test('revocation before guarded commit denies without a Markdown write', async () => {
@@ -208,10 +205,10 @@ describe('canonical task catalog link storage', () => {
     const first = await writing;
     await revoking;
     expect(first.status).toBe('created');
-    expect(findCardById(card.id, root)?.catalogLinks?.[0]).toEqual(first.link);
+    expect(findCardById(card.id, root)?.catalogLink).toEqual(first.link);
     const retry = { ...f.request, operationRef: 'new-operation-after-revoke' };
     await expect(linkTaskToCatalog(retry, { owner: f.owner, tasksDir: root })).rejects.toThrow(/denied/);
-    expect(findCardById(card.id, root)?.catalogLinks?.[0]).toEqual(first.link);
+    expect(findCardById(card.id, root)?.catalogLink).toEqual(first.link);
     expect(findCardById(card.id, root)?.version).toBe(card.version + 1);
   });
 
@@ -219,15 +216,14 @@ describe('canonical task catalog link storage', () => {
     const root = makeRoot();
     const cardId = '073cae06-840b-44b2-8cca-32d94cfa8211';
     const legacyPath = path.join(root, 'legacy.md');
-    fs.writeFileSync(legacyPath, `---\nid: ${cardId}\ntitle: Legacy\ncolumn: todo\npriority: medium\nversion: 9\nproject: alpha\ncustom_field: keep-me\ncatalog_task_link:\n  version: 1\n  taskId: ${cardId}\n  operationRef: legacy-op\n  boardVersion: 7\n  sourceRef: 2f56316e-c4bd-4d83-b143-d02a1f9b8852\n  sourceRevision: legacy-source\n  projectId: P-LEGACY\n  planIds: [legacy-plan]\n  gateIds: []\n  contactIds: []\n  catalogRevision: legacy-catalog\n---\nLegacy body\n`);
+    fs.writeFileSync(legacyPath, `---\nid: ${cardId}\ntitle: Legacy\ncolumn: todo\npriority: medium\nversion: 9\nproject: alpha\ncustom_field: keep-me\n---\nLegacy body\n`);
     const f = fixture();
     f.request.taskId = cardId;
     f.request.expectedBoardVersion = 9;
     f.context.task.version = 9;
     await linkTaskToCatalog(f.request, { owner: f.owner, tasksDir: root });
     const linked = readCardFile(legacyPath, root)!;
-    expect(linked.catalogLinks?.[0]?.projectId).toBe('P42');
-    expect(linked.catalogLink?.projectId).toBe('P-LEGACY');
+    expect(linked.catalogLink?.projectId).toBe('P42');
     expect(linked.rawFrontmatter).toHaveProperty('custom_field', 'keep-me');
     expect(linked.description).toBe('Legacy body');
 
@@ -263,49 +259,5 @@ describe('canonical task catalog link storage', () => {
     expect(results.map(x => x.stdout.trim().split(':')[0]).sort()).toEqual(['created', 'reused', 'reused', 'reused']);
     expect(results.map(x => x.stdout.trim().split(':')[1])).toEqual(Array(4).fill(f.request.operationRef));
     expect(findCardById(card.id, root)?.version).toBe(card.version + 1);
-  });
-
-  test('stores two integrators separately and reuses each canonical ID after the result revision changes', async () => {
-    const root = makeRoot();
-    const card = createCard('Research two integrators', '', 'review', 'medium', [], 'Олег и Никита', [], root);
-    const first = fixture();
-    first.request.taskId = card.id;
-    first.request.expectedBoardVersion = card.version;
-    first.request.boardProject = card.project;
-    first.context.task.id = card.id;
-    first.context.task.version = card.version;
-    await linkTaskToCatalog(first.request, { owner: first.owner, tasksDir: root });
-
-    const second = fixture();
-    second.request.subjectKey = 'c'.repeat(64);
-    second.request.taskId = card.id;
-    second.request.expectedBoardVersion = card.version + 1;
-    second.request.boardProject = card.project;
-    second.request.projectId = 'P43';
-    second.request.planIds = ['PLAN-8'];
-    second.request.gateIds = ['GATE-4'];
-    second.request.contactIds = ['CONTACT-10'];
-    second.request.operationRef = 'b13-operation-2';
-    second.context.task.id = card.id;
-    second.context.task.version = card.version + 1;
-    second.context.task.projectId = card.project;
-    second.context.source.projectId = card.project;
-    second.context.catalog.project.id = 'P43';
-    second.context.catalog.plans = [{ id: 'PLAN-8', projectId: 'P43', originRefs: [second.request.sourceRef] }];
-    second.context.catalog.gates = [{ id: 'GATE-4', projectId: 'P43', originRefs: [second.request.sourceRef] }];
-    second.context.catalog.contacts = [{ id: 'CONTACT-10', projectId: 'P43', originRefs: [second.request.sourceRef] }];
-    await linkTaskToCatalog(second.request, { owner: second.owner, tasksDir: root });
-
-    const before = findCardById(card.id, root)!;
-    expect(before.catalogLinks?.map(link => [link.subjectKey, link.projectId])).toEqual([
-      ['a'.repeat(64), 'P42'], ['c'.repeat(64), 'P43'],
-    ]);
-    const replay = { ...first.request, expectedBoardVersion: before.version, resultDigest: 'd'.repeat(64) };
-    first.context.task.version = before.version;
-    first.context.task.resultDigest = replay.resultDigest;
-    const reused = await linkTaskToCatalog(replay, { owner: first.owner, tasksDir: root });
-    expect(reused.status).toBe('reused');
-    expect(reused.link.projectId).toBe('P42');
-    expect(findCardById(card.id, root)?.catalogLinks).toHaveLength(2);
   });
 });

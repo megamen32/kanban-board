@@ -40,7 +40,9 @@ describe('human board identity from existing shared login', () => {
 
   it('preserves another verified user without granting owner identity', async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204, headers: { 'X-GPTAdmin-User': 'oleg' } }));
-    expect(await boardHumanIdentityFromRequest(request())).toEqual({ username: 'oleg', scope: 'work' });
+    const identity = await boardHumanIdentityFromRequest(request());
+    expect(identity).toEqual({ username: 'oleg', scope: 'work' });
+    expect(identity?.username).not.toBe('nikita');
   });
 
   it('preserves an existing native human session without a gateway call', async () => {
@@ -53,6 +55,13 @@ describe('human board identity from existing shared login', () => {
     localIdentity.mockReturnValue({ username: 'nikita', scope: 'work', accessToken: { clientId: 'service' } } as never);
     expect(await boardHumanIdentityFromRequest(request())).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not elevate a verified Airlock user to the local board owner', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204, headers: { 'X-GPTAdmin-User': 'airlock-qa-user' } }));
+    const identity = await boardHumanIdentityFromRequest(request());
+    expect(identity).toEqual({ username: 'airlock-qa-user', scope: 'work' });
+    expect(identity?.username).not.toBe('nikita');
   });
 
   it('handles network failure without inventing identity', async () => {
