@@ -14,6 +14,7 @@ import { NIKITA_ACTOR } from '@/lib/kanban/transition-policy';
 const VERIFIED_BOARD_PROJECT = 'Олег и Никита';
 const QA_BOARD_PROJECT = 'ExManager QA';
 const QA_UX_PROJECT = 'UX QA 2026-10-26';
+const QA_UX_CARD_ID = '43687640-5245-4ec4-b29c-2b8970cb9d30';
 
 function boardReadProject(identity: { username: string; scope: 'work' | 'personal' }): string | null {
   if (identity.scope !== 'work') return null;
@@ -21,13 +22,23 @@ function boardReadProject(identity: { username: string; scope: 'work' | 'persona
   return ['nikita', 'oleg'].includes(identity.username) ? VERIFIED_BOARD_PROJECT : null;
 }
 
-// The isolated loopback QA runtime exposes only its synthetic UX project.
-function qaAnonymousReadAllowed(req: NextRequest, identity: { username: string; scope: 'work' | 'personal' } | null): boolean {
+function qaRequestHost(req: NextRequest): string {
   const forwardedHost = req.headers.get('x-forwarded-host')?.split(',')[0].trim();
-  const requestHost = forwardedHost || req.nextUrl.host;
-  const hostAllowed = ['127.0.0.1:43330', 'localhost:43330'].includes(requestHost);
+  return forwardedHost || req.nextUrl.host;
+}
+
+// The isolated loopback fixture keeps its existing read-only synthetic project view.
+function qaLoopbackReadAllowed(req: NextRequest, identity: { username: string; scope: 'work' | 'personal' } | null): boolean {
+  const hostAllowed = ['127.0.0.1:43330', 'localhost:43330'].includes(qaRequestHost(req));
   const actorAllowed = identity === null || (identity.scope === 'work' && identity.username === 'testlogin');
   return process.env.KANBAN_QA_ANONYMOUS_READS === '1' && hostAllowed && actorAllowed;
+}
+
+// Public QA SSO is narrower: testlogin sees only the fixed synthetic fixture.
+function qaTestLoginCardReadAllowed(req: NextRequest, identity: { username: string; scope: 'work' | 'personal' } | null): boolean {
+  return process.env.KANBAN_QA_ANONYMOUS_READS === '1'
+    && qaRequestHost(req) === 'qa-board.bezrabotnyi.com'
+    && identity?.scope === 'work' && identity.username === 'testlogin';
 }
 export async function GET(req: NextRequest) {
   try {
@@ -59,9 +70,15 @@ export async function GET(req: NextRequest) {
     }
     const authenticatedIdentity = await boardHumanIdentityFromRequest(req);
     const allowedProject = authenticatedIdentity ? boardReadProject(authenticatedIdentity) : null;
-    if (!allowedProject && qaAnonymousReadAllowed(req, authenticatedIdentity)) {
+    if (!allowedProject && qaLoopbackReadAllowed(req, authenticatedIdentity)) {
       const tasksDir = tasksDirForScope('work');
       const cards = getAllCards(tasksDir).filter(card => card.project.trim() === QA_UX_PROJECT);
+      const projects = listProjects(tasksDir).filter(project => project.name.trim() === QA_UX_PROJECT);
+      return NextResponse.json({ cards, projects });
+    }
+    if (!allowedProject && qaTestLoginCardReadAllowed(req, authenticatedIdentity)) {
+      const tasksDir = tasksDirForScope('work');
+      const cards = getAllCards(tasksDir).filter(card => card.id === QA_UX_CARD_ID && card.project.trim() === QA_UX_PROJECT);
       const projects = listProjects(tasksDir).filter(project => project.name.trim() === QA_UX_PROJECT);
       return NextResponse.json({ cards, projects });
     }

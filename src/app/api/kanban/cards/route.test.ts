@@ -275,6 +275,10 @@ describe('POST /api/kanban/cards', () => {
 describe('GET /api/kanban/cards', () => {
   const allowed = { ...createdCard, id: 'allowed-card', project: 'Олег и Никита' };
   const qaCard = { ...createdCard, id: 'qa-card', project: 'ExManager QA' };
+  const testLoginQaCard = {
+    ...createdCard, id: '43687640-5245-4ec4-b29c-2b8970cb9d30',
+    project: 'UX QA 2026-10-26', owner: 'testlogin',
+  };
   const alpha = { ...createdCard, id: 'alpha-card', project: 'Alpha' };
   const beta = { ...createdCard, id: 'beta-card', project: 'Beta' };
   const legacy = { ...createdCard, id: 'legacy-card', project: 'Legacy' };
@@ -330,12 +334,11 @@ describe('GET /api/kanban/cards', () => {
     expect(await response.json()).toEqual({ cards: [qaCard], projects: [{ id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }] });
   });
 
-  it('exposes only the synthetic UX project to anonymous loopback QA reads', async () => {
+  it('preserves the anonymous loopback fixture read for only the synthetic UX QA project', async () => {
     authenticated.current = null;
     vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
-    const own = { ...qaCard, project: 'UX QA 2026-10-26', owner: 'testlogin' };
-    const anotherOwner = { ...qaCard, id: 'another-owner-card', project: 'UX QA 2026-10-26', owner: 'nikita' };
-    getAllCards.mockReturnValue([own, anotherOwner, alpha]);
+    const secondFixture = { ...testLoginQaCard, id: 'another-loopback-fixture' };
+    getAllCards.mockReturnValue([testLoginQaCard, secondFixture, alpha]);
     listProjects.mockReturnValue([
       { id: 'ux-qa-project', externalKey: 'ux-qa', name: 'UX QA 2026-10-26' },
       { id: 'other-project', externalKey: 'other', name: 'Alpha' },
@@ -347,22 +350,53 @@ describe('GET /api/kanban/cards', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      cards: [own, anotherOwner],
+      cards: [testLoginQaCard, secondFixture],
       projects: [{ id: 'ux-qa-project', externalKey: 'ux-qa', name: 'UX QA 2026-10-26' }],
     });
     expect(tasksDirForScope).toHaveBeenCalledWith('work');
   });
 
-  it('keeps QA anonymous reads off unrelated hosts and for unrelated identities', async () => {
+  it('returns only the exact synthetic card to testlogin on the isolated QA board', async () => {
+    authenticated.current = { username: 'testlogin', scope: 'work' };
+    vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
+    const anotherCard = { ...testLoginQaCard, id: 'another-qa-card' };
+    const sameIdOtherProject = { ...testLoginQaCard, project: 'Alpha' };
+    getAllCards.mockReturnValue([testLoginQaCard, anotherCard, sameIdOtherProject, alpha]);
+    listProjects.mockReturnValue([
+      { id: 'ux-qa-project', externalKey: 'ux-qa', name: 'UX QA 2026-10-26' },
+      { id: 'other-project', externalKey: 'other', name: 'Alpha' },
+    ]);
+
+    const response = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards'));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      cards: [testLoginQaCard],
+      projects: [{ id: 'ux-qa-project', externalKey: 'ux-qa', name: 'UX QA 2026-10-26' }],
+    });
+    expect(tasksDirForScope).toHaveBeenCalledWith('work');
+  });
+
+  it('keeps isolated QA card reads off for anonymous, unrelated, and personal identities', async () => {
     vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
     authenticated.current = null;
-    const unrelatedHost = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
-    expect(await unrelatedHost.json()).toEqual({ cards: [], projects: [] });
+    const anonymous = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards'));
+    expect(await anonymous.json()).toEqual({ cards: [], projects: [] });
     expect(getAllCards).not.toHaveBeenCalled();
 
     authenticated.current = { username: 'other-user', scope: 'work' };
-    const unrelatedIdentity = await GET(new NextRequest('http://127.0.0.1:43330/api/kanban/cards'));
+    const unrelatedIdentity = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards'));
     expect(await unrelatedIdentity.json()).toEqual({ cards: [], projects: [] });
+    expect(getAllCards).not.toHaveBeenCalled();
+
+    authenticated.current = { username: 'testlogin', scope: 'personal' };
+    const personalScope = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards'));
+    expect(await personalScope.json()).toEqual({ cards: [], projects: [] });
+    expect(getAllCards).not.toHaveBeenCalled();
+
+    authenticated.current = { username: 'testlogin', scope: 'work' };
+    const unrelatedHost = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
+    expect(await unrelatedHost.json()).toEqual({ cards: [], projects: [] });
     expect(getAllCards).not.toHaveBeenCalled();
   });
 
