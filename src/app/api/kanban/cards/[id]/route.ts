@@ -8,7 +8,7 @@ import type { NativeProjectAccessContext } from '@/lib/kanban/native-project-acc
 import { normalizeDueAt } from '@/lib/kanban/due-at';
 import { dispatchCardEvent } from '@/lib/notifications/push';
 import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
-import { NIKITA_ACTOR, validateTransition } from '@/lib/kanban/transition-policy';
+import { validateTransition } from '@/lib/kanban/transition-policy';
 
 const VERIFIED_BOARD_PROJECT = 'Олег и Никита';
 const QA_BOARD_PROJECT = 'ExManager QA';
@@ -19,16 +19,12 @@ function boardReadProject(identity: { username: string; scope: 'work' | 'persona
   return ['nikita', 'oleg'].includes(identity.username) ? VERIFIED_BOARD_PROJECT : null;
 }
 
-function isBoardSuperAdmin(identity: { username: string; scope: 'work' | 'personal' }): boolean {
-  return identity.scope === 'work' && identity.username === NIKITA_ACTOR;
-}
-
 function mayReadBoardProject(identity: { username: string; scope: 'work' | 'personal' }, project: string): boolean {
-  return isBoardSuperAdmin(identity) || boardReadProject(identity) === project.trim();
+  return boardReadProject(identity) === project.trim();
 }
 
 function mayReadAnyBoardProject(identity: { username: string; scope: 'work' | 'personal' }): boolean {
-  return isBoardSuperAdmin(identity) || boardReadProject(identity) !== null;
+  return boardReadProject(identity) !== null;
 }
 
 function qaTestloginSelfReadAllowed(identity: { username: string; scope: 'work' | 'personal' } | null): identity is { username: 'testlogin'; scope: 'work' } {

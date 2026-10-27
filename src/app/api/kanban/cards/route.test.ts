@@ -265,15 +265,14 @@ describe('GET /api/kanban/cards', () => {
     listProjects.mockReturnValue([...projects, { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }, { id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }]);
   });
 
-  it('lets only the verified board superadmin read every work project', async () => {
+  it('returns only the verified board project for nikita despite other shared-store projects', async () => {
     authenticated.current = { username: 'nikita', scope: 'work' };
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [allowed, qaCard, alpha, beta, legacy], projects: [
-      ...projects,
-      { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' },
-      { id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' },
-    ] });
+    expect(await response.json()).toEqual({
+      cards: [allowed],
+      projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }],
+    });
     expect(tasksDirForScope).toHaveBeenCalledWith('work');
   });
 

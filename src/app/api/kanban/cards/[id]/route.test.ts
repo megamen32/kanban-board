@@ -334,15 +334,15 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(await response.json()).toEqual({ error: 'not found' });
   });
 
-  it('lets the verified superadmin open a card from another project', async () => {
+  it('does not let the verified board identity open a card from another project', async () => {
     authenticated.current = { username: 'nikita', scope: 'work' };
     const otherProjectCard = { ...existingCard, project: 'ИИ-Бенчмарки' };
     findCardById.mockReturnValue(otherProjectCard);
     const response = await GET(new NextRequest('http://localhost/api/kanban/cards/known-other-card'), {
       params: Promise.resolve({ id: 'known-other-card' }),
     });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ card: otherProjectCard });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'not found' });
   });
 
   it('denies an unrelated test participant from the isolated QA project', async () => {
@@ -422,6 +422,14 @@ describe('GET /api/kanban/cards/[id]', () => {
     const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), { params: Promise.resolve({ id: 'card-1' }) });
     expect(response.status).toBe(200);
     expect((await response.json()).card.project).toBe('Олег и Никита');
+  });
+
+  it('does not let nikita read a card from a project outside the verified board scope', async () => {
+    authenticated.current = { username: 'nikita', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'Engineering Private' });
+    const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), { params: Promise.resolve({ id: 'card-1' }) });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'not found' });
   });
 
   it('allows the other exact verified board identity to read the configured project', async () => {
