@@ -241,8 +241,12 @@ function toolResult(tool: string, args: Record<string, unknown>) {
   throw new Error(`unexpected tool ${tool}`);
 }
 
-function observedHerderDelivery(delivery: string, response = 'Наблюдение исполнителя') {
-  return { content: [{ type: 'text', text: JSON.stringify({ delivery, response }) }] };
+function observedHerderDelivery(delivery: string, inputId = 'fixture-input', target = {
+  hostId: 'roomhacker-server-100', harness: 'codex', sessionId,
+}) {
+  return { content: [{ type: 'text', text: JSON.stringify({ delivery, response: {
+    jobId: 'fixture-delivery-job', inputId, status: 'completed', target,
+  } }) }] };
 }
 
 describe('task execution API', () => {
@@ -589,7 +593,9 @@ describe('task execution API', () => {
 
   it('unwraps an observed Herder envelope before accepting the initial dispatch receipt', async () => {
     mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => tool === 'send_message'
-      ? observedHerderDelivery(`Native admission receipt: ${JSON.stringify({ admitted: true, inputId: args.inputId, turnId: 'turn-envelope' })}`)
+      ? observedHerderDelivery(`Native admission receipt: ${JSON.stringify({ admitted: true, inputId: args.inputId, turnId: 'turn-envelope' })}`, String(args.inputId), {
+        hostId: 'roomhacker-server-100', harness: String(args.harness), sessionId: String(args.sessionId),
+      })
       : toolResult(tool, args));
 
     const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
@@ -818,7 +824,9 @@ describe('task execution API', () => {
     mocks.currentCard.value = researchCard();
     mocks.sessionInfo.value = { ...mocks.sessionInfo.value, meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } } };
     mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => tool === 'send_message'
-      ? observedHerderDelivery(`Native admission receipt: ${JSON.stringify({ admitted: true, inputId: args.inputId, turnId: 'continuation-envelope' })}`)
+      ? observedHerderDelivery(`Native admission receipt: ${JSON.stringify({ admitted: true, inputId: args.inputId, turnId: 'continuation-envelope' })}`, String(args.inputId), {
+        hostId: 'roomhacker-server-100', harness: String(args.harness), sessionId: String(args.sessionId),
+      })
       : toolResult(tool, args));
 
     const response = await PATCH(followUpRequest('continue-task', 8), { params: Promise.resolve({ id: baseCard.id }) });
@@ -827,6 +835,26 @@ describe('task execution API', () => {
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]).toMatchObject({
       phase: 'running', nativeTurnId: 'continuation-envelope',
     });
+  });
+
+  it('keeps a pending Herder observation without admission UNKNOWN and does not replay it', async () => {
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => tool === 'send_message'
+      ? observedHerderDelivery('Message accepted; native admission is still pending.', String(args.inputId), {
+        hostId: 'roomhacker-server-100', harness: String(args.harness), sessionId: String(args.sessionId),
+      })
+      : toolResult(tool, args));
+
+    const first = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!first) throw new Error('pending dispatch response missing');
+    expect(first.status).toBe(202);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.phase).toBe('dispatch-unknown');
+    const sendCount = mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message').length;
+
+    const replay = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!replay) throw new Error('pending dispatch replay response missing');
+    expect(replay.status).toBe(202);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.phase).toBe('dispatch-unknown');
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(sendCount);
   });
 
   it('lets a current project manager append one child to another actor legacy parent without remapping or cross-actor replay', async () => {
@@ -1382,6 +1410,7 @@ describe('task execution API', () => {
     })).digest('hex');
     mocks.callOwnerHerderTool.mockImplementation(async (_tool: string, args: Record<string, unknown>) => observedHerderDelivery(
       `Message reserved for the current turn of [${String(args.harness)}] ${String(args.sessionId)}; model observation is not yet confirmed.\nCurrent-turn context reservation receipt: ${JSON.stringify({ admitted: true, inputId })}`,
+      inputId, { hostId: String(args.hostId), harness: String(args.harness), sessionId: String(args.sessionId) },
     ));
 
     const response = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: 4, message }), {

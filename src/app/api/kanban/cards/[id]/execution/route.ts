@@ -50,7 +50,14 @@ function herderDeliveryText(result: HerderToolResult): string {
   try {
     const parsed: unknown = JSON.parse(text);
     if (isRecord(parsed) && Object.keys(parsed).length === 2
-        && typeof parsed.delivery === 'string' && typeof parsed.response === 'string') {
+        && typeof parsed.delivery === 'string' && isRecord(parsed.response)
+        && typeof parsed.response.jobId === 'string' && !!parsed.response.jobId
+        && typeof parsed.response.inputId === 'string' && !!parsed.response.inputId
+        && typeof parsed.response.status === 'string' && !!parsed.response.status
+        && isRecord(parsed.response.target)
+        && typeof parsed.response.target.hostId === 'string' && !!parsed.response.target.hostId
+        && typeof parsed.response.target.harness === 'string' && !!parsed.response.target.harness
+        && typeof parsed.response.target.sessionId === 'string' && !!parsed.response.target.sessionId) {
       return parsed.delivery.slice(0, 4096);
     }
   } catch {
