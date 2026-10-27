@@ -61,6 +61,10 @@ export async function GET(req: NextRequest) {
       });
     }
     const authenticatedIdentity = await boardHumanIdentityFromRequest(req);
+    if (authenticatedIdentity?.scope === 'work' && authenticatedIdentity.username === NIKITA_ACTOR) {
+      const tasksDir = tasksDirForScope(authenticatedIdentity.scope);
+      return NextResponse.json({ cards: getAllCards(tasksDir), projects: listProjects(tasksDir) });
+    }
     const allowedProject = authenticatedIdentity ? boardReadProject(authenticatedIdentity) : null;
     if (!allowedProject && qaTestloginSelfReadAllowed(authenticatedIdentity)) {
       const tasksDir = tasksDirForScope(authenticatedIdentity.scope);

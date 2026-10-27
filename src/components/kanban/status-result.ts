@@ -2,6 +2,9 @@ import type { KanbanColumn } from '@/lib/kanban/types';
 
 /** A successful HTTP response may still redirect a requested DONE to review. */
 export function statusSaveError(result: unknown, requested: KanbanColumn): string | null {
+  if (result && typeof result === 'object' && 'error' in result && result.error === 'blocked_reason_required') {
+    return 'Перед переводом в «Заблокировано» укажи, что мешает продолжить.';
+  }
   if (!result || typeof result !== 'object' || !('column' in result)) {
     return 'Статус не сохранён. Обновите доску и попробуйте ещё раз.';
   }

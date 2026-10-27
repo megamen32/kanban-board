@@ -98,6 +98,7 @@ export function TaskListView({ cards, authoritativeCards = cards, highlightCardI
                   <span className={`block text-sm sm:text-base ${done ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{card.title}</span>
                   <span className="mt-0.5 block text-xs text-muted-foreground">{status}{needsReview ? ' · ожидает решения человека' : ''}{card.parent ? ` · подзадача ${card.parent}` : ''}</span>
                   {card.nextAction && <span className="mt-0.5 block truncate text-xs text-muted-foreground">Следующий шаг: {card.nextAction}</span>}
+                  {card.column === 'blocked' && card.blockerReason && <span className="mt-0.5 block text-xs text-amber-700 dark:text-amber-300">Что мешает: {card.blockerReason}</span>}
                 </button>
                 {card.assignees.length > 0 && (
                   <span className="hidden shrink-0 text-xs text-muted-foreground sm:block">{card.assignees.join(', ')}</span>

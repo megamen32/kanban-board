@@ -8,6 +8,7 @@ interface MutationReply {
   conflict?: boolean;
   serverCard?: KanbanCard;
   error?: string;
+  text?: string;
 }
 
 export class BoardMutationError extends Error {}
@@ -29,6 +30,9 @@ export async function readMutationResponse(response: Response, allowConflict = f
     deadline_change_requires_human_ui: 'Для изменения срока нужен подтверждённый вход. Обновите страницу и войдите снова.',
     weekly_plan_requires_batch_acceptance: 'План недели принимается отдельно на вкладке «Неделя».',
     weekly_plan_allows_at_most_six_big_rocks: 'На неделю можно принять не больше шести Big Rocks. Сначала пересмотрите текущий план.',
+    blocked_reason_required: 'Напиши, что блокирует задачу; тогда будет понятно, что нужно для продолжения.',
+    blocker_reason_invalid: 'Причина блокировки слишком длинная или имеет неверный формат.',
+    review_requires_explicit_decision: 'Сначала прими результат или верни задачу на доработку в окне карточки.',
   };
   const message = !data || response.status === 401 || response.status === 403
     ? 'Войдите снова и повторите сохранение. Введённые данные не удалены.'

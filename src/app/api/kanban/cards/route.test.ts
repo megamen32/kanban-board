@@ -264,7 +264,20 @@ describe('GET /api/kanban/cards', () => {
     listProjects.mockReturnValue([...projects, { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }, { id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }]);
   });
 
+  it('lets only the verified board superadmin read every work project', async () => {
+    authenticated.current = { username: 'nikita', scope: 'work' };
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cards: [allowed, qaCard, alpha, beta, legacy], projects: [
+      ...projects,
+      { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' },
+      { id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' },
+    ] });
+    expect(tasksDirForScope).toHaveBeenCalledWith('work');
+  });
+
   it('returns only the server-allowlisted board project, independent of query hints', async () => {
+    authenticated.current = { username: 'oleg', scope: 'work' };
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards?project=Alpha'));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
@@ -408,8 +421,8 @@ describe('GET /api/kanban/cards', () => {
   });
 
   it('preserves the existing no-assertion legacy list behavior', async () => {
-    identity.current = { username: 'nikita', scope: 'work' };
-    authenticated.current = { username: 'nikita', scope: 'work' };
+    identity.current = { username: 'oleg', scope: 'work' };
+    authenticated.current = { username: 'oleg', scope: 'work' };
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });

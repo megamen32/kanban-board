@@ -307,14 +307,15 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(await response.json()).toEqual({ error: 'not found' });
   });
 
-  it('does not return a known card id from another project', async () => {
+  it('lets the verified superadmin open a card from another project', async () => {
     authenticated.current = { username: 'nikita', scope: 'work' };
-    findCardById.mockReturnValue({ ...existingCard, project: 'Alpha' });
+    const otherProjectCard = { ...existingCard, project: 'ИИ-Бенчмарки' };
+    findCardById.mockReturnValue(otherProjectCard);
     const response = await GET(new NextRequest('http://localhost/api/kanban/cards/known-other-card'), {
       params: Promise.resolve({ id: 'known-other-card' }),
     });
-    expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'not found' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ card: otherProjectCard });
   });
 
   it('denies a server-verified username outside the two named project identities', async () => {
@@ -477,7 +478,7 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(findCardById).not.toHaveBeenCalled();
 
     nativeProjectAccessContextFromRequest.mockResolvedValue(null);
-    authenticated.current = { username: 'nikita', scope: 'work' };
+    authenticated.current = { username: 'oleg', scope: 'work' };
     identity.current = { username: 'anonymous', scope: 'work' };
     const legacy = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), {
       params: Promise.resolve({ id: 'card-1' }),

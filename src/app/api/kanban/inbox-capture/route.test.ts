@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const { createCard, updateCard, extractSecretaryTasks, persistSecretaryTasks, dispatchNotification } = vi.hoisted(() => ({
   createCard: vi.fn(), updateCard: vi.fn(), extractSecretaryTasks: vi.fn(),
@@ -23,6 +23,11 @@ beforeEach(() => {
   dispatchNotification.mockResolvedValue(undefined);
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
 it('preserves a note when classification yields no tasks (fast unit, <1s/max10s)', async () => {
   const response = await POST(new NextRequest('http://localhost/api/kanban/inbox-capture', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -33,4 +38,23 @@ it('preserves a note when classification yields no tasks (fast unit, <1s/max10s)
   expect(data.cards).toHaveLength(1);
   expect(data.cards[0].column).toBe('inbox');
   expect(createCard).toHaveBeenCalledWith('Own note', 'Own note', 'inbox', 'medium', ['inbox-capture'], 'Inbox', [], '/own-fixture');
+});
+
+it('returns a transcript for review without creating a card or notification', async () => {
+  vi.stubEnv('KANBAN_WHISPER_API_KEY', 'fixture-only');
+  vi.stubEnv('KANBAN_WHISPER_URL', 'https://whisper.fixture/v1');
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ text: 'Проверить партнёрский Excel' }), {
+    status: 200, headers: { 'content-type': 'application/json' },
+  })));
+  const form = new FormData();
+  form.set('action', 'transcribe');
+  form.set('audio', new File(['fixture audio'], 'voice.webm', { type: 'audio/webm' }));
+
+  const response = await POST(new NextRequest('http://localhost/api/kanban/inbox-capture', { method: 'POST', body: form }));
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ text: 'Проверить партнёрский Excel' });
+  expect(createCard).not.toHaveBeenCalled();
+  expect(persistSecretaryTasks).not.toHaveBeenCalled();
+  expect(dispatchNotification).not.toHaveBeenCalled();
 });

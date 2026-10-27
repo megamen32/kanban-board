@@ -87,7 +87,9 @@ export async function POST(request: NextRequest) {
 
     const form = await request.formData();
     const audio = form.get('audio');
+    const action = form.get('action');
     if (!(audio instanceof File) || audio.size === 0) return NextResponse.json({ error: 'audio is required' }, { status: 400 });
+    if (action !== null && action !== 'transcribe') return NextResponse.json({ error: 'unsupported audio action' }, { status: 400 });
     const apiKey = process.env.KANBAN_WHISPER_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'transcription is not configured' }, { status: 503 });
     const whisperForm = new FormData();
@@ -99,6 +101,7 @@ export async function POST(request: NextRequest) {
     if (!response.ok) return NextResponse.json({ error: 'transcription failed' }, { status: 502 });
     const result = await response.json() as { text?: unknown };
     if (typeof result.text !== 'string' || !result.text.trim()) return NextResponse.json({ error: 'transcription returned no text' }, { status: 502 });
+    if (action === 'transcribe') return NextResponse.json({ text: result.text });
     const requestedOwner = form.get('owner');
     const owner = typeof requestedOwner === 'string' && requestedOwner.trim() ? requestedOwner.trim() : identity.username;
     return NextResponse.json(await captureWithSecretary(result.text, owner, 'transcript:whisper', identity.scope), { status: 201 });

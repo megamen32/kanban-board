@@ -206,7 +206,11 @@ export function NoticeQuestionPanel({ card, open, username, onRefresh }: Props) 
         <QuestionDetails view={view} />
         <Button type="button" size="sm" variant="outline" disabled={readBusy} onClick={() => void readLatest()}>{readBusy ? 'Проверяю…' : 'Обновить статус вопроса (только чтение)'}</Button>
       </>}
-      {panelState === 'none' && !eligible && <p className="text-sm text-muted-foreground">Нет доступного активного запуска с подтверждённой операцией для вопроса.</p>}
+      {panelState === 'none' && !eligible && <p className="text-sm text-muted-foreground">{card.column === 'blocked'
+        ? 'Сначала укажи, что блокирует задачу, и верни её в работу. Сейчас активной сессии нет.'
+        : card.needsReview || card.column === 'review'
+          ? 'Задача ждёт приёмки. Вопрос можно задать после следующего запуска; сейчас активной сессии нет.'
+          : 'Сначала запусти задачу. Сейчас нет подтверждённой активной сессии, куда можно отправить вопрос.'}</p>}
       {panelState === 'none' && eligible && <form className="space-y-3" onSubmit={event => void createQuestion(event)}>
         <Input aria-label="Назначение вопроса" value={purpose} onChange={event => setPurpose(event.target.value)} maxLength={128} required />
         <Textarea aria-label="Текст вопроса" value={message} onChange={event => setMessage(event.target.value)} maxLength={4000} rows={3} required placeholder="Что нужно уточнить у исполнителя?" />

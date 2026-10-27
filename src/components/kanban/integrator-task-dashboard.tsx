@@ -406,6 +406,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
                     <p className="text-xs font-medium text-muted-foreground">Описание и ожидаемый результат</p>
                     <MarkdownText text={card.description} className="mt-1 text-sm" />
                   </div>}
+                  {card.column === 'blocked' && card.blockerReason && <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm"><span className="font-medium">Что мешает продолжить:</span> {card.blockerReason}</div>}
 
                   <div className="mt-3 rounded-md border p-3">
                     <div className="flex items-center gap-2 text-sm font-medium">

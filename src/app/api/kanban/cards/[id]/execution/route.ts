@@ -174,9 +174,19 @@ function scopedCreateReceiptMatches(created: RecordValue | undefined, inputId: s
 
 function startAvailability(card: KanbanCard) {
   if (!process.env.AGENT_HERDER_HTTP_TOKEN?.trim()) return { startAvailable: false, unavailableReason: 'Защищённый канал запуска задачи не настроен' };
-  if (['review', 'done', 'archived', 'blocked'].includes(card.column) || card.needsReview) {
-    return { startAvailable: false, unavailableReason: 'Карточка сейчас недоступна для запуска' };
+  if (card.needsReview) {
+    if (!(card.requiresApprovalFrom?.length) && (card.resultHistory?.length ?? 0) === 0) {
+      return { startAvailable: false, unavailableReason: 'Проверяющий не назначен, а результата ещё нет. Владелец может описать исправление и вернуть задачу в работу.' };
+    }
+    return { startAvailable: false, unavailableReason: card.column === 'review'
+      ? 'Задача ждёт решения проверяющего. После приёмки её можно закрыть; для повторного запуска верните её на доработку.'
+      : 'Задача отмечена как требующая приёмки. Сначала завершите приёмку или верните её на доработку.' };
   }
+  if (card.column === 'blocked') return { startAvailable: false, unavailableReason: card.blockerReason
+    ? `Задача заблокирована: ${card.blockerReason}. Устраните это условие и смените статус.`
+    : 'Задача заблокирована без объяснения. Укажите, что мешает, затем смените статус.' };
+  if (card.column === 'done') return { startAvailable: false, unavailableReason: 'Задача уже завершена. Верните её в работу, если нужен новый запуск.' };
+  if (card.column === 'archived') return { startAvailable: false, unavailableReason: 'Задача снята с плана. Верните её во входящие, чтобы запустить.' };
   const latest = card.taskExecutionHistory?.at(-1);
   if (latest && !['result', 'stopped'].includes(latest.phase)) {
     return { startAvailable: false, unavailableReason: 'Предыдущий запуск ещё не разрешён' };

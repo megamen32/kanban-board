@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,7 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { X, Plus, Trash2 } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
-import { DEFAULT_COLUMNS, PRIORITY_COLORS } from '@/lib/kanban/types';
+import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import type { KanbanCard, Priority, KanbanColumn, PlanningType, RoleDefinition } from '@/lib/kanban/types';
 import type { HumanReviewAction } from '@/lib/kanban/transition-policy';
 import { CatalogLinkPanel } from './catalog-link-panel';
@@ -19,6 +20,11 @@ import type { KanbanUpdateRequest } from '@/hooks/use-kanban';
 import { initialPlanningMetadata } from './initial-planning';
 import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
 import { ReviewActionGate, reviewActionAccess } from './review-action-gate';
+
+const MarkdownEditor = dynamic(() => import('./markdown-editor').then(module => module.MarkdownEditor), {
+  ssr: false,
+  loading: () => <div role="status" className="min-h-[45vh] rounded-md border p-4 text-sm text-muted-foreground">Загружаю редактор…</div>,
+});
 
 interface Props {
   card: KanbanCard;
@@ -76,6 +82,7 @@ export function buildPlanningMetadataUpdates(card: KanbanCard, form: PlanningMet
 export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, onReviewDecision, roles, projectOptions = [], relatedCards = [], username, onRefresh }: Props) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
+  const [blockerReason, setBlockerReason] = useState(card.blockerReason ?? '');
   const [column, setColumn] = useState(card.column);
   const [priority, setPriority] = useState<Priority>(card.priority);
   const [tags, setTags] = useState<string[]>(card.tags);
@@ -93,6 +100,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   useEffect(() => {
     setTitle(card.title);
     setDescription(card.description);
+    setBlockerReason(card.blockerReason ?? '');
     setColumn(card.column);
     setPriority(card.priority);
     setTags(card.tags);
@@ -118,6 +126,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     const updates: KanbanUpdateRequest = {
       title: title.trim(),
       description: description.trim(),
+      blockerReason: blockerReason.trim() || null,
       column: column as KanbanColumn,
       priority,
       tags,
@@ -164,25 +173,74 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="top-auto bottom-0 translate-y-0 w-[calc(100%-1rem)] max-h-[92vh] overflow-y-auto rounded-t-2xl sm:top-[50%] sm:bottom-auto sm:translate-y-[-50%] sm:w-full sm:max-w-[520px] sm:rounded-lg">
-        <DialogHeader>
+      <DialogContent className="fixed inset-0 left-0 top-0 flex h-dvh w-screen max-w-none min-w-0 translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
+        <DialogHeader className="shrink-0 border-b px-4 py-3 pr-14 text-left sm:px-6">
           <DialogTitle>Редактировать задачу</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <section className="space-y-2 rounded-md border p-3" aria-label="Жизненный цикл и результат">
+        <section aria-label="Быстрые настройки задачи" className="grid shrink-0 grid-cols-2 gap-2 border-b bg-muted/20 p-3 sm:grid-cols-3 lg:grid-cols-6 lg:gap-3 lg:px-6">
+          <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Проект
+            <Input aria-label="Проект" list="kanban-edit-projects" value={project} onChange={e => setProject(e.target.value)} className="w-full min-w-0" />
+            <datalist id="kanban-edit-projects">{projectOptions.map(name => <option key={name} value={name} />)}</datalist>
+          </label>
+          <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Состояние
+            <select aria-label="Состояние задачи" disabled={card.column === 'review' || card.needsReview} value={column} onChange={e => setColumn(e.target.value as KanbanColumn)} className="h-10 w-full min-w-0 rounded-md border bg-background px-2 text-sm text-foreground disabled:opacity-60">
+              {DEFAULT_COLUMNS.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
+            </select>
+          </label>
+          <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Приоритет
+            <select aria-label="Приоритет задачи" value={priority} onChange={e => setPriority(e.target.value as Priority)} className="h-10 w-full min-w-0 rounded-md border bg-background px-2 text-sm text-foreground">
+              <option value="critical">Срочный</option><option value="high">Высокий</option><option value="medium">Обычный</option><option value="low">Низкий</option>
+            </select>
+          </label>
+          <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Владелец
+            <Input aria-label="Владелец карточки" value={card.owner ?? 'nikita'} readOnly className="w-full min-w-0 bg-muted/40" />
+          </label>
+          <div className="min-w-0 space-y-1 text-xs text-muted-foreground">Исполнитель(и)
+            <Input aria-label="Исполнители" value={assignees} onChange={e => setAssignees(e.target.value)} placeholder="Не назначен" className="w-full min-w-0" />
+            {JSON.stringify(assignees.split(',').map(value => value.trim()).filter(Boolean)) !== JSON.stringify(baseline.assignees) && (
+              <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                <Checkbox checked={reassignmentConfirmed} onCheckedChange={value => setReassignmentConfirmed(value === true)} />
+                <span>Подтвердить переназначение</span>
+              </label>
+            )}
+          </div>
+          <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Срок
+            <Input aria-label="Срок" type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} className="w-full min-w-0" />
+          </label>
+        </section>
+
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-5">
+        <div className="mx-auto w-full max-w-5xl min-w-0 space-y-4">
+          <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.45fr)]">
+          <section className="order-2 min-w-0 space-y-2 rounded-md border p-3 lg:order-2" aria-label="Жизненный цикл и результат">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-muted-foreground">Состояние</span>
               <Badge variant="outline">{DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column}</Badge>
               {card.needsReview && <Badge>Требуется приёмка</Badge>}
-              <span className="text-xs text-muted-foreground">Версия {card.version}</span>
+              <span className="text-xs text-muted-foreground">Владелец: {card.owner ?? 'nikita'} · Версия {card.version}</span>
             </div>
-            {card.parent && <p className="text-sm">Родитель: {relatedCards.find(item => item.id === card.parent)?.title ?? card.parent}</p>}
-            {relatedCards.filter(item => item.parent === card.id).length > 0 && <div className="text-sm">
-              <span className="font-medium">Подзадачи:</span>
-              <ul className="list-disc pl-5">{relatedCards.filter(item => item.parent === card.id).map(item => <li key={item.id}>{item.title} · {DEFAULT_COLUMNS.find(columnItem => columnItem.id === item.column)?.title ?? item.column}</li>)}</ul>
-            </div>}
             {card.nextAction && <p className="text-sm"><span className="font-medium">Следующий шаг:</span> {card.nextAction}</p>}
+            {card.blockerReason && <p className="text-sm"><span className="font-medium">Что мешает:</span> {card.blockerReason}</p>}
+            {card.column === 'blocked' && <p className="text-sm text-amber-700 dark:text-amber-300">Укажи причину блокировки ниже, чтобы было ясно, что нужно для продолжения.</p>}
+            {reviewAccess !== 'not-awaiting-review' && <ReviewActionGate card={card} verifiedUsername={username}>
+              {onReviewDecision && <div className="space-y-2 border-t pt-3">
+                <p className="text-xs text-muted-foreground">{reviewAccess === 'owner-recovery' ? 'Проверяющий не назначен и результата ещё нет. Укажи исправление и верни задачу в работу.' : reviewAccess === 'owner-review' ? 'Проверяющий не назначен. Владелец может принять готовый результат или вернуть его на доработку.' : 'Решение проверяется сервером по текущему списку согласующих.'}</p>
+                <Textarea aria-label="Комментарий к доработке" placeholder="Что нужно исправить" value={reviewNote} onChange={event => setReviewNote(event.target.value)} rows={2} />
+                <div className="flex flex-wrap gap-2">
+                  {(reviewAccess === 'authorized' || reviewAccess === 'owner-review') && <Button disabled={saving} onClick={() => void handleReview('accept')}>Принять и закрыть</Button>}
+                  <Button variant="outline" disabled={saving || !reviewNote.trim()} onClick={() => void handleReview(reviewAccess === 'owner-recovery' ? 'recover-rework' : 'rework')}>Вернуть на доработку</Button>
+                </div>
+              </div>}
+            </ReviewActionGate>}
+            <details className="border-t pt-2">
+              <summary className="cursor-pointer text-sm font-medium">История и связи</summary>
+              <div className="mt-3 space-y-3">
+                {card.parent && <p className="text-sm">Родитель: {relatedCards.find(item => item.id === card.parent)?.title ?? card.parent}</p>}
+                {relatedCards.filter(item => item.parent === card.id).length > 0 && <div className="text-sm">
+                  <span className="font-medium">Подзадачи:</span>
+                  <ul className="list-disc pl-5">{relatedCards.filter(item => item.parent === card.id).map(item => <li key={item.id}>{item.title} · {DEFAULT_COLUMNS.find(columnItem => columnItem.id === item.column)?.title ?? item.column}</li>)}</ul>
+                </div>}
             {(card.resultHistory ?? []).length > 0 && <div className="space-y-2">
               <h3 className="text-sm font-medium">Результаты исполнителя</h3>
               {[...(card.resultHistory ?? [])].reverse().map((result, index) => <article key={`${result.submittedAt}-${index}`} className="rounded border p-2 text-sm">
@@ -198,54 +256,26 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
                 {review.decision === 'accepted' ? 'Принято' : 'На доработку'} · {review.actor} · {new Date(review.decidedAt).toLocaleString()}{review.note ? ` · ${review.note}` : ''}
               </p>)}
             </div>}
-            {reviewAccess !== 'not-awaiting-review' && <ReviewActionGate card={card} verifiedUsername={username}>
-              {onReviewDecision && <div className="space-y-2 border-t pt-3">
-                <p className="text-xs text-muted-foreground">{reviewAccess === 'owner-recovery' ? 'Проверка задачи заблокировала запуск без назначенного проверяющего. Владелец может вернуть задачу на доработку.' : 'Решение проверяется сервером по текущему списку согласующих.'}</p>
-                <Textarea aria-label="Комментарий к доработке" placeholder="Что нужно исправить" value={reviewNote} onChange={event => setReviewNote(event.target.value)} rows={2} />
-                <div className="flex flex-wrap gap-2">
-                  {reviewAccess === 'authorized' && <Button disabled={saving} onClick={() => void handleReview('accept')}>Принять результат</Button>}
-                  <Button variant="outline" disabled={saving || !reviewNote.trim()} onClick={() => void handleReview(reviewAccess === 'owner-recovery' ? 'recover-rework' : 'rework')}>Вернуть на доработку</Button>
-                </div>
-              </div>}
-            </ReviewActionGate>}
+              </div>
+            </details>
           </section>
-          <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />
-          {catalogLink && <CatalogLinkPanel link={catalogLink} />}
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Название</label>
-            <Input value={title} onChange={e => setTitle(e.target.value)} />
-          </div>
-
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Описание (markdown)</label>
-            <Textarea value={description} onChange={e => setDescription(e.target.value)} rows={6} />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Проект *</label>
-              <Input aria-label="Проект" list="kanban-edit-projects" value={project} onChange={e => setProject(e.target.value)} />
-              <datalist id="kanban-edit-projects">{projectOptions.map(name => <option key={name} value={name} />)}</datalist>
+          <div className="order-1 min-w-0 space-y-4 lg:order-1">
+            <div className="min-w-0 space-y-2">
+              <label className="text-sm font-medium" htmlFor="kanban-edit-title">Название задачи</label>
+              <Input id="kanban-edit-title" value={title} onChange={e => setTitle(e.target.value)} className="w-full min-w-0 text-base" />
             </div>
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Ответственные</label>
-              <Input value={assignees} onChange={e => setAssignees(e.target.value)} placeholder="через запятую" />
-              {JSON.stringify(assignees.split(',').map(value => value.trim()).filter(Boolean)) !== JSON.stringify(baseline.assignees) && (
-                <label className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
-                  <Checkbox checked={reassignmentConfirmed} onCheckedChange={value => setReassignmentConfirmed(value === true)} />
-                  <span>Подтверждаю явное переназначение ответственных</span>
-                </label>
-              )}
+            <div className="min-w-0 space-y-2">
+              <label className="text-sm font-medium">Описание и ожидаемый результат</label>
+              <MarkdownEditor value={description} onChange={setDescription} />
             </div>
-          </div>
-
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Срок</label>
-            <Input type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} />
-          </div>
-
-          <div className="space-y-3 rounded-md border p-3">
-            <label className="text-sm font-medium">Планирование</label>
+            {(column === 'blocked' || blockerReason) && <div className="min-w-0 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+              <label className="text-sm font-medium" htmlFor="kanban-blocker-reason">Что блокирует продолжение?</label>
+              <Textarea id="kanban-blocker-reason" value={blockerReason} onChange={event => setBlockerReason(event.target.value)} rows={3} maxLength={2000} placeholder="Например: ждём файл от партнёра; ответственный и срок пока неизвестны." />
+              <p className="text-xs text-muted-foreground">Эта причина сохраняется отдельно от описания задачи.</p>
+            </div>}
+            <details className="min-w-0 rounded-md border p-3">
+              <summary className="cursor-pointer text-sm font-medium">Планирование и дополнительные настройки</summary>
+              <div className="mt-3 space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-muted-foreground">Тип<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.type} onChange={e => setPlanning({ ...planning, type: e.target.value as PlanningType | '' })}><option value="">Не выбран</option><option value="action">Действие</option><option value="outcome">Результат</option></select></label>
               <label className="text-xs text-muted-foreground">Роль<RolePicker roles={roles} value={planning.role} onChange={role => setPlanning({ ...planning, role })} /></label>
@@ -255,41 +285,10 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             <Input placeholder="Ждём от (ID через запятую)" value={planning.waitingFor} onChange={e => setPlanning({ ...planning, waitingFor: e.target.value })} />
             <Input placeholder="Требует согласования от (ID через запятую)" value={planning.requiresApprovalFrom} onChange={e => setPlanning({ ...planning, requiresApprovalFrom: e.target.value })} />
             <div className="grid grid-cols-2 gap-3"><Input placeholder="Предложенный исполнитель" value={planning.suggestedAssignee} onChange={e => setPlanning({ ...planning, suggestedAssignee: e.target.value })} /><Input placeholder="Родительская карточка" value={planning.parent} onChange={e => setPlanning({ ...planning, parent: e.target.value })} /></div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Колонка</label>
-              <div className="flex flex-wrap gap-1">
-                {DEFAULT_COLUMNS.map(col => (
-                  <Badge
-                    key={col.id}
-                    variant={column === col.id ? 'default' : 'outline'}
-                    className={card.column === 'review' || card.needsReview ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}
-                    onClick={() => { if (card.column !== 'review' && !card.needsReview) setColumn(col.id); }}
-                  >
-                    {col.title}
-                  </Badge>
-                ))}
               </div>
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Приоритет</label>
-              <div className="flex flex-wrap gap-1">
-                {(['low', 'medium', 'high', 'critical'] as Priority[]).map(p => (
-                  <Badge
-                    key={p}
-                    variant={priority === p ? 'default' : 'outline'}
-                    className={`cursor-pointer ${priority === p ? PRIORITY_COLORS[p] : ''}`}
-                    onClick={() => setPriority(p)}
-                  >
-                    {p}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          </div>
-
+            </details>
+            <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />
+            {catalogLink && <details className="min-w-0 rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Источник и ссылки</summary><div className="mt-3"><CatalogLinkPanel link={catalogLink} /></div></details>}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Теги</label>
             <div className="flex flex-wrap gap-1 mb-2">
@@ -315,18 +314,23 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
           <div className="text-[10px] text-muted-foreground/60">
             ID: {card.id} · Файл: {card.fileName} · Версия: {card.version}
           </div>
+          </div>
+          </div>
+        </div>
         </div>
 
-        <DialogFooter className="flex justify-between">
+        <DialogFooter className="shrink-0 gap-2 border-t bg-background px-4 py-2 sm:px-6">
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-          {onDelete && (
-            <Button variant="destructive" size="sm" disabled={saving} onClick={handleDelete}>
-              <Trash2 className="h-3.5 w-3.5 mr-1" /> Удалить
-            </Button>
-          )}
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
-            <Button onClick={handleSave} disabled={!title.trim() || !project.trim() || saving}>Сохранить</Button>
+          <div className="flex w-full items-center justify-between gap-2">
+            {onDelete ? (
+              <Button variant="destructive" size="sm" disabled={saving} onClick={handleDelete}>
+                <Trash2 className="mr-1 h-3.5 w-3.5" /> Удалить
+              </Button>
+            ) : <span />}
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
+              <Button onClick={handleSave} disabled={!title.trim() || !project.trim() || saving}>Сохранить</Button>
+            </div>
           </div>
         </DialogFooter>
       </DialogContent>

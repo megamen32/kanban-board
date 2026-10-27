@@ -53,7 +53,8 @@ export type TransitionDecision =
       kind: 'rejected';
       reason: 'assignee_change_requires_owner_authorization' | 'reviewer_change_requires_owner_authorization'
         | 'deadline_change_requires_human_ui' | 'weekly_plan_requires_batch_acceptance'
-        | 'review_requires_explicit_decision' | 'executor_result_requires_non_review_state';
+        | 'review_requires_explicit_decision' | 'executor_result_requires_non_review_state'
+        | 'blocked_reason_required';
     };
 
 /**
@@ -104,6 +105,12 @@ export function validateTransition(
   const changesWeeklyPlan = policyRequested.week !== undefined || policyRequested.bigRock !== undefined;
   if (changesWeeklyPlan && !hasWeeklyPlanAcceptance(context, policyRequested.week)) {
     return { kind: 'rejected', reason: 'weekly_plan_requires_batch_acceptance' };
+  }
+
+  if (policyRequested.column === 'blocked'
+      && !(typeof policyRequested.blockerReason === 'string' && policyRequested.blockerReason.trim())
+      && !(typeof before.blockerReason === 'string' && before.blockerReason.trim())) {
+    return { kind: 'rejected', reason: 'blocked_reason_required' };
   }
 
   if (
@@ -313,7 +320,11 @@ export function decideHumanReview(
   if (before.column !== 'review' || !before.needsReview) {
     return { kind: 'rejected', reason: 'task_not_waiting_for_review' };
   }
-  if (!actor || !(before.requiresApprovalFrom ?? []).includes(actor)) {
+  const designatedReviewer = Boolean(actor && (before.requiresApprovalFrom ?? []).includes(actor));
+  const ownerReviewWithoutReviewer = actor === NIKITA_ACTOR
+    && (before.requiresApprovalFrom?.length ?? 0) === 0
+    && (before.resultHistory?.length ?? 0) > 0;
+  if (!designatedReviewer && !ownerReviewWithoutReviewer) {
     return { kind: 'rejected', reason: 'reviewer_not_authorized' };
   }
   if (action === 'rework' && !note.trim()) {

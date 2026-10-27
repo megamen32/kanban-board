@@ -210,7 +210,7 @@ export function KanbanBoard() {
   const identityLabel = username ?? 'Локальный просмотр';
   const workspaceSwitcher = (
     <div aria-label="Область задач" className="flex shrink-0 rounded-md border p-0.5">
-      {([['mine', 'Моё'], ['shared', 'Общее'], ['all', 'Всё']] as const).map(([value, label]) => <Button key={value} variant={workspaceView === value ? 'secondary' : 'ghost'} size="sm" className="h-6 px-2 text-[11px]" onClick={() => setWorkspaceView(value)}>{label}</Button>)}
+      {([['mine', 'Моё', 'Карточки, где вы владелец, исполнитель или указаны в следующем шаге'], ['shared', 'Общее', 'Общие карточки'], ['all', 'Всё', 'Все разрешённые карточки'] ] as const).map(([value, label, title]) => <Button key={value} title={title} aria-label={`${label}: ${title}`} variant={workspaceView === value ? 'secondary' : 'ghost'} size="sm" className="h-6 px-2 text-[11px]" onClick={() => setWorkspaceView(value)}>{label}</Button>)}
     </div>
   );
   const projectFilter = (
@@ -277,11 +277,13 @@ export function KanbanBoard() {
               <Button aria-label="Обновить" title="Обновить" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={refresh}><RotateCw aria-hidden className="h-3.5 w-3.5" /></Button>
             </div>
           </div>
-          <div className="mt-1 flex min-w-0 items-center gap-1">
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
             <div className="hidden min-w-0 items-center gap-1 sm:flex">
               {identityChecked && <span className="max-w-24 truncate px-1 text-xs text-muted-foreground" title={username ? `Вы вошли как ${username}` : 'Локальный просмотр без входа'}>{identityLabel}</span>}
               {isSuperAdmin && workspaceSwitcher}
               {projectFilter}
+              {project !== 'all' && <span role="status" className="max-w-44 truncate rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-300" title={`Остальные проекты скрыты: ${project}`}>Фильтр проекта: {project}</span>}
+              {project !== 'all' && <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => setProject('all')}>Показать все проекты</Button>}
             </div>
             <div className="relative shrink-0">
               <Button aria-label="Дополнительные фильтры" aria-controls="board-additional-filters" aria-expanded={filtersOpen} title="Фильтры" variant="ghost" size="sm" className="h-7 gap-1 border px-2 text-xs" onClick={() => setFiltersOpen(value => !value)}>

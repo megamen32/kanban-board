@@ -8,7 +8,7 @@ import type { NativeProjectAccessContext } from '@/lib/kanban/native-project-acc
 import { normalizeDueAt } from '@/lib/kanban/due-at';
 import { dispatchCardEvent } from '@/lib/notifications/push';
 import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
-import { validateTransition } from '@/lib/kanban/transition-policy';
+import { NIKITA_ACTOR, validateTransition } from '@/lib/kanban/transition-policy';
 
 const VERIFIED_BOARD_PROJECT = 'Олег и Никита';
 const QA_BOARD_PROJECT = 'ExManager QA';
@@ -19,12 +19,16 @@ function boardReadProject(identity: { username: string; scope: 'work' | 'persona
   return ['nikita', 'oleg'].includes(identity.username) ? VERIFIED_BOARD_PROJECT : null;
 }
 
+function isBoardSuperAdmin(identity: { username: string; scope: 'work' | 'personal' }): boolean {
+  return identity.scope === 'work' && identity.username === NIKITA_ACTOR;
+}
+
 function mayReadBoardProject(identity: { username: string; scope: 'work' | 'personal' }, project: string): boolean {
-  return boardReadProject(identity) === project.trim();
+  return isBoardSuperAdmin(identity) || boardReadProject(identity) === project.trim();
 }
 
 function mayReadAnyBoardProject(identity: { username: string; scope: 'work' | 'personal' }): boolean {
-  return boardReadProject(identity) !== null;
+  return isBoardSuperAdmin(identity) || boardReadProject(identity) !== null;
 }
 
 function qaTestloginSelfReadAllowed(identity: { username: string; scope: 'work' | 'personal' } | null): identity is { username: 'testlogin'; scope: 'work' } {
@@ -92,6 +96,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       return NextResponse.json({ error: 'request body must be an object' }, { status: 400 });
     }
     const { title, description, column, priority, tags, order, project, assignees, expectedVersion } = body;
+    if (body.blockerReason !== undefined && body.blockerReason !== null
+        && (typeof body.blockerReason !== 'string' || body.blockerReason.length > 2000)) {
+      return NextResponse.json({ error: 'blocker_reason_invalid' }, { status: 400 });
+    }
     let dueAt: string | null | undefined;
     try {
       dueAt = normalizeDueAt(body.dueAt, true);
@@ -107,6 +115,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     for (const [key, value] of Object.entries({
       title, description, column, priority, tags, order, project, assignees, dueAt,
       owner: body.owner,
+      blockerReason: typeof body.blockerReason === 'string' ? body.blockerReason.trim() || null : body.blockerReason,
       shared: body.shared,
       planningVersion: body.planningVersion,
       type: body.type,

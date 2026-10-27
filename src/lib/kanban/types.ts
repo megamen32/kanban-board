@@ -15,6 +15,8 @@ export interface KanbanCard {
   assignees: string[];
   /** Person whose personal planning space owns this card. Old cards belong to Nikita. */
   owner?: string;
+  /** Short, durable explanation of what is currently blocking this task. */
+  blockerReason?: string;
   /** Shared cards appear in the common-projects view for every selected person. */
   shared?: boolean;
   /** Planning metadata is optional in the TypeScript surface for legacy callers. */
@@ -252,6 +254,7 @@ export interface ExecutorResultInput {
 export const PLANNING_VERSION = 1 as const;
 
 export type KanbanCardUpdates = Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'project' | 'assignees' | 'owner' | 'shared' | 'planningVersion' | 'type' | 'role' | 'accountable' | 'assignee' | 'important' | 'urgent' | 'week' | 'bigRock' | 'parent' | 'scheduledAt' | 'todayRank' | 'source' | 'needsReview' | 'suggestedAssignee' | 'waitingFor' | 'requiresApprovalFrom' | 'completedBy' | 'completedAt' | 'completionEvidence' | 'approvalEvidence' | 'resultHistory' | 'reviewHistory' | 'taskExecutionHistory'>> & {
+  blockerReason?: string | null;
   dueAt?: string | null;
   nextAction?: string | null;
   executorResult?: ExecutorResultInput;

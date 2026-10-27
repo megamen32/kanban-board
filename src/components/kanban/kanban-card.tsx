@@ -104,6 +104,7 @@ export function KanbanCard({ card, columnId }: Props) {
             <div className="font-medium text-sm leading-tight truncate mb-1">{card.title}</div>
             <MarkdownCardPreview title={card.title} description={card.description} />
             <ReviewRecoveryControl card={card} username={username} onDone={refresh} />
+            {card.column === 'blocked' && card.blockerReason && <p className="mb-2 line-clamp-2 text-xs text-amber-700 dark:text-amber-300">Что мешает: {card.blockerReason}</p>}
             <div className="flex items-center gap-1.5 flex-wrap">
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{card.project || 'Без проекта'}</Badge>
               <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${PRIORITY_COLORS[card.priority]}`}>

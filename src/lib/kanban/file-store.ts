@@ -9,7 +9,7 @@ import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardU
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
   'id', 'title', 'column', 'priority', 'tags', 'order', 'created', 'updated', 'dueAt',
-  'version', 'project', 'assignees', 'owner', 'shared', 'planning_version', 'type', 'role', 'accountable',
+  'version', 'project', 'assignees', 'owner', 'blocker_reason', 'shared', 'planning_version', 'type', 'role', 'accountable',
   'assignee', 'important', 'urgent', 'week', 'big_rock', 'parent', 'scheduled_at',
   'today_rank', 'source', 'needs_review', 'suggested_assignee', 'waiting_for',
   'requires_approval_from', 'completed_by', 'completed_at', 'completion_evidence',
@@ -17,7 +17,7 @@ const KNOWN_FRONTMATTER_KEYS = new Set([
   'source_admission', 'catalog_task_link', 'task_execution_history',
 ]);
 const PLANNING_FRONTMATTER_KEYS = new Set([
-  'planning_version', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
+  'planning_version', 'type', 'role', 'accountable', 'assignee', 'blocker_reason', 'important', 'urgent',
   'week', 'big_rock', 'parent', 'scheduled_at', 'today_rank', 'source', 'needs_review',
   'suggested_assignee', 'waiting_for', 'requires_approval_from', 'completed_by',
   'completed_at', 'completion_evidence', 'approval_evidence', 'result_history', 'review_history', 'next_action',
@@ -31,7 +31,7 @@ type RawFrontmatter = Record<string, unknown> & {
   [RAW_UNKNOWN_FRONTMATTER]?: string;
 };
 const PLANNING_UPDATE_KEYS = new Set([
-  'owner', 'shared', 'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
+  'owner', 'blockerReason', 'shared', 'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
   'week', 'bigRock', 'parent', 'scheduledAt', 'todayRank', 'source', 'needsReview',
   'suggestedAssignee', 'waitingFor', 'requiresApprovalFrom', 'completedBy', 'completedAt',
   'completionEvidence', 'approvalEvidence', 'resultHistory', 'reviewHistory', 'nextAction',
@@ -139,6 +139,7 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     project: typeof data.project === 'string' && data.project.trim() ? data.project.trim() : legacyProject,
     assignees: Array.isArray(data.assignees) ? data.assignees.map(String) : [],
     owner: optionalString(data, 'owner') ?? 'nikita',
+    blockerReason: optionalString(data, 'blocker_reason'),
     shared: booleanField(data, 'shared', false),
     ...planning,
     ...(data.source_admission && typeof data.source_admission === 'object' ? { sourceAdmission: data.source_admission as SourceAdmissionBinding } : {}),
@@ -226,7 +227,7 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
   const { dueAt: dueAtUpdate, ...otherUpdates } = updates;
   const normalizedUpdates = Object.fromEntries(
     Object.entries(otherUpdates).map(([key, value]) => [key, value === null ? undefined : value]),
-  ) as Omit<KanbanCardUpdates, 'dueAt' | 'nextAction'> & { nextAction?: string };
+  ) as Omit<KanbanCardUpdates, 'dueAt' | 'nextAction' | 'blockerReason'> & { nextAction?: string; blockerReason?: string };
   if (normalizedUpdates.taskExecutionHistory !== undefined) {
     normalizedUpdates.taskExecutionHistory = taskExecutionHistoryField(normalizedUpdates.taskExecutionHistory);
   }
@@ -456,6 +457,7 @@ function buildFrontmatter(card: KanbanCard): string {
   if (card.completedBy !== undefined) data.completed_by = card.completedBy;
   if (card.completedAt !== undefined) data.completed_at = card.completedAt;
   if (card.nextAction !== undefined) data.next_action = card.nextAction;
+  if (card.blockerReason !== undefined) data.blocker_reason = card.blockerReason;
 
   const generated = matter.stringify('', data).trimEnd();
   const rawUnknown = (card.rawFrontmatter as RawFrontmatter | undefined)?.[RAW_UNKNOWN_FRONTMATTER];

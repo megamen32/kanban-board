@@ -37,6 +37,31 @@ describe('kanban transition policy', () => {
     expect(decideHumanReview(malformed, 'recover-rework', 'nikita', '   ')).toMatchObject({ kind: 'rejected', reason: 'rework_note_required' });
   });
 
+  test('owner may accept an actual result when no reviewer was assigned, but cannot bypass an explicit reviewer', () => {
+    const ready: KanbanCard = {
+      ...baseCard,
+      column: 'review',
+      needsReview: true,
+      requiresApprovalFrom: [],
+      resultHistory: [{ summary: 'Тендерный список сверён', evidenceRefs: ['qa:result:1'], submittedBy: 'executor', submittedAt: '2026-10-27T00:00:00.000Z' }],
+    };
+    expect(decideHumanReview(ready, 'accept', 'nikita')).toMatchObject({
+      kind: 'accepted', patch: { column: 'done', needsReview: false, completedBy: 'nikita' },
+    });
+    expect(decideHumanReview(ready, 'accept', 'oleg')).toMatchObject({ kind: 'rejected', reason: 'reviewer_not_authorized' });
+    expect(decideHumanReview({ ...ready, requiresApprovalFrom: ['oleg'] }, 'accept', 'nikita'))
+      .toMatchObject({ kind: 'rejected', reason: 'reviewer_not_authorized' });
+    expect(decideHumanReview({ ...ready, resultHistory: [] }, 'accept', 'nikita'))
+      .toMatchObject({ kind: 'rejected', reason: 'reviewer_not_authorized' });
+  });
+
+  test('requires a separate blocker explanation before entering the blocked state', () => {
+    expect(validateTransition(baseCard, { column: 'blocked' }, { origin: 'human-ui', actor: 'nikita' }))
+      .toMatchObject({ kind: 'rejected', reason: 'blocked_reason_required' });
+    expect(validateTransition(baseCard, { column: 'blocked', blockerReason: 'Ждём файл партнёра' }, { origin: 'human-ui', actor: 'nikita' }))
+      .toMatchObject({ kind: 'accepted', patch: { column: 'blocked', blockerReason: 'Ждём файл партнёра' } });
+  });
+
   test('records manual confirmation for a human UI DONE transition', () => {
     const decision = validateTransition(baseCard, { column: 'done' }, {
       origin: 'human-ui',

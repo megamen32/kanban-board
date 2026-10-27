@@ -12,6 +12,16 @@ afterAll(() => {
 });
 
 describe('filesystem kanban contract', () => {
+  test('persists blocker reason separately from the task description', () => {
+    const created = store.createCard('Blocked task', 'Task description', 'todo', 'medium', [], 'alpha');
+    const saved = store.updateCard(created.id, { column: 'blocked', blockerReason: 'Ждём Excel от партнёра' }, created.version);
+    if (!saved || 'conflict' in saved) throw new Error('blocker reason update failed');
+    const reopened = store.readCardFile(path.join(root, saved.fileName));
+    expect(reopened).toMatchObject({ column: 'blocked', description: 'Task description', blockerReason: 'Ждём Excel от партнёра' });
+    expect(fs.readFileSync(path.join(root, saved.fileName), 'utf8')).toContain('blocker_reason: Ждём Excel от партнёра');
+    expect(store.deleteCard(created.id)).toBe(true);
+  });
+
   test('long Cyrillic titles keep complete content and bounded UTF-8 filenames on create and rename', () => {
     const title = 'Русская задача с подробным заголовком '.repeat(6);
     const created = store.createCard(title, 'Details', 'todo', 'medium', [], 'alpha', ['alice']);
