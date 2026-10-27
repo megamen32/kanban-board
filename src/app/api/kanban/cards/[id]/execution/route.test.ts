@@ -241,6 +241,10 @@ function toolResult(tool: string, args: Record<string, unknown>) {
   throw new Error(`unexpected tool ${tool}`);
 }
 
+function observedHerderDelivery(delivery: string, response = 'Наблюдение исполнителя') {
+  return { content: [{ type: 'text', text: JSON.stringify({ delivery, response }) }] };
+}
+
 describe('task execution API', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -583,6 +587,19 @@ describe('task execution API', () => {
     expect(mocks.currentCard.value?.column).toBe('todo');
   });
 
+  it('unwraps an observed Herder envelope before accepting the initial dispatch receipt', async () => {
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => tool === 'send_message'
+      ? observedHerderDelivery(`Native admission receipt: ${JSON.stringify({ admitted: true, inputId: args.inputId, turnId: 'turn-envelope' })}`)
+      : toolResult(tool, args));
+
+    const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('initial dispatch response missing');
+    expect(response.status).toBe(201);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'running', nativeTurnId: 'turn-envelope', dispatchReceiptText: expect.stringContaining('Native admission receipt:'),
+    });
+  });
+
   it('replays the exact stable operation after its own version writes and refuses a later card edit', async () => {
     const first = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
     if (!first) throw new Error('first task execution response missing');
@@ -795,6 +812,21 @@ describe('task execution API', () => {
     if (!replay) throw new Error('research continuation replay response missing');
     expect(replay.status).toBe(202);
     expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+  });
+
+  it('unwraps an observed Herder envelope before accepting a continuation receipt', async () => {
+    mocks.currentCard.value = researchCard();
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, meta: { nativeLastTurn: { turnId: 'parent-turn', status: 'completed' } } };
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => tool === 'send_message'
+      ? observedHerderDelivery(`Native admission receipt: ${JSON.stringify({ admitted: true, inputId: args.inputId, turnId: 'continuation-envelope' })}`)
+      : toolResult(tool, args));
+
+    const response = await PATCH(followUpRequest('continue-task', 8), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('continuation response missing');
+    expect(response.status).toBe(202);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]).toMatchObject({
+      phase: 'running', nativeTurnId: 'continuation-envelope',
+    });
   });
 
   it('lets a current project manager append one child to another actor legacy parent without remapping or cross-actor replay', async () => {
@@ -1348,9 +1380,9 @@ describe('task execution API', () => {
     const inputId = createHash('sha256').update(JSON.stringify({
       cardId: controlCardId, operationId: controlOperationId, action: 'direct', message,
     })).digest('hex');
-    mocks.callOwnerHerderTool.mockImplementation(async (_tool: string, args: Record<string, unknown>) => ({
-      content: [{ type: 'text', text: `Message reserved for the current turn of [${String(args.harness)}] ${String(args.sessionId)}; model observation is not yet confirmed.\nCurrent-turn context reservation receipt: ${JSON.stringify({ admitted: true, inputId })}` }],
-    }));
+    mocks.callOwnerHerderTool.mockImplementation(async (_tool: string, args: Record<string, unknown>) => observedHerderDelivery(
+      `Message reserved for the current turn of [${String(args.harness)}] ${String(args.sessionId)}; model observation is not yet confirmed.\nCurrent-turn context reservation receipt: ${JSON.stringify({ admitted: true, inputId })}`,
+    ));
 
     const response = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: 4, message }), {
       params: Promise.resolve({ id: controlCardId }),

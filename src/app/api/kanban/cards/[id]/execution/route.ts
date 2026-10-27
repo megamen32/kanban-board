@@ -43,6 +43,22 @@ function textOf(result: HerderToolResult): string {
     .map(part => part.text).join('\n').slice(0, 4096);
 }
 
+/** Herder nests delivery text with an optional assistant observation on observed replies. */
+function herderDeliveryText(result: HerderToolResult): string {
+  const text = result.content.filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+    .map(part => part.text).join('\n');
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (isRecord(parsed) && Object.keys(parsed).length === 2
+        && typeof parsed.delivery === 'string' && typeof parsed.response === 'string') {
+      return parsed.delivery.slice(0, 4096);
+    }
+  } catch {
+    // Native plain-text receipts are the normal non-observed form.
+  }
+  return text.slice(0, 4096);
+}
+
 function jsonFromTool(result: HerderToolResult): RecordValue | undefined {
   if (isRecord(result.structuredContent)) return result.structuredContent;
   const text = textOf(result);
@@ -541,7 +557,7 @@ async function startTaskFollowUp(
     const savedUnknown = saveContinuationProgress(context.card.id, context.tasksDir, parent.operationId, id, { phase: 'unknown' });
     return continuationResponse(savedUnknown ?? savedIntent, parent.operationId, id, 202);
   }
-  const dispatchText = textOf(dispatch);
+  const dispatchText = herderDeliveryText(dispatch);
   const receiptMatch = dispatchText.match(/(?:Native admission|Current-turn context reservation) receipt:\s*(\{[^\n]+\})/);
   let receipt: RecordValue | undefined;
   if (receiptMatch?.[1]) {
@@ -743,7 +759,7 @@ async function dispatchCreatedTask(input: {
     });
   }
 
-  const dispatchText = textOf(dispatchTool);
+  const dispatchText = herderDeliveryText(dispatchTool);
   const receiptMatch = dispatchText.match(/(?:Native admission|Current-turn context reservation) receipt:\s*(\{[^\n]+\})/);
   let dispatchReceipt: RecordValue | undefined;
   if (receiptMatch?.[1]) {
@@ -1359,7 +1375,7 @@ function sessionControlResponse(cardId: string, receipt: TaskExecutionReceipt, a
 
 function nativeDirectAccepted(result: HerderToolResult | undefined, receipt: TaskExecutionReceipt, inputId: string): boolean {
   if (!result || result.isError === true) return false;
-  const text = result.content.map(item => item.type === 'text' ? item.text ?? '' : '').join('\n');
+  const text = herderDeliveryText(result);
   const target = `[${receipt.harness}] ${receipt.nativeSessionId}`;
   const hasTarget = text.startsWith(`Message sent to ${target} (steering).`)
     || text.startsWith(`Message accepted by ${target}; native turn start is still being verified.`)

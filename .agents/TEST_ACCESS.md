@@ -62,3 +62,26 @@ behavior.
 `https://todo.bezrabotnyi.com/` is read-only during QA: push is enabled there.
 Never create, edit, delete, move, reorder, or assign public cards. Keep all writes
 inside the loopback QA project, never in the shared production work store.
+
+## Owner-authorized ExManager QA execution — 2026-10-27
+
+For the active ExManager full-cycle goal, the owner authorizes one ordinary,
+synthetic QA task through the existing isolated board, using only card
+`43687640-5245-4ec4-b29c-2b8970cb9d30` in project `UX QA 2026-10-26`. Do not
+create a duplicate fixture or copy it to production. The expected output is the
+three-row Markdown summary already on the card; all sample data is fictional,
+and no external messages, calls, notifications, production-card changes, or
+human acceptance are authorized by this QA operation.
+
+When an SSO check is needed, use the existing `testlogin` account with protected
+reference `sso.qa.admin-equivalent` and the documented fixed
+`/home/roomhacker/simple-cookie-auth/scripts/sso-qa-fill.py` stdin procedure.
+Do not use an Airlock password for shared SSO or repeat authentication after a
+confirmed login. The loopback UI on port 43330 remains the isolated UX fixture
+path; authentication and project membership are separate checks.
+
+The owner explicitly prohibited copying the broad production
+`AGENT_HERDER_HTTP_TOKEN` into QA. A Herder client token that exposes the general
+trusted-mesh MCP scope is not QA-scoped. Do not dispatch, call Stop, or claim a
+launch from QA until an existing route enforces project and tool scope at the
+server boundary. Preserve durable operation IDs and UNKNOWN/no-replay behavior.
