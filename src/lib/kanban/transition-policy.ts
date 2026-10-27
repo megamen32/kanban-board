@@ -106,6 +106,9 @@ export function validateTransition(
     executorResult,
     ...policyRequested
   } = requested;
+  const humanNextAction = context.origin === 'human-ui' && _requestedNextAction !== undefined
+    ? (typeof _requestedNextAction === 'string' ? _requestedNextAction.trim() || null : null)
+    : undefined;
 
   const changesWeeklyPlan = policyRequested.week !== undefined || policyRequested.bigRock !== undefined;
   if (changesWeeklyPlan && !hasWeeklyPlanAcceptance(context, policyRequested.week)) {
@@ -175,7 +178,10 @@ export function validateTransition(
     return { kind: 'rejected', reason: 'review_requires_explicit_decision' };
   }
 
-  let patch: KanbanCardUpdates = { ...policyRequested };
+  let patch: KanbanCardUpdates = {
+    ...policyRequested,
+    ...(humanNextAction !== undefined ? { nextAction: humanNextAction } : {}),
+  };
 
   if (changesWeeklyPlan) {
     patch = {

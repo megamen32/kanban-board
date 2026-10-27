@@ -82,6 +82,7 @@ export function buildPlanningMetadataUpdates(card: KanbanCard, form: PlanningMet
 export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, onReviewDecision, roles, projectOptions = [], relatedCards = [], username, onRefresh }: Props) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
+  const [nextAction, setNextAction] = useState(card.nextAction ?? '');
   const [blockerReason, setBlockerReason] = useState(card.blockerReason ?? '');
   const [column, setColumn] = useState(card.column);
   const [priority, setPriority] = useState<Priority>(card.priority);
@@ -100,6 +101,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   useEffect(() => {
     setTitle(card.title);
     setDescription(card.description);
+    setNextAction(card.nextAction ?? '');
     setBlockerReason(card.blockerReason ?? '');
     setColumn(card.column);
     setPriority(card.priority);
@@ -126,6 +128,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     const updates: KanbanUpdateRequest = {
       title: title.trim(),
       description: description.trim(),
+      nextAction: nextAction.trim() || null,
       blockerReason: blockerReason.trim() || null,
       column: column as KanbanColumn,
       priority,
@@ -207,6 +210,9 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
           </div>
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Срок
             <Input aria-label="Срок" type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} className="w-full min-w-0" />
+          </label>
+          <label className="col-span-2 min-w-0 space-y-1 text-xs text-muted-foreground sm:col-span-1 lg:col-span-2">Следующий шаг
+            <Input aria-label="Следующий шаг" value={nextAction} onChange={e => setNextAction(e.target.value)} maxLength={4000} placeholder="Например: запросить файл у поставщика" className="w-full min-w-0" />
           </label>
           {(column === 'blocked' || blockerReason) && <div className="col-span-2 min-w-0 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 sm:col-span-3 lg:col-span-6">
             <label className="text-sm font-medium" htmlFor="kanban-blocker-reason">Что блокирует продолжение?</label>

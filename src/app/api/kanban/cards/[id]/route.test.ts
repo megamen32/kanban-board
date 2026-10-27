@@ -109,6 +109,52 @@ describe('PATCH /api/kanban/cards/[id]', () => {
     expect(updateCard).toHaveBeenCalledWith('card-1', { blockerReason: 'Waiting for vendor file' }, undefined, '/scoped/work');
   });
 
+  it('persists a trimmed next action from an authenticated card edit', async () => {
+    validateTransition.mockReturnValue({ kind: 'accepted', patch: { nextAction: 'Ask vendor for the workbook' } });
+
+    const response = await PATCH(new NextRequest('http://localhost/api/kanban/cards/card-1', {
+      method: 'PATCH',
+      body: JSON.stringify({ nextAction: '  Ask vendor for the workbook  ', expectedVersion: existingCard.version }),
+      headers: { 'content-type': 'application/json' },
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+
+    expect(response.status).toBe(200);
+    expect(validateTransition).toHaveBeenCalledWith(
+      existingCard,
+      expect.objectContaining({ nextAction: 'Ask vendor for the workbook' }),
+      expect.objectContaining({ origin: 'human-ui', actor: 'nikita' }),
+    );
+    expect(updateCard).toHaveBeenCalledWith('card-1', { nextAction: 'Ask vendor for the workbook' }, existingCard.version, '/scoped/work');
+  });
+
+  it('rejects an overlong next action before policy evaluation or persistence', async () => {
+    const response = await PATCH(new NextRequest('http://localhost/api/kanban/cards/card-1', {
+      method: 'PATCH',
+      body: JSON.stringify({ nextAction: 'x'.repeat(4001) }),
+      headers: { 'content-type': 'application/json' },
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'next_action_invalid' });
+    expect(validateTransition).not.toHaveBeenCalled();
+    expect(updateCard).not.toHaveBeenCalled();
+  });
+
+  it('requires an authenticated human to edit the next action', async () => {
+    authenticated.current = null;
+
+    const response = await PATCH(new NextRequest('http://localhost/api/kanban/cards/card-1', {
+      method: 'PATCH',
+      body: JSON.stringify({ nextAction: 'Ask vendor for the workbook' }),
+      headers: { 'content-type': 'application/json' },
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'next_action_requires_authenticated_human' });
+    expect(validateTransition).not.toHaveBeenCalled();
+    expect(updateCard).not.toHaveBeenCalled();
+  });
+
   it('passes owner-authorized reviewer assignment through the expected-version update', async () => {
     findCardById.mockReturnValue({ ...existingCard, column: 'review', needsReview: true, requiresApprovalFrom: [] });
     validateTransition.mockReturnValue({ kind: 'accepted', patch: { requiresApprovalFrom: ['oleg'] } });

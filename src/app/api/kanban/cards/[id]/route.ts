@@ -102,6 +102,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         && (typeof body.blockerReason !== 'string' || body.blockerReason.length > 2000)) {
       return NextResponse.json({ error: 'blocker_reason_invalid' }, { status: 400 });
     }
+    if (body.nextAction !== undefined && body.nextAction !== null
+        && (typeof body.nextAction !== 'string' || body.nextAction.length > 4000)) {
+      return NextResponse.json({ error: 'next_action_invalid' }, { status: 400 });
+    }
+    if (body.nextAction !== undefined && !authenticatedIdentity) {
+      return NextResponse.json({ error: 'next_action_requires_authenticated_human' }, { status: 403 });
+    }
     let dueAt: string | null | undefined;
     try {
       dueAt = normalizeDueAt(body.dueAt, true);
@@ -117,6 +124,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     for (const [key, value] of Object.entries({
       title, description, column, priority, tags, order, project, assignees, dueAt,
       owner: body.owner,
+      nextAction: typeof body.nextAction === 'string' ? body.nextAction.trim() || null : body.nextAction,
       blockerReason: typeof body.blockerReason === 'string' ? body.blockerReason.trim() || null : body.blockerReason,
       shared: body.shared,
       planningVersion: body.planningVersion,

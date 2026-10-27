@@ -87,6 +87,13 @@ describe('kanban transition policy', () => {
       .toMatchObject({ kind: 'accepted', patch: { column: 'blocked', blockerReason: 'Ждём файл партнёра' } });
   });
 
+  test('allows the authenticated UI to edit the next action while ignoring automation-supplied text', () => {
+    expect(validateTransition(baseCard, { nextAction: 'Ask the supplier for the workbook' }, { origin: 'human-ui', actor: 'nikita' }))
+      .toMatchObject({ kind: 'accepted', patch: { nextAction: 'Ask the supplier for the workbook' } });
+    expect(validateTransition(baseCard, { nextAction: 'Caller supplied text' }, { origin: 'automation', actor: 'agent' }))
+      .toMatchObject({ kind: 'accepted', patch: {} });
+  });
+
   test('records manual confirmation for a human UI DONE transition', () => {
     const decision = validateTransition(baseCard, { column: 'done' }, {
       origin: 'human-ui',
