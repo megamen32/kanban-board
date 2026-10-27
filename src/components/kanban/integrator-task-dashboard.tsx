@@ -96,11 +96,14 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
   }
 
   function reviewerAssignmentButton(card: KanbanCard) {
-    return <Button size="sm" variant="outline" disabled={!canAssignReviewer}
-      title={canAssignReviewer ? 'Назначить человека, который примет результат' : 'Назначить проверяющего может только владелец доски'}
-      onClick={() => { if (!canAssignReviewer) return; setReviewerAssignmentCardId(card.id); setReviewerDraft(''); setReviewerError(null); }}>
-      <UserRoundCheck aria-hidden className="mr-1 h-3.5 w-3.5" />Назначить проверяющего
-    </Button>;
+    return <>
+      <Button size="sm" variant="outline" disabled={!canAssignReviewer}
+        title={canAssignReviewer ? 'Назначить человека, который примет результат' : 'Назначить проверяющего может только владелец доски'}
+        onClick={() => { if (!canAssignReviewer) return; setReviewerAssignmentCardId(card.id); setReviewerDraft(''); setReviewerError(null); }}>
+        <UserRoundCheck aria-hidden className="mr-1 h-3.5 w-3.5" />Назначить проверяющего
+      </Button>
+      {!canAssignReviewer && <span className="text-xs text-muted-foreground">Доступно владельцу доски.</span>}
+    </>;
   }
 
   function writeOperation(cardId: string, operation: StoredStartOperation): boolean {

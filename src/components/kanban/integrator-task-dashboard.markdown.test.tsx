@@ -54,6 +54,7 @@ describe('integrator task description rendering', () => {
 
     expect(html).toContain('Назначить проверяющего');
     expect(html).toContain('Назначить проверяющего может только владелец доски');
+    expect(html).toContain('Доступно владельцу доски.');
     expect(html).toContain('disabled="" title="Назначить проверяющего может только владелец доски"');
   });
 });
