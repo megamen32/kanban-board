@@ -1,11 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, CircleHelp, Clock3, Play } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowUpRight, CircleHelp, Clock3, Pencil, Play, UserRoundCheck } from 'lucide-react';
 import type { KanbanCard, TaskExecutionSessionControlPhase } from '@/lib/kanban/types';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import { MarkdownText } from './markdown-text';
+import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
 import {
   canRetrySameOperation,
   canContinueTask,
@@ -25,7 +27,13 @@ import {
 } from './integrator-dashboard-model';
 
 type StoredOperationState = StoredStartOperation | null | 'invalid';
-type Props = { cards: KanbanCard[]; onOpen: (card: KanbanCard) => void; onRefresh: () => Promise<unknown> | void };
+type Props = {
+  cards: KanbanCard[];
+  onOpen: (card: KanbanCard) => void;
+  onRefresh: () => Promise<unknown> | void;
+  canAssignReviewer: boolean;
+  onAssignReviewer: (cardId: string, reviewer: string, version: number) => Promise<KanbanCard | null>;
+};
 
 function safeSourceUrl(value: string): string | null {
   try {
@@ -40,7 +48,7 @@ async function sessionControlRequestHash(cardId: string, operationId: string, ac
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
+export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignReviewer, onAssignReviewer }: Props) {
   const [executions, setExecutions] = useState<Record<string, ExecutionSnapshot | null>>({});
   const [storedOperations, setStoredOperations] = useState<Record<string, StoredOperationState>>({});
   const [storageLoadedFor, setStorageLoadedFor] = useState<string | null>(null);
@@ -52,12 +60,40 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
   const [sessionControlHashes, setSessionControlHashes] = useState<Record<string, string | undefined>>({});
   const [sessionControlBusy, setSessionControlBusy] = useState<Record<string, boolean>>({});
   const [sessionControlPhase, setSessionControlPhase] = useState<Record<string, TaskExecutionSessionControlPhase | undefined>>({});
+  const [reviewerAssignmentCardId, setReviewerAssignmentCardId] = useState<string | null>(null);
+  const [reviewerDraft, setReviewerDraft] = useState('');
+  const [reviewerBusy, setReviewerBusy] = useState(false);
+  const [reviewerError, setReviewerError] = useState<string | null>(null);
   const inFlightStarts = useRef(new Set<string>());
   const inFlightSyncs = useRef(new Set<string>());
   const inFlightSessionControls = useRef(new Set<string>());
   const sessionControlDraftSequence = useRef<Record<string, number>>({});
   const counts = getDashboardCounts(cards);
   const cardIdsKey = cards.map(card => card.id).sort().join('\0');
+  const reviewerOptions = useMemo(() => [...new Set(cards.flatMap(card => [
+    card.owner ?? '', card.assignee ?? '', ...card.assignees, ...(card.requiresApprovalFrom ?? []),
+  ]).map(person => person.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru')), [cards]);
+
+  async function assignReviewer(card: KanbanCard) {
+    const reviewer = reviewerDraft.trim();
+    if (!reviewer || reviewerBusy) return;
+    setReviewerBusy(true);
+    setReviewerError(null);
+    try {
+      const saved = await onAssignReviewer(card.id, reviewer, card.version);
+      if (!saved) {
+        setReviewerError('Карточка изменилась. Обнови её и попробуй назначить проверяющего ещё раз.');
+        return;
+      }
+      setReviewerAssignmentCardId(null);
+      setReviewerDraft('');
+      await onRefresh();
+    } catch (error) {
+      setReviewerError(mutationErrorMessage(error));
+    } finally {
+      setReviewerBusy(false);
+    }
+  }
 
   function writeOperation(cardId: string, operation: StoredStartOperation): boolean {
     try {
@@ -335,7 +371,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
           <Summary label="Блокеры" value={counts.blocked} />
         </div>
 
-        {cards.length === 0 ? <p className="rounded-lg border p-6 text-sm text-muted-foreground">В текущем фильтре нет активных задач.</p> : (
+        {cards.length === 0 ? <p className="rounded-lg border p-6 text-sm text-muted-foreground">Нет задач с такими условиями. Проверь поиск и фильтры.</p> : (
           <div className="space-y-3">
             {cards.map(card => {
               const result = getLatestResult(card);
@@ -414,8 +450,29 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
                       <span>Выполнение: {execution ? executionSignalLabel(execution.state) : 'статус пока не подтверждён'}</span>
                     </div>
                     {execution?.lastProgress && <p className="mt-2 text-sm"><span className="text-muted-foreground">Последняя сохранённая сводка:</span> {execution.lastProgress.summary}</p>}
-                    {waitLabel && <p className="mt-2 text-sm"><span className="text-muted-foreground">Ждём:</span> {waitLabel}</p>}
-                    {card.column === 'review' && card.needsReview && <p className="mt-2 text-sm"><span className="text-muted-foreground">Проверяет:</span> {approvers.join(', ') || 'проверяющий не назначен'}</p>}
+                    {waitLabel && <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                      <p><span className="text-muted-foreground">Ждём:</span> {waitLabel}</p>
+                      {humanWait && approvers.length === 0 && canAssignReviewer && <Button size="sm" variant="outline" onClick={() => { setReviewerAssignmentCardId(card.id); setReviewerDraft(''); setReviewerError(null); }}>
+                        <UserRoundCheck aria-hidden className="mr-1 h-3.5 w-3.5" />Назначить проверяющего
+                      </Button>}
+                    </div>}
+                    {card.column === 'review' && card.needsReview && <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                      <p><span className="text-muted-foreground">Проверяет:</span> {approvers.join(', ') || 'проверяющий не назначен'}</p>
+                      {approvers.length === 0 && canAssignReviewer && <Button size="sm" variant="outline" onClick={() => { setReviewerAssignmentCardId(card.id); setReviewerDraft(''); setReviewerError(null); }}>
+                        <UserRoundCheck aria-hidden className="mr-1 h-3.5 w-3.5" />Назначить проверяющего
+                      </Button>}
+                    </div>}
+                    {reviewerAssignmentCardId === card.id && <form className="mt-2 max-w-lg rounded-md border bg-background p-3" onSubmit={event => { event.preventDefault(); void assignReviewer(card); }}>
+                      <label htmlFor={`reviewer-${card.id}`} className="text-sm font-medium">Кто проверит?</label>
+                      <Input id={`reviewer-${card.id}`} className="mt-2" aria-label="Проверяющий" list={`reviewer-options-${card.id}`} value={reviewerDraft} onChange={event => setReviewerDraft(event.target.value)} placeholder="Выбери имя или введи логин" autoComplete="off" />
+                      <datalist id={`reviewer-options-${card.id}`}>{reviewerOptions.map(person => <option key={person} value={person} />)}</datalist>
+                      <p className="mt-1 text-xs text-muted-foreground">Список предложен по людям, которые уже встречаются в карточках.</p>
+                      {reviewerError && <p role="alert" className="mt-2 text-sm text-destructive">{reviewerError}</p>}
+                      <div className="mt-3 flex gap-2">
+                        <Button type="submit" size="sm" disabled={!reviewerDraft.trim() || reviewerBusy}>{reviewerBusy ? 'Назначаю…' : 'Назначить'}</Button>
+                        <Button type="button" size="sm" variant="ghost" disabled={reviewerBusy} onClick={() => { setReviewerAssignmentCardId(null); setReviewerDraft(''); setReviewerError(null); }}>Отмена</Button>
+                      </div>
+                    </form>}
                     {execution?.waitReason && !humanWait && <p className="mt-2 text-sm"><span className="text-muted-foreground">Что мешает продолжить:</span> {execution.waitReason}</p>}
                     {execution?.nextAction && <p className="mt-2 text-sm"><span className="text-muted-foreground">Следующий шаг исполнителя:</span> {execution.nextAction}</p>}
                     {execution?.sessionUrl && isVerifiedSessionUrl(execution.sessionUrl) && <a className="mt-2 inline-flex items-center gap-1 text-sm underline" href={execution.sessionUrl} target="_blank" rel="noreferrer">Открыть сессию исполнителя <ArrowUpRight aria-hidden className="h-3.5 w-3.5" /></a>}
@@ -427,6 +484,9 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh }: Props) {
                       </div>)}
                     </div>}
                     <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <Button size="sm" variant="outline" onClick={() => onOpen(card)}>
+                        <Pencil aria-hidden className="mr-1 h-3.5 w-3.5" />Изменить
+                      </Button>
                       <Button size="sm" disabled={!canStart} onClick={() => void startTask(card)}>
                         <Play aria-hidden className="mr-1 h-3.5 w-3.5" />
                         {startBusy[card.id] ? 'Запуск…' : 'Запустить задачу'}

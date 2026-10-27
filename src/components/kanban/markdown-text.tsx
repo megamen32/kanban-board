@@ -22,9 +22,9 @@ export const MarkdownText = memo(function MarkdownText({ text, className }: Prop
     <div className={cn('min-w-0 break-words leading-snug [&>*:first-child]:mt-0 [&>*:not(:first-child)]:mt-1.5', className)}>
       <ReactMarkdown
         components={{
-          h1: ({ children }) => <h1 className="text-sm font-semibold leading-snug">{children}</h1>,
-          h2: ({ children }) => <h2 className="text-sm font-semibold leading-snug">{children}</h2>,
-          h3: ({ children }) => <h3 className="text-xs font-semibold leading-snug">{children}</h3>,
+          h1: ({ children }) => <h1 className="text-lg font-semibold leading-snug">{children}</h1>,
+          h2: ({ children }) => <h2 className="text-base font-semibold leading-snug">{children}</h2>,
+          h3: ({ children }) => <h3 className="text-sm font-semibold leading-snug">{children}</h3>,
           h4: ({ children }) => <h4 className="text-xs font-medium leading-snug">{children}</h4>,
           h5: ({ children }) => <h5 className="text-xs font-medium leading-snug">{children}</h5>,
           h6: ({ children }) => <h6 className="text-xs font-medium leading-snug">{children}</h6>,

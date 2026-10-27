@@ -109,6 +109,35 @@ describe('PATCH /api/kanban/cards/[id]', () => {
     expect(updateCard).toHaveBeenCalledWith('card-1', { blockerReason: 'Waiting for vendor file' }, undefined, '/scoped/work');
   });
 
+  it('passes owner-authorized reviewer assignment through the expected-version update', async () => {
+    findCardById.mockReturnValue({ ...existingCard, column: 'review', needsReview: true, requiresApprovalFrom: [] });
+    validateTransition.mockReturnValue({ kind: 'accepted', patch: { requiresApprovalFrom: ['oleg'] } });
+
+    const response = await PATCH(new NextRequest('http://localhost/api/kanban/cards/card-1', {
+      method: 'PATCH',
+      body: JSON.stringify({ requiresApprovalFrom: ['oleg'], expectedVersion: existingCard.version }),
+      headers: { 'content-type': 'application/json' },
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+
+    expect(response.status).toBe(200);
+    expect(validateTransition).toHaveBeenCalledWith(
+      expect.objectContaining({ column: 'review', needsReview: true }),
+      expect.objectContaining({ requiresApprovalFrom: ['oleg'] }),
+      expect.objectContaining({
+        ownerAuthorization: {
+          actor: 'nikita',
+          evidence: expect.objectContaining({ type: 'reviewer-assignment', origin: 'rest', actor: 'nikita' }),
+        },
+      }),
+    );
+    expect(updateCard).toHaveBeenCalledWith(
+      'card-1',
+      { requiresApprovalFrom: ['oleg'] },
+      existingCard.version,
+      '/scoped/work',
+    );
+  });
+
   it('returns 400 and does not persist an inferred assignee change', async () => {
     validateTransition.mockReturnValue({ kind: 'rejected', reason: 'assignee_change_requires_owner_authorization' });
 

@@ -81,10 +81,15 @@ export function validateTransition(
     'column', 'needsReview', 'requiresApprovalFrom', 'completedBy', 'completedAt',
     'completionEvidence', 'reviewHistory', 'resultHistory', 'executorResult',
   ];
+  const ownerReviewerAssignmentOnly = context.origin === 'human-ui'
+    && hasOwnerAuthorization(context)
+    && Object.keys(requested).length === 1
+    && Object.hasOwn(requested, 'requiresApprovalFrom');
   // Review-state decisions use the authenticated human review endpoint and its
-  // expected-version CAS. Ordinary MCP/UI updates cannot move or rewrite that
-  // state, even when the caller has a separate owner-command confirmation.
-  if (waitingForHumanReview && reviewStateKeys.some((key) => Object.hasOwn(requested, key))) {
+  // expected-version CAS. The board owner may change only the designated reviewer;
+  // accepting, rejecting, completing, and all other review-state writes remain gated.
+  if (waitingForHumanReview && !ownerReviewerAssignmentOnly
+    && reviewStateKeys.some((key) => Object.hasOwn(requested, key))) {
     return { kind: 'rejected', reason: 'review_requires_explicit_decision' };
   }
 

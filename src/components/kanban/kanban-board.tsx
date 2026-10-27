@@ -113,14 +113,14 @@ export function KanbanBoard() {
     if (initial.assignee) setAssignee(initial.assignee);
     if (initial.search) setSearch(initial.search);
     if (username === NIKITA_ACTOR && initial.workspaceView) setWorkspaceView(initial.workspaceView);
-    if (initial.layout) setView(initial.layout);
+    if (initial.layout) setView(isMobile ? 'list' : initial.layout);
     if (initial.tab && (initial.tab !== 'balance' || username === NIKITA_ACTOR)) setPlanningTab(initial.tab);
     if (initial.attention) setAttention(initial.attention);
     if (initial.closedKind) setClosedKind(initial.closedKind);
     if (initial.inboxOnly) setInboxOnly(true);
     if (initial.tab === 'week') void fetchWeeklyDraft();
     setUrlReady(true);
-  }, [fetchWeeklyDraft, identityChecked, username]);
+  }, [fetchWeeklyDraft, identityChecked, isMobile, username]);
 
   useEffect(() => {
     if (!urlReady) return;
@@ -191,6 +191,10 @@ export function KanbanBoard() {
     return updateCard(id, updates, version);
   }, [updateCard]);
 
+  const handleAssignReviewer = useCallback(async (id: string, reviewer: string, version: number) => {
+    return updateCard(id, { requiresApprovalFrom: [reviewer] }, version);
+  }, [updateCard]);
+
   const handleDelete = useCallback(async (id: string) => deleteCard(id), [deleteCard]);
   const handleReviewDecision = useCallback(async (id: string, action: HumanReviewAction, note: string, version: number) => {
     const response = await fetch(`/api/kanban/cards/${encodeURIComponent(id)}/review`, {
@@ -236,6 +240,7 @@ export function KanbanBoard() {
   const handlePlanningTabChange = (value: string) => {
     const next = value as PlanningTab;
     setPlanningTab(next);
+    setFiltersOpen(false);
     setAttention('all');
     if (next === 'closed') setInboxOnly(false);
     if (next === 'week' && !weeklyDraft) void fetchWeeklyDraft();
@@ -270,10 +275,10 @@ export function KanbanBoard() {
             </label>
             <div className="ml-auto flex shrink-0 items-center gap-0.5">
               <div className="hidden items-center gap-0.5 md:flex">{renderAttentionFilters()}</div>
-              <div className="flex items-center gap-0.5 rounded-md border p-0.5">
-                <Button aria-label="Доска" title="Доска" aria-pressed={view === 'kanban'} variant={view === 'kanban' ? 'secondary' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setView('kanban')}><Columns3 aria-hidden className="h-4 w-4" /></Button>
-                <Button aria-label="Блокнот" title="Блокнот" aria-pressed={view === 'list'} variant={view === 'list' ? 'secondary' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setView('list')}><ListTodo aria-hidden className="h-4 w-4" /></Button>
-              </div>
+              {planningTab === 'execution' && !isMobile && <div className="flex items-center gap-0.5 rounded-md border p-0.5">
+                <Button aria-label="Канбан" title="Канбан" aria-pressed={view === 'kanban'} variant={view === 'kanban' ? 'secondary' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setView('kanban')}><Columns3 aria-hidden className="h-4 w-4" /></Button>
+                <Button aria-label="Список" title="Список" aria-pressed={view === 'list'} variant={view === 'list' ? 'secondary' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setView('list')}><ListTodo aria-hidden className="h-4 w-4" /></Button>
+              </div>}
               <Button aria-label="Обновить" title="Обновить" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={refresh}><RotateCw aria-hidden className="h-3.5 w-3.5" /></Button>
             </div>
           </div>
@@ -327,7 +332,7 @@ export function KanbanBoard() {
             </TabsList>
           </div>
           <TabsContent value="dashboard" className="order-1 min-h-0 min-w-0 overflow-y-auto md:order-2">
-            <IntegratorTaskDashboard cards={derivedCards} onOpen={setSelectedCard} onRefresh={refresh} />
+            <IntegratorTaskDashboard cards={derivedCards} onOpen={setSelectedCard} onRefresh={refresh} canAssignReviewer={isSuperAdmin} onAssignReviewer={handleAssignReviewer} />
           </TabsContent>
           <TabsContent value="execution" className="order-1 min-h-0 min-w-0 overflow-y-auto md:order-2">
             {view === 'list' ? (

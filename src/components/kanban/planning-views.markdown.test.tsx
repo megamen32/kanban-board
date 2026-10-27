@@ -24,7 +24,7 @@ describe('planning card list Markdown and status labels', () => {
       cards: [card], onOpen: () => undefined, empty: 'Нет задач',
     }));
 
-    expect(html).toContain('<h2 class="text-sm font-semibold leading-snug">Срочно</h2>');
+    expect(html).toContain('<h2 class="text-base font-semibold leading-snug">Срочно</h2>');
     expect(html).toContain('<strong class="font-semibold">сегодня</strong>');
     expect(html).toContain('Входящие');
     expect(html).toContain('Срочно');

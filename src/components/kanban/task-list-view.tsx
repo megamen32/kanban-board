@@ -70,7 +70,7 @@ export function TaskListView({ cards, authoritativeCards = cards, highlightCardI
       <div className="mx-auto max-w-2xl">
         {statusError && <p role="alert" className="mb-3 rounded-md border p-3 text-sm text-destructive">{statusError}</p>}
         {sorted.length === 0 && (
-          <div className="py-12 text-center text-sm text-muted-foreground">Задач пока нет</div>
+          <div className="py-12 text-center text-sm text-muted-foreground">Нет задач с такими условиями. Проверь поиск и фильтры.</div>
         )}
         <div className="divide-y">
           {sorted.map(card => {

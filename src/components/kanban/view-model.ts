@@ -122,8 +122,9 @@ export function searchCards(cards: KanbanCard[], query: string): KanbanCard[] {
   const terms = normalize(query).trim().split(/\s+/).filter(Boolean);
   if (terms.length === 0) return cards;
   return cards.filter(card => {
-    const text = normalize([card.title, card.description, card.project, card.blockerReason ?? '', card.source ?? '',
-      ...card.tags, ...card.assignees, card.assignee ?? ''].join(' '));
+    const text = normalize([card.title, card.description, card.project, card.owner ?? '', card.accountable ?? '',
+      card.nextAction ?? '', card.blockerReason ?? '', card.source ?? '',
+      ...card.tags, ...card.assignees, ...(card.waitingFor ?? []), ...(card.requiresApprovalFrom ?? []), card.assignee ?? ''].join(' '));
     return terms.every(term => text.includes(term));
   });
 }

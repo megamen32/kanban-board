@@ -55,6 +55,31 @@ describe('kanban transition policy', () => {
       .toMatchObject({ kind: 'rejected', reason: 'reviewer_not_authorized' });
   });
 
+  test('owner may assign a reviewer without changing a card already waiting for review', () => {
+    const waiting: KanbanCard = { ...baseCard, column: 'review', needsReview: true, requiresApprovalFrom: [] };
+    const ownerContext = {
+      origin: 'human-ui' as const,
+      actor: 'nikita',
+      ownerAuthorization: {
+        actor: 'nikita',
+        evidence: { type: 'reviewer-assignment', origin: 'rest', actor: 'nikita' },
+      },
+    };
+
+    expect(validateTransition(waiting, { requiresApprovalFrom: ['oleg'] }, ownerContext)).toMatchObject({
+      kind: 'accepted',
+      patch: { requiresApprovalFrom: ['oleg'] },
+    });
+    expect(validateTransition(waiting, { requiresApprovalFrom: ['oleg'], description: 'changed' }, ownerContext)).toMatchObject({
+      kind: 'rejected',
+      reason: 'review_requires_explicit_decision',
+    });
+    expect(validateTransition(waiting, { requiresApprovalFrom: ['oleg'] }, { origin: 'human-ui', actor: 'oleg' })).toMatchObject({
+      kind: 'rejected',
+      reason: 'review_requires_explicit_decision',
+    });
+  });
+
   test('requires a separate blocker explanation before entering the blocked state', () => {
     expect(validateTransition(baseCard, { column: 'blocked' }, { origin: 'human-ui', actor: 'nikita' }))
       .toMatchObject({ kind: 'rejected', reason: 'blocked_reason_required' });

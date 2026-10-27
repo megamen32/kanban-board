@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterCards, getAssigneeOptions, getPlanningTabCards, getPrimaryBoardLaneCards, getProjectOptions, isSmartNotesInbox } from './view-model';
+import { filterCards, getAssigneeOptions, getPlanningTabCards, getPrimaryBoardLaneCards, getProjectOptions, isSmartNotesInbox, searchCards } from './view-model';
 import type { KanbanCard } from '@/lib/kanban/types';
 
 const card = (overrides: Partial<KanbanCard> = {}): KanbanCard => ({
@@ -29,6 +29,18 @@ describe('kanban view model', () => {
     const cards = [card(), card({ id: '2', project: 'Xcode' })];
     expect(filterCards(cards, 'Hermes').map(item => item.id)).toEqual(['1']);
     expect(filterCards(cards, 'all')).toHaveLength(2);
+  });
+
+  it('finds people by card owner, assignee and reviewer', () => {
+    const cards = [
+      card({ id: 'owner', owner: 'nikita' }),
+      card({ id: 'assignee', assignees: ['oleg'] }),
+      card({ id: 'reviewer', requiresApprovalFrom: ['marina'] }),
+    ];
+
+    expect(searchCards(cards, 'nikita').map(item => item.id)).toEqual(['owner']);
+    expect(searchCards(cards, 'oleg').map(item => item.id)).toEqual(['assignee']);
+    expect(searchCards(cards, 'marina').map(item => item.id)).toEqual(['reviewer']);
   });
 
   it('returns unique sorted roles from card assignees', () => {
