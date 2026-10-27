@@ -12,6 +12,7 @@ import { validateTransition } from '@/lib/kanban/transition-policy';
 
 const VERIFIED_BOARD_PROJECT = 'Олег и Никита';
 const QA_BOARD_PROJECT = 'ExManager QA';
+const QA_UX_PROJECT = 'UX QA 2026-10-26';
 
 function boardReadProject(identity: { username: string; scope: 'work' | 'personal' }): string | null {
   if (identity.scope !== 'work') return null;
@@ -27,10 +28,12 @@ function mayReadAnyBoardProject(identity: { username: string; scope: 'work' | 'p
   return boardReadProject(identity) !== null;
 }
 
-function qaTestloginSelfReadAllowed(identity: { username: string; scope: 'work' | 'personal' } | null): identity is { username: 'testlogin'; scope: 'work' } {
-  return process.env.KANBAN_QA_ANONYMOUS_READS === '1'
-    && identity?.scope === 'work'
-    && identity.username === 'testlogin';
+function qaAnonymousReadAllowed(req: NextRequest, identity: { username: string; scope: 'work' | 'personal' } | null): boolean {
+  const forwardedHost = req.headers.get('x-forwarded-host')?.split(',')[0].trim();
+  const requestHost = forwardedHost || req.nextUrl.host;
+  const hostAllowed = ['127.0.0.1:43330', 'localhost:43330'].includes(requestHost);
+  const actorAllowed = identity === null || (identity.scope === 'work' && identity.username === 'testlogin');
+  return process.env.KANBAN_QA_ANONYMOUS_READS === '1' && hostAllowed && actorAllowed;
 }
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -65,15 +68,18 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     }
   }
   const identity = managerAuthorized ? { username: 'manager', scope: 'work' as const } : await boardHumanIdentityFromRequest(req);
-  if (!managerAuthorized && !identity) return NextResponse.json({ error: 'not found' }, { status: 404 });
-  const qaSelfRead = qaTestloginSelfReadAllowed(identity);
-  if (!managerAuthorized && !mayReadAnyBoardProject(identity!) && !qaSelfRead) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  const qaRead = qaAnonymousReadAllowed(req, identity);
+  if (!managerAuthorized && !identity && !qaRead) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  if (!managerAuthorized && identity && !mayReadAnyBoardProject(identity) && !qaRead) return NextResponse.json({ error: 'not found' }, { status: 404 });
   startDueReminderScheduler();
   const tasksDir = tasksDirForScope(identity?.scope ?? 'work');
   const { id } = await params;
   const card = findCardById(id, tasksDir);
   if (!card) return NextResponse.json({ error: 'not found' }, { status: 404 });
-  if (!managerAuthorized && !mayReadBoardProject(identity!, card.project) && !(qaSelfRead && card.owner?.trim() === identity!.username)) {
+  const canReadCard = qaRead
+    ? card.project.trim() === QA_UX_PROJECT
+    : identity !== null && mayReadBoardProject(identity, card.project);
+  if (!managerAuthorized && !canReadCard) {
     return NextResponse.json({ error: 'not found' }, { status: 404 });
   }
   return NextResponse.json({ card });

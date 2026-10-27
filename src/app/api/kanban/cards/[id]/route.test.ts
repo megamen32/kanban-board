@@ -307,26 +307,29 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(await response.json()).toEqual({ card: { ...existingCard, project: 'ExManager QA' } });
   });
 
-  it('lets verified testlogin read its own card only on the isolated QA host', async () => {
-    authenticated.current = { username: 'testlogin', scope: 'work' };
+  it('allows anonymous loopback QA reads only for the synthetic UX project', async () => {
+    authenticated.current = null;
     vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
-    const ownCard = { ...existingCard, owner: 'testlogin', project: 'UX QA 2026-10-26' };
-    findCardById.mockReturnValue(ownCard);
+    const qaCard = { ...existingCard, owner: 'nikita', project: 'UX QA 2026-10-26' };
+    findCardById.mockReturnValue(qaCard);
 
-    const response = await GET(new NextRequest('http://qa-upstream/api/kanban/cards/card-1'), {
+    const response = await GET(new NextRequest('http://127.0.0.1:3001/api/kanban/cards/card-1', {
+      headers: { 'x-forwarded-host': '127.0.0.1:43330' },
+    }), {
       params: Promise.resolve({ id: 'card-1' }),
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ card: ownCard });
+    expect(await response.json()).toEqual({ card: qaCard });
     expect(findCardById).toHaveBeenCalledWith('card-1', '/scoped/work');
   });
 
-  it('does not let testlogin read another owner card on the QA host', async () => {
-    authenticated.current = { username: 'testlogin', scope: 'work' };
-    findCardById.mockReturnValue({ ...existingCard, owner: 'nikita', project: 'UX QA 2026-10-26' });
+  it('denies QA reads for cards outside the synthetic UX project', async () => {
+    authenticated.current = null;
+    vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
+    findCardById.mockReturnValue({ ...existingCard, project: 'Олег и Никита' });
 
-    const response = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards/card-1'), {
+    const response = await GET(new NextRequest('http://127.0.0.1:43330/api/kanban/cards/card-1'), {
       params: Promise.resolve({ id: 'card-1' }),
     });
 

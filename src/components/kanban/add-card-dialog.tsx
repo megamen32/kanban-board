@@ -27,8 +27,8 @@ export interface PlanningMetadataForm {
   parent: string;
 }
 
-/** Converts the editable planning controls into the server-facing card fields. */
-export function buildPlanningMetadataCreate(form: PlanningMetadataForm) {
+/** Converts the editable planning and blocker controls into the server-facing card fields. */
+export function buildPlanningMetadataCreate(form: PlanningMetadataForm, blockerReason?: string) {
   return {
     type: form.type,
     ...(form.role ? { role: form.role } : {}),
@@ -40,6 +40,7 @@ export function buildPlanningMetadataCreate(form: PlanningMetadataForm) {
     requiresApprovalFrom: splitPeople(form.requiresApprovalFrom),
     ...(form.suggestedAssignee.trim() ? { suggestedAssignee: form.suggestedAssignee.trim() } : {}),
     ...(form.parent.trim() ? { parent: form.parent.trim() } : {}),
+    ...(blockerReason?.trim() ? { blockerReason: blockerReason.trim() } : {}),
   };
 }
 
@@ -66,6 +67,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
   const [tags, setTags] = useState<string[]>([]);
   const [project, setProject] = useState('');
   const [assignees, setAssignees] = useState('');
+  const [blockerReason, setBlockerReason] = useState('');
   const [dueAt, setDueAt] = useState('');
   const [planning, setPlanning] = useState<PlanningMetadataForm>({ type: 'action', role: '', important: false, urgent: false, scheduledAt: '', todayRank: '', waitingFor: '', requiresApprovalFrom: '', suggestedAssignee: '', parent: '' });
   const [tagInput, setTagInput] = useState('');
@@ -75,7 +77,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
   const [assigneeBlocked, setAssigneeBlocked] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const alertRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => { if (open) { setColumn(defaultColumn); setProject(defaultProject); setError(null); setAssigneeBlocked(false); setAdvancedOpen(false); } }, [open, defaultColumn, defaultProject]);
+  useEffect(() => { if (open) { setColumn(defaultColumn); setProject(defaultProject); setBlockerReason(''); setError(null); setAssigneeBlocked(false); setAdvancedOpen(false); } }, [open, defaultColumn, defaultProject]);
 
   // A refusal has to reach the user without hunting for it under the fold.
   useEffect(() => {
@@ -87,20 +89,21 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
   const typedAssignees = () => assignees.split(',').map(value => value.trim()).filter(Boolean);
 
   const submit = async (withoutAssignees = false) => {
-    if (!title.trim() || !project.trim() || submittingRef.current) return;
+    if (!title.trim() || !project.trim() || (column === 'blocked' && !blockerReason.trim()) || submittingRef.current) return;
     submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     setAssigneeBlocked(false);
     const requestedAssignees = typedAssignees();
     try {
-    const saved = await onCreate(title.trim(), description.trim(), column, priority, tags, project.trim(), withoutAssignees ? [] : requestedAssignees, fromDateTimeLocalValue(dueAt), buildPlanningMetadataCreate(planning));
+    const saved = await onCreate(title.trim(), description.trim(), column, priority, tags, project.trim(), withoutAssignees ? [] : requestedAssignees, fromDateTimeLocalValue(dueAt), buildPlanningMetadataCreate(planning, column === 'blocked' ? blockerReason : undefined));
     if (!saved) { setError('Создание не подтверждено. Введённые данные остались в форме.'); return; }
     setTitle('');
     setDescription('');
     setTags([]);
     setProject('');
     setAssignees('');
+    setBlockerReason('');
     setDueAt('');
     setTagInput('');
     setAdvancedOpen(false);
@@ -218,6 +221,20 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
             </div>
           </div>
 
+          {column === 'blocked' && <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+            <label htmlFor="create-blocker-reason" className="text-sm font-medium">Что блокирует продолжение? *</label>
+            <Textarea
+              id="create-blocker-reason"
+              value={blockerReason}
+              onChange={event => setBlockerReason(event.target.value)}
+              required
+              rows={2}
+              maxLength={2000}
+              placeholder="Например: ждём тестовый файл от партнёра."
+            />
+            <p className="text-xs text-muted-foreground">Причина сохранится отдельно от описания задачи.</p>
+          </div>}
+
           <div className="space-y-3">
             <Button
               type="button"
@@ -296,7 +313,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
-          <Button type="button" onClick={() => void submit()} disabled={!title.trim() || !project.trim() || submitting}>
+          <Button type="button" onClick={() => void submit()} disabled={!title.trim() || !project.trim() || (column === 'blocked' && !blockerReason.trim()) || submitting}>
             {submitting ? 'Сохраняю…' : 'Создать'}
           </Button>
         </DialogFooter>

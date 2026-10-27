@@ -9,7 +9,7 @@
   `127.0.0.1:43330`. Push is disabled (`GET /api/notifications/public-key`
   returns 503). Use only the project `UX QA 2026-10-26` and synthetic cards.
 - QA-only anonymous board reads are enabled for this loopback host; they expose
-  only this container's synthetic store. `/api/auth/session` still returns 401:
+  only the synthetic `UX QA 2026-10-26` project in this container. `/api/auth/session` still returns 401:
   this is expected and does not create or impersonate a human session.
 - For native `agent-browser`, use a fresh short session and namespace, set
   `AGENT_BROWSER_ALLOWED_DOMAINS='127.0.0.1'`, unset `AGENT_BROWSER_ARGS`, and

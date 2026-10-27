@@ -94,6 +94,37 @@ describe('POST /api/kanban/cards', () => {
     );
   });
 
+  it('validates and persists the explicit blocker reason when creating a blocked card', async () => {
+    validateTransition.mockReturnValue({
+      kind: 'accepted',
+      patch: { column: 'blocked', blockerReason: 'Waiting for the partner test file.' },
+    });
+
+    const response = await POST(new NextRequest('http://localhost/api/kanban/cards', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: 'Prepare workbook report',
+        project: 'UX QA 2026-10-26',
+        column: 'blocked',
+        blockerReason: 'Waiting for the partner test file.',
+      }),
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    expect(response.status).toBe(201);
+    expect(validateTransition).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ column: 'blocked', blockerReason: 'Waiting for the partner test file.' }),
+      { origin: 'human-ui', actor: 'nikita', isCreation: true },
+    );
+    expect(updateCard).toHaveBeenCalledWith(
+      'created',
+      expect.objectContaining({ column: 'blocked', blockerReason: 'Waiting for the partner test file.' }),
+      undefined,
+      '/scoped/work',
+    );
+  });
+
   it('passes creation context so an authenticated human may choose initial assignees', async () => {
     validateTransition.mockReturnValue({ kind: 'accepted', patch: { assignees: ['marina'] } });
     const response = await POST(new NextRequest('http://localhost/api/kanban/cards', {
@@ -299,21 +330,40 @@ describe('GET /api/kanban/cards', () => {
     expect(await response.json()).toEqual({ cards: [qaCard], projects: [{ id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }] });
   });
 
-  it('lets the verified QA testlogin read only its own cards on the isolated QA host', async () => {
-    authenticated.current = { username: 'testlogin', scope: 'work' };
+  it('exposes only the synthetic UX project to anonymous loopback QA reads', async () => {
+    authenticated.current = null;
     vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
-    const own = { ...qaCard, owner: 'testlogin' };
-    const anotherOwner = { ...qaCard, id: 'another-owner-card', owner: 'nikita' };
+    const own = { ...qaCard, project: 'UX QA 2026-10-26', owner: 'testlogin' };
+    const anotherOwner = { ...qaCard, id: 'another-owner-card', project: 'UX QA 2026-10-26', owner: 'nikita' };
     getAllCards.mockReturnValue([own, anotherOwner, alpha]);
+    listProjects.mockReturnValue([
+      { id: 'ux-qa-project', externalKey: 'ux-qa', name: 'UX QA 2026-10-26' },
+      { id: 'other-project', externalKey: 'other', name: 'Alpha' },
+    ]);
 
-    const response = await GET(new NextRequest('http://qa-upstream/api/kanban/cards'));
+    const response = await GET(new NextRequest('http://127.0.0.1:3001/api/kanban/cards', {
+      headers: { 'x-forwarded-host': '127.0.0.1:43330' },
+    }));
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      cards: [own],
-      projects: [{ id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }],
+      cards: [own, anotherOwner],
+      projects: [{ id: 'ux-qa-project', externalKey: 'ux-qa', name: 'UX QA 2026-10-26' }],
     });
     expect(tasksDirForScope).toHaveBeenCalledWith('work');
+  });
+
+  it('keeps QA anonymous reads off unrelated hosts and for unrelated identities', async () => {
+    vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
+    authenticated.current = null;
+    const unrelatedHost = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
+    expect(await unrelatedHost.json()).toEqual({ cards: [], projects: [] });
+    expect(getAllCards).not.toHaveBeenCalled();
+
+    authenticated.current = { username: 'other-user', scope: 'work' };
+    const unrelatedIdentity = await GET(new NextRequest('http://127.0.0.1:43330/api/kanban/cards'));
+    expect(await unrelatedIdentity.json()).toEqual({ cards: [], projects: [] });
+    expect(getAllCards).not.toHaveBeenCalled();
   });
 
   it('does not enable testlogin self-read when the QA runtime flag is absent', async () => {
@@ -341,19 +391,6 @@ describe('GET /api/kanban/cards', () => {
     identity.current = { username: 'nikita', scope: 'work' };
     authenticated.current = null;
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [], projects: [] });
-    expect(getAllCards).not.toHaveBeenCalled();
-    expect(listProjects).not.toHaveBeenCalled();
-  });
-
-  it('does not expose all work projects to anonymous loopback requests in QA mode', async () => {
-    identity.current = { username: 'anonymous', scope: 'work' };
-    authenticated.current = null;
-    vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
-
-    const response = await GET(new NextRequest('http://127.0.0.1:43330/api/kanban/cards'));
-
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ cards: [], projects: [] });
     expect(getAllCards).not.toHaveBeenCalled();

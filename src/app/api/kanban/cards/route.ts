@@ -13,6 +13,7 @@ import { NIKITA_ACTOR } from '@/lib/kanban/transition-policy';
 
 const VERIFIED_BOARD_PROJECT = 'Олег и Никита';
 const QA_BOARD_PROJECT = 'ExManager QA';
+const QA_UX_PROJECT = 'UX QA 2026-10-26';
 
 function boardReadProject(identity: { username: string; scope: 'work' | 'personal' }): string | null {
   if (identity.scope !== 'work') return null;
@@ -20,11 +21,13 @@ function boardReadProject(identity: { username: string; scope: 'work' | 'persona
   return ['nikita', 'oleg'].includes(identity.username) ? VERIFIED_BOARD_PROJECT : null;
 }
 
-// The QA login can read only its own cards when the isolated QA runtime opts in.
-function qaTestloginSelfReadAllowed(identity: { username: string; scope: 'work' | 'personal' } | null): identity is { username: 'testlogin'; scope: 'work' } {
-  return process.env.KANBAN_QA_ANONYMOUS_READS === '1'
-    && identity?.scope === 'work'
-    && identity.username === 'testlogin';
+// The isolated loopback QA runtime exposes only its synthetic UX project.
+function qaAnonymousReadAllowed(req: NextRequest, identity: { username: string; scope: 'work' | 'personal' } | null): boolean {
+  const forwardedHost = req.headers.get('x-forwarded-host')?.split(',')[0].trim();
+  const requestHost = forwardedHost || req.nextUrl.host;
+  const hostAllowed = ['127.0.0.1:43330', 'localhost:43330'].includes(requestHost);
+  const actorAllowed = identity === null || (identity.scope === 'work' && identity.username === 'testlogin');
+  return process.env.KANBAN_QA_ANONYMOUS_READS === '1' && hostAllowed && actorAllowed;
 }
 export async function GET(req: NextRequest) {
   try {
@@ -56,11 +59,10 @@ export async function GET(req: NextRequest) {
     }
     const authenticatedIdentity = await boardHumanIdentityFromRequest(req);
     const allowedProject = authenticatedIdentity ? boardReadProject(authenticatedIdentity) : null;
-    if (!allowedProject && qaTestloginSelfReadAllowed(authenticatedIdentity)) {
-      const tasksDir = tasksDirForScope(authenticatedIdentity.scope);
-      const cards = getAllCards(tasksDir).filter(card => card.owner?.trim() === authenticatedIdentity.username);
-      const ownedProjects = new Set(cards.map(card => card.project.trim()).filter(Boolean));
-      const projects = listProjects(tasksDir).filter(project => ownedProjects.has(project.name.trim()));
+    if (!allowedProject && qaAnonymousReadAllowed(req, authenticatedIdentity)) {
+      const tasksDir = tasksDirForScope('work');
+      const cards = getAllCards(tasksDir).filter(card => card.project.trim() === QA_UX_PROJECT);
+      const projects = listProjects(tasksDir).filter(project => project.name.trim() === QA_UX_PROJECT);
       return NextResponse.json({ cards, projects });
     }
     if (!allowedProject) return NextResponse.json({ cards: [], projects: [] });
@@ -87,7 +89,7 @@ export async function POST(req: NextRequest) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return NextResponse.json({ error: 'request body must be an object' }, { status: 400 });
     }
-    const { title, description, column, priority, tags, project, assignees } = body;
+    const { title, description, column, priority, tags, project, assignees, blockerReason } = body;
     let dueAt: string | undefined;
     try {
       dueAt = normalizeDueAt(body.dueAt) || undefined;
@@ -96,11 +98,15 @@ export async function POST(req: NextRequest) {
     }
     if (!title) return NextResponse.json({ error: 'title is required' }, { status: 400 });
     if (!project?.trim()) return NextResponse.json({ error: 'project is required' }, { status: 400 });
+    if (blockerReason !== undefined && blockerReason !== null
+        && (typeof blockerReason !== 'string' || blockerReason.length > 2000)) {
+      return NextResponse.json({ error: 'blocker_reason_invalid' }, { status: 400 });
+    }
     validatePlanningFields(body);
     const tasksDir = tasksDirForScope(identity.scope);
     const requested: KanbanCardUpdates = {};
     for (const [key, value] of Object.entries({
-      title, description, column, priority, tags, project, assignees, dueAt,
+      title, description, column, priority, tags, project, assignees, dueAt, blockerReason,
       owner: authenticatedIdentity?.username ?? (managerAuthorized ? body.owner : undefined),
       shared: body.shared,
       planningVersion: body.planningVersion,
@@ -164,7 +170,7 @@ export async function POST(req: NextRequest) {
       patch.dueAt || undefined,
     );
     const policyFields = [
-      'column', 'owner', 'shared', 'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
+      'column', 'owner', 'blockerReason', 'shared', 'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
       'week', 'bigRock', 'parent', 'scheduledAt', 'todayRank', 'source', 'needsReview',
       'suggestedAssignee', 'waitingFor', 'requiresApprovalFrom', 'completedBy', 'completedAt',
       'completionEvidence', 'approvalEvidence',
