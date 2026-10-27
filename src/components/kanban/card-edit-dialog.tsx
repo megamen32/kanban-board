@@ -208,6 +208,11 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Срок
             <Input aria-label="Срок" type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} className="w-full min-w-0" />
           </label>
+          {(column === 'blocked' || blockerReason) && <div className="col-span-2 min-w-0 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 sm:col-span-3 lg:col-span-6">
+            <label className="text-sm font-medium" htmlFor="kanban-blocker-reason">Что блокирует продолжение?</label>
+            <Textarea id="kanban-blocker-reason" value={blockerReason} onChange={event => setBlockerReason(event.target.value)} rows={2} maxLength={2000} placeholder="Например: ждём файл от партнёра; ответственный и срок пока неизвестны." />
+            <p className="text-xs text-muted-foreground">Эта причина сохраняется отдельно от описания задачи.</p>
+          </div>}
         </section>
 
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-5">
@@ -268,11 +273,6 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               <label className="text-sm font-medium">Описание и ожидаемый результат</label>
               <MarkdownEditor value={description} onChange={setDescription} />
             </div>
-            {(column === 'blocked' || blockerReason) && <div className="min-w-0 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
-              <label className="text-sm font-medium" htmlFor="kanban-blocker-reason">Что блокирует продолжение?</label>
-              <Textarea id="kanban-blocker-reason" value={blockerReason} onChange={event => setBlockerReason(event.target.value)} rows={3} maxLength={2000} placeholder="Например: ждём файл от партнёра; ответственный и срок пока неизвестны." />
-              <p className="text-xs text-muted-foreground">Эта причина сохраняется отдельно от описания задачи.</p>
-            </div>}
             <details className="min-w-0 rounded-md border p-3">
               <summary className="cursor-pointer text-sm font-medium">Планирование и дополнительные настройки</summary>
               <div className="mt-3 space-y-3">
