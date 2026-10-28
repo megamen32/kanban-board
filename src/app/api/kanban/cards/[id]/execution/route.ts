@@ -846,10 +846,15 @@ function recoverableAcceptedOpenCodeDispatch(receipt: TaskExecutionReceipt): boo
 }
 
 function exactAcceptedOpenCodeAdmission(receipt: TaskExecutionReceipt): boolean {
-  return recoverableAcceptedOpenCodeDispatch(receipt)
-    && receipt.nativeDispatchJobId === userMessageJobId('opencode', receipt.nativeSessionId!, receipt.messageInputId)
+  return receipt.phase === 'waiting' && receipt.harness === 'opencode'
+    && !!receipt.hostId && !!receipt.nativeSessionId && !receipt.nativeTurnId
+    && receipt.messageInputId === sha256(`${receipt.operationId}\0dispatch`)
+    && !!receipt.projectBinding && receipt.projectBinding.harness === 'opencode'
+    && receipt.projectBinding.hostId === receipt.hostId
+    && receipt.nativeDispatchJobId === userMessageJobId('opencode', receipt.nativeSessionId, receipt.messageInputId)
     && typeof receipt.nativeInputMessageId === 'string'
-    && /^msg_[A-Za-z0-9_-]{8,256}$/.test(receipt.nativeInputMessageId);
+    && /^msg_[A-Za-z0-9_-]{8,256}$/.test(receipt.nativeInputMessageId)
+    && receipt.lastProgress === 'Исходная доставка подтверждена; нативная сессия простаивает. Результат не принят.';
 }
 
 function openCodeTaskMessageIndex(messages: RecordValue[], card: KanbanCard): number | undefined {
@@ -968,7 +973,7 @@ async function verifiedOpenCodeInput(receipt: TaskExecutionReceipt, inputId: str
 }
 
 function completedOpenCodeAssistant(messages: RecordValue[], userIndex: number, expectedTurnId?: string,
-  expectedNativeParentMessageId?: string): RecordValue | undefined {
+  expectedNativeParentMessageId?: string, allowMissingNativeParent = false): RecordValue | undefined {
   const afterTask = messages.slice(userIndex + 1);
   const nextUserIndex = afterTask.findIndex(message => message.role === 'user');
   const taskMessages = nextUserIndex < 0 ? afterTask : afterTask.slice(0, nextUserIndex);
@@ -977,7 +982,8 @@ function completedOpenCodeAssistant(messages: RecordValue[], userIndex: number, 
     const expectedFinish = message.phase === 'stop' || message.phase === 'completed';
     if (message.role !== 'assistant' || !expectedFinish || !visibleText
         || (expectedTurnId && message.turnId !== expectedTurnId)
-        || (expectedNativeParentMessageId && message.nativeParentMessageId !== expectedNativeParentMessageId)
+        || (expectedNativeParentMessageId && message.nativeParentMessageId !== expectedNativeParentMessageId
+          && !(allowMissingNativeParent && message.nativeParentMessageId === undefined))
         || (!expectedTurnId && message.turnId !== undefined && typeof message.turnId !== 'string')) return [];
     return [{ ...message, text: visibleText }];
   });
@@ -2099,11 +2105,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         });
       }
       if (acceptedDispatchPendingReadback && session.status === 'idle'
-          && (attempt.nativeDispatchJobId !== queuedAdmissionProof.jobId
+          && (attempt.phase !== 'waiting'
+            || attempt.nativeDispatchJobId !== queuedAdmissionProof.jobId
             || attempt.nativeInputMessageId !== queuedAdmissionProof.nativeInputMessageId
             || !attempt.lastProgress?.includes('простаивает'))) {
         const reconciled = saveReceiptProgress(id, context.tasksDir, operationId, attempt.requestHash, {
-          phase: 'dispatch-unknown', nativeSessionId: attempt.nativeSessionId,
+          phase: 'waiting', nativeSessionId: attempt.nativeSessionId,
           nativeDispatchJobId: queuedAdmissionProof.jobId,
           nativeInputMessageId: queuedAdmissionProof.nativeInputMessageId,
           lastProgress: 'Исходная доставка подтверждена; нативная сессия простаивает. Результат не принят.',
@@ -2231,7 +2238,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           ? 'Явное продолжение принято, но его точное сообщение пока не найдено в связанной сессии'
           : 'Точное поручение этой карточки пока не найдено в связанной сессии' }, { status: 202 });
       const assistant = completedOpenCodeAssistant(messages, userIndex, expectedOpenCodeTurnId,
-        directInput ? directInput.nativeInputMessageId : undefined);
+        directInput ? directInput.nativeInputMessageId : undefined, Boolean(directInput));
       resultTurnId = typeof assistant?.turnId === 'string' ? assistant.turnId : expectedOpenCodeTurnId;
       assistantText = assistant && typeof assistant.text === 'string' ? assistant.text : undefined;
       assistantMessageId = typeof assistant?.id === 'string' ? assistant.id : undefined;
@@ -2311,7 +2318,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           : openCodeTaskMessageIndex(messages, context.card) : undefined;
       const assistant = messages && userIndex !== undefined
         ? completedOpenCodeAssistant(messages, userIndex, resultTurnId ?? attempt.nativeTurnId,
-          directInput ? directInput.nativeInputMessageId : userIndex === -1 ? mainNativeInputMessageId : undefined) : undefined;
+          directInput ? directInput.nativeInputMessageId : userIndex === -1 ? mainNativeInputMessageId : undefined,
+          Boolean(directInput)) : undefined;
       if (!assistant || assistant.text !== assistantText
           || (assistantMessageId !== undefined && assistant.id !== assistantMessageId)
           || (resultTurnId !== undefined && assistant.turnId !== resultTurnId)) {

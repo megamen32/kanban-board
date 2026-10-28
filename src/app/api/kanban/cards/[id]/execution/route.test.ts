@@ -1029,7 +1029,7 @@ describe('task execution API', () => {
     expect(sendCount).toBe(2);
   });
 
-  it('reconciles an initial accepted OpenCode dispatch from its exact job and message without resending', async () => {
+  it('reconciles an exact accepted OpenCode dispatch while its native session is idle', async () => {
     mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
     const nativeInputMessageId = 'msg_17f4466d6001AtmOc1CmXoVyJf';
     let sendCount = 0;
@@ -1060,7 +1060,7 @@ describe('task execution API', () => {
     expect(initial.messageInputId).toBe(createHash('sha256').update(`${initial.operationId}\0dispatch`).digest('hex'));
 
     const model = 'omniroute/minimax-combo-m3.1';
-    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'running', harness: 'opencode', model };
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'idle', harness: 'opencode', model };
     const taskMessage = String(mocks.callOwnerHerderTool.mock.calls.find(([tool]) => tool === 'send_message')?.[1]?.message);
     const firstUserUri = `herder://sessions/opencode/${sessionId}/first-user-message`;
     const firstUserMessage = { id: nativeInputMessageId, inputId: initial.messageInputId, role: 'user',
@@ -1078,13 +1078,49 @@ describe('task execution API', () => {
     if (!response) throw new Error('OpenCode dispatch reconciliation response missing');
 
     expect(response.status).toBe(202);
-    expect(mocks.currentCard.value?.column).toBe('in-progress');
+    expect(mocks.currentCard.value?.column).toBe('todo');
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
-      phase: 'running', harness: 'opencode', nativeSessionId: sessionId,
+      phase: 'waiting', harness: 'opencode', nativeSessionId: sessionId,
       nativeDispatchJobId: userMessageJobId(sessionId, initial.messageInputId), nativeInputMessageId,
     });
     expect(sendCount).toBe(1);
     expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(1);
+  });
+
+  it('allows direct only from an exact operation-bound idle admission saved as waiting', async () => {
+    const card = controllableOpenCodeCard();
+    const receipt = card.taskExecutionHistory![0]!;
+    const inputId = createHash('sha256').update(`${receipt.operationId}\0dispatch`).digest('hex');
+    const nativeInputMessageId = 'msg_idle_admission_123456';
+    const admittedReceipt = {
+      ...receipt, phase: 'waiting' as const, messageInputId: inputId,
+      nativeDispatchJobId: userMessageJobId(controlSessionId, inputId), nativeInputMessageId,
+      lastProgress: 'Исходная доставка подтверждена; нативная сессия простаивает. Результат не принят.',
+    };
+    mocks.currentCard.value = { ...card, taskExecutionHistory: [admittedReceipt] };
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'idle' };
+    let nativeMessages: Array<Record<string, unknown>> = [];
+    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({ contents: [{
+      uri, mimeType: 'application/json', text: JSON.stringify(nativeMessages),
+    }] }));
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'send_message') {
+        nativeMessages.push({ id: opencodeInputMessageId(String(args.inputId)), inputId: args.inputId,
+          role: 'user', parts: [{ type: 'text', text: String(args.message) }] });
+      }
+      return toolResult(tool, args);
+    });
+
+    const response = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: card.version,
+      message: 'Продолжи ту же задачу' }), { params: Promise.resolve({ id: controlCardId }) });
+    if (!response) throw new Error('idle admission direct response missing');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ boardOperationId: controlOperationId, action: 'direct', state: 'accepted' });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.sessionControls?.direct?.[0]).toMatchObject({
+      phase: 'accepted', nativeDispatchJobId: expect.stringMatching(/^job_[a-f0-9]{64}$/),
+      nativeInputMessageId: expect.stringMatching(/^msg_[A-Za-z0-9_-]{8,256}$/),
+    });
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(0);
   });
 
   it('keeps an OpenCode dispatch unknown when the accepted job is bound to another input', async () => {
@@ -1503,7 +1539,7 @@ describe('task execution API', () => {
     expect(hiddenLaterUser.status, JSON.stringify(await hiddenLaterUser.clone().json())).toBe(202);
     expect(mocks.updateCard).toHaveBeenCalledTimes(writesBefore + 1);
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
-      phase: 'dispatch-unknown', nativeSessionId: sessionId,
+      phase: 'waiting', nativeSessionId: sessionId,
       nativeDispatchJobId: userMessageJobId(sessionId, exactInputId),
       nativeInputMessageId: originalUserMessage.id,
       lastProgress: expect.stringMatching(/простаивает.*результат.*не принят/i),
@@ -2251,7 +2287,7 @@ describe('task execution API', () => {
 
     expect(response.status).toBe(202);
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
-      phase: 'dispatch-unknown', nativeSessionId: controlSessionId, messageInputId: inputId,
+      phase: 'waiting', nativeSessionId: controlSessionId, messageInputId: inputId,
       nativeDispatchJobId: userMessageJobId(controlSessionId, inputId), nativeInputMessageId,
       lastProgress: expect.stringMatching(/простаивает.*результат.*не принят/i),
     });
@@ -2282,7 +2318,7 @@ describe('task execution API', () => {
     expect(direct.status, JSON.stringify(await direct.clone().json())).toBe(200);
     expect(await direct.json()).toMatchObject({ boardOperationId: exactOperationId, action: 'direct', state: 'accepted' });
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
-      operationId: exactOperationId, phase: 'dispatch-unknown', sessionControls: { direct: [{ phase: 'accepted', nativeInputMessageId: opencodeInputMessageId(createHash('sha256').update(JSON.stringify({
+      operationId: exactOperationId, phase: 'waiting', sessionControls: { direct: [{ phase: 'accepted', nativeInputMessageId: opencodeInputMessageId(createHash('sha256').update(JSON.stringify({
         cardId: controlCardId, operationId: exactOperationId, action: 'direct', message: directText,
       })).digest('hex')) }] },
     });
@@ -2290,7 +2326,7 @@ describe('task execution API', () => {
     expect(mocks.callOwnerHerderTool.mock.calls.filter(([name]) => name === 'fleet_create_session')).toHaveLength(0);
   });
 
-  it('uses the accepted direct input and its exact parent turn instead of a stale main turn, and rejects a later user', async () => {
+  it('accepts a visible exact direct result without native parent and rejects hidden, later-user and wrong-parent cases', async () => {
     const card = controllableOpenCodeCard();
     const receipt = card.taskExecutionHistory![0]!;
     const directText = 'Продолжи текущую задачу';
@@ -2309,7 +2345,7 @@ describe('task execution API', () => {
     let nativeMessages: Array<Record<string, unknown>> = [
       { id: directNativeInputMessageId, role: 'user', inputId: directInputId, parts: [{ type: 'text', text: directText }] },
       { id: 'msg_direct_answer_123456', role: 'assistant', turnId: 'direct-turn-t2', phase: 'completed',
-        nativeParentMessageId: directNativeInputMessageId, parts: [{ type: 'text', text: 'Same-card continuation result for direct T2.' }] },
+        parts: [{ type: 'text', text: 'Same-card continuation result for direct T2.' }] },
       { id: 'msg_later_user_123456', role: 'user', parts: [{ type: 'text', text: 'Unrelated later manual input U3.' }] },
     ];
     const messagesUri = `herder://sessions/opencode/${controlSessionId}/messages`;
@@ -2325,6 +2361,14 @@ describe('task execution API', () => {
       }),
     }), { params: Promise.resolve({ id: controlCardId }) });
 
+    const completeDirectTail = nativeMessages;
+    nativeMessages = [completeDirectTail[1]!];
+    const hiddenDirectInput = await request();
+    if (!hiddenDirectInput) throw new Error('hidden direct input response missing');
+    expect(hiddenDirectInput.status).toBe(202);
+    expect(mocks.currentCard.value?.resultHistory).toBeUndefined();
+
+    nativeMessages = completeDirectTail;
     const withLaterUser = await request();
     if (!withLaterUser) throw new Error('direct result with newer user response missing');
     expect(withLaterUser.status).toBe(202);
@@ -2332,9 +2376,16 @@ describe('task execution API', () => {
     expect(mocks.currentCard.value?.resultHistory).toBeUndefined();
 
     nativeMessages = nativeMessages.slice(0, 2);
+    nativeMessages[1] = { ...nativeMessages[1]!, nativeParentMessageId: 'msg_wrong_parent_123456' };
+    const wrongParent = await request();
+    if (!wrongParent) throw new Error('direct result with wrong parent response missing');
+    expect(wrongParent.status).toBe(202);
+    expect(mocks.currentCard.value?.resultHistory).toBeUndefined();
+
+    nativeMessages[1] = { ...nativeMessages[1]!, nativeParentMessageId: undefined };
     const exactDirectResult = await request();
     if (!exactDirectResult) throw new Error('exact direct T2 result response missing');
-    expect(exactDirectResult.status).toBe(200);
+    expect(exactDirectResult.status, JSON.stringify(await exactDirectResult.clone().json())).toBe(200);
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({ phase: 'result', nativeTurnId: 'direct-turn-t2' });
     expect(mocks.currentCard.value?.resultHistory?.at(-1)?.summary).toBe('Same-card continuation result for direct T2.');
     expect(mocks.callOwnerHerderTool.mock.calls.filter(([name]) => name === 'send_message' || name === 'fleet_create_session')).toHaveLength(0);
