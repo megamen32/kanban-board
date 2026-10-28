@@ -439,14 +439,46 @@ describe('task execution API', () => {
   it('uses current native project read membership for execution status without inventing a board username', async () => {
     const forProject = vi.fn(async () => ({ project: 'Demo', team: 'integrator', readAllowed: true as const, writeAllowed: false }));
     mocks.nativeProjectAccess.value = { userId: 'airlock-native-user-42', forProject };
+    mocks.taskExecutionSnapshot.mockReturnValue({
+      cardId: baseCard.id,
+      state: 'not-started',
+      operationReceipt: { source: 'card.taskExecutionHistory', status: 'unknown', operationCount: 0, reason: 'history-field-absent' },
+    });
     const response = await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
       headers: { 'X-Airlock-Todo-Native-Identity': 'verified-test-assertion' },
     }), { params: Promise.resolve({ id: baseCard.id }) });
     if (!response) throw new Error('native execution read response missing');
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ startAvailable: false, unavailableReason: expect.stringMatching(/только для чтения/i) });
+    expect(await response.json()).toMatchObject({
+      cardId: baseCard.id,
+      operationReceipt: { source: 'card.taskExecutionHistory', status: 'unknown', operationCount: 0, reason: 'history-field-absent' },
+      startAvailable: false,
+      unavailableReason: expect.stringMatching(/только для чтения/i),
+    });
     expect(forProject).toHaveBeenCalledWith('Demo');
     expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+  });
+
+  it('returns the persisted operation and native session IDs through the same read-scoped execution GET', async () => {
+    const forProject = vi.fn(async () => ({ project: 'Demo', team: 'integrator', readAllowed: true as const, writeAllowed: false }));
+    mocks.nativeProjectAccess.value = { userId: 'airlock-native-user-42', forProject };
+    const receipt = {
+      source: 'card.taskExecutionHistory', status: 'recorded', operationCount: 1,
+      operationId: 'a'.repeat(64), phase: 'running', harness: 'opencode',
+      nativeSessionId: 'session-from-saved-receipt', updatedAt: '2026-10-28T18:00:00.000Z',
+    };
+    mocks.taskExecutionSnapshot.mockReturnValue({ cardId: baseCard.id, state: 'running', operationReceipt: receipt });
+
+    const response = await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      headers: { 'X-Airlock-Todo-Native-Identity': 'verified-test-assertion' },
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('native execution read response missing');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ cardId: baseCard.id, state: 'running', operationReceipt: receipt });
+    expect(forProject).toHaveBeenCalledWith('Demo');
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+    expect(mocks.updateCard).not.toHaveBeenCalled();
   });
 
   it('starts and exactly replays one native-manager task with the signed user id as receipt actor', async () => {

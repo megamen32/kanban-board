@@ -5,6 +5,19 @@ export type TaskExecutionState = 'not-started' | 'running' | 'waiting' | 'stoppe
 export interface TaskExecutionSnapshot {
   cardId: string;
   state: TaskExecutionState;
+  operationReceipt:
+    | { source: 'card.taskExecutionHistory'; status: 'no-operation'; operationCount: 0 }
+    | { source: 'card.taskExecutionHistory'; status: 'unknown'; operationCount: 0; reason: 'history-field-absent' }
+    | {
+      source: 'card.taskExecutionHistory';
+      status: 'recorded' | 'unknown';
+      operationCount: number;
+      operationId: string;
+      phase: TaskExecutionReceipt['phase'];
+      harness: TaskExecutionReceipt['harness'];
+      nativeSessionId?: string;
+      updatedAt: string;
+    };
   lastProgress?: { summary: string; at: string };
   nextAction?: string;
   waitReason?: string;
@@ -40,7 +53,8 @@ export function taskSessionUrl(hostId: string, harness: string, nativeSessionId:
 /** Read the execution-facing view from the existing Board card and result history. */
 export function taskExecutionSnapshot(card: KanbanCard): TaskExecutionSnapshot {
   const latest = card.resultHistory?.at(-1);
-  const attempt = card.taskExecutionHistory?.at(-1);
+  const operationHistory = card.taskExecutionHistory;
+  const attempt = operationHistory?.at(-1);
   const waitingFor = card.waitingFor?.filter(value => value.trim()) ?? [];
   const sessionUrl = attempt?.nativeSessionId
     ? taskSessionUrl(attempt.hostId, attempt.harness, attempt.nativeSessionId) : undefined;
@@ -68,6 +82,20 @@ export function taskExecutionSnapshot(card: KanbanCard): TaskExecutionSnapshot {
   return {
     cardId: card.id,
     state,
+    operationReceipt: attempt
+      ? {
+        source: 'card.taskExecutionHistory',
+        status: ['intent', 'create-unknown', 'dispatch-unknown'].includes(attempt.phase) ? 'unknown' : 'recorded',
+        operationCount: operationHistory!.length,
+        operationId: attempt.operationId,
+        phase: attempt.phase,
+        harness: attempt.harness,
+        ...(attempt.nativeSessionId ? { nativeSessionId: attempt.nativeSessionId } : {}),
+        updatedAt: attempt.updatedAt,
+      }
+      : operationHistory
+        ? { source: 'card.taskExecutionHistory', status: 'no-operation', operationCount: 0 }
+        : { source: 'card.taskExecutionHistory', status: 'unknown', operationCount: 0, reason: 'history-field-absent' },
     ...(progress ? { lastProgress: progress } : {}),
     ...(card.nextAction === null ? {} : card.nextAction?.trim() ? { nextAction: card.nextAction.trim() }
       : latest?.nextAction?.trim() ? { nextAction: latest.nextAction.trim() } : {}),

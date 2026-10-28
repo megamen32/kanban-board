@@ -13,7 +13,16 @@ function card(overrides: Partial<KanbanCard> = {}): KanbanCard {
 
 describe('taskExecutionSnapshot', () => {
   it('returns a not-started snapshot for a card with no execution result', () => {
-    expect(taskExecutionSnapshot(card())).toEqual({ cardId: 'task-1', state: 'not-started' });
+    expect(taskExecutionSnapshot(card())).toEqual({
+      cardId: 'task-1', state: 'not-started',
+      operationReceipt: { source: 'card.taskExecutionHistory', status: 'unknown', operationCount: 0, reason: 'history-field-absent' },
+    });
+  });
+
+  it('proves no operation only from an explicitly present empty receipt list', () => {
+    expect(taskExecutionSnapshot(card({ taskExecutionHistory: [] }))).toMatchObject({
+      operationReceipt: { source: 'card.taskExecutionHistory', status: 'no-operation', operationCount: 0 },
+    });
   });
 
   it('uses the existing review state and latest persisted result as progress', () => {
@@ -22,6 +31,7 @@ describe('taskExecutionSnapshot', () => {
       resultHistory: [{ summary: 'Found two candidates', evidenceRefs: ['https://example.test'], submittedBy: 'worker', submittedAt: '2026-10-20T10:05:00.000Z' }],
     }))).toEqual({
       cardId: 'task-1', state: 'waiting',
+      operationReceipt: { source: 'card.taskExecutionHistory', status: 'unknown', operationCount: 0, reason: 'history-field-absent' },
       lastProgress: { summary: 'Found two candidates', at: '2026-10-20T10:05:00.000Z' },
       nextAction: 'Check sources', waitReason: 'Ожидает решения человека',
     });
@@ -54,8 +64,14 @@ describe('taskExecutionSnapshot', () => {
       startedBy: 'nikita', createdAt: '2026-10-20T10:00:00.000Z', updatedAt: '2026-10-20T10:01:00.000Z',
     };
     expect(taskExecutionSnapshot(card({ taskExecutionHistory: [operation] })).state).toBe('unknown');
+    expect(taskExecutionSnapshot(card({ taskExecutionHistory: [operation] })).operationReceipt).toEqual({
+      source: 'card.taskExecutionHistory', status: 'unknown', operationCount: 1,
+      operationId: operation.operationId, phase: 'create-unknown', harness: 'codex', updatedAt: operation.updatedAt,
+    });
     expect(taskExecutionSnapshot(card({ taskExecutionHistory: [{ ...operation, phase: 'running', nativeSessionId: 'native-1', nativeTurnId: 'native-turn-1' }] })).state)
       .toBe('running');
+    expect(taskExecutionSnapshot(card({ taskExecutionHistory: [{ ...operation, phase: 'running', nativeSessionId: 'native-1', nativeTurnId: 'native-turn-1' }] })).operationReceipt)
+      .toMatchObject({ source: 'card.taskExecutionHistory', status: 'recorded', operationId: operation.operationId, phase: 'running', harness: 'codex', nativeSessionId: 'native-1' });
     expect(taskSessionUrl('roomhacker-server-100', 'codex', 'native-1'))
       .toBe('https://agent.bezrabotnyi.com/#/session/codex%3Anative-1');
     expect(taskSessionUrl('roomhacker-server-100', 'codex', 'native-1', 'turn/one'))

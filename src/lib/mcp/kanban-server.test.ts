@@ -5,7 +5,7 @@ import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:cryp
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCard, deleteCard, findCardById, getAllCards } from '../kanban/file-store';
+import { createCard, deleteCard, findCardById, getAllCards, updateCard } from '../kanban/file-store';
 import { createKanbanMcpServer } from './kanban-server';
 import type { SourceAdmissionRequest } from '../kanban/source-operation';
 import { createSourceAdmissionVerifier, type SignedSourceAdmissionEnvelope } from './source-resolver';
@@ -465,7 +465,33 @@ describe('shared ExManager MCP read scope', () => {
       argsSha256: createHash('sha256').update(JSON.stringify(readArgs)).digest('base64url'),
     };
     const read = await client.callTool({ name: 'kanban.read', arguments: { ...readArgs, exmanagerScope: signTodoReadScope(privateKey, readClaims) } });
-    expect(JSON.parse(textFromResult(read)).card.id).toBe(alpha.id);
+    expect(JSON.parse(textFromResult(read))).toMatchObject({
+      card: { id: alpha.id },
+      execution: {
+        cardId: alpha.id,
+        operationReceipt: {
+          source: 'card.taskExecutionHistory', status: 'unknown', operationCount: 0, reason: 'history-field-absent',
+        },
+      },
+    });
+
+    const operationId = 'a'.repeat(64);
+    updateCard(alpha.id, {
+      taskExecutionHistory: [{
+        operationId, requestHash: 'b'.repeat(64), lastBoardVersion: alpha.version + 1,
+        createInputId: 'c'.repeat(64), messageInputId: 'd'.repeat(64), phase: 'running',
+        hostId: 'roomhacker-server-100', harness: 'codex', nativeSessionId: 'session-1', nativeTurnId: 'turn-1',
+        startedBy: 'member-a', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }],
+    }, alpha.version, tasksDir);
+    const receiptRead = await client.callTool({ name: 'kanban.read', arguments: {
+      ...readArgs, exmanagerScope: signTodoReadScope(privateKey, readClaims),
+    } });
+    expect(JSON.parse(textFromResult(receiptRead)).execution.operationReceipt).toMatchObject({
+      source: 'card.taskExecutionHistory', status: 'recorded', operationCount: 1,
+      operationId, phase: 'running', harness: 'codex', nativeSessionId: 'session-1',
+    });
+
     const foreignRead = await client.callTool({ name: 'kanban.read', arguments: {
       cardId: beta.id,
       exmanagerScope: signTodoReadScope(privateKey, { ...readClaims, argsSha256: createHash('sha256').update(JSON.stringify({ cardId: beta.id })).digest('base64url') }),

@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ensureProject, listProjects, projectInput } from '../kanban/project-store';
 import { createAdmittedCard, createCard, deleteCard, findCardById, getAllCards, updateCard } from '../kanban/file-store';
+import { taskExecutionSnapshot } from '../kanban/task-execution';
 import { admitSourceTask } from '../kanban/source-operation';
 import { commitVerifiedCatalogTaskLink } from '../kanban/catalog-link';
 import { catalogResultDigest, type CatalogLinkClaims, type SignedCatalogLinkEnvelope } from './catalog-link-resolver';
@@ -299,7 +300,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     if (callerScope && !callerScope.owner && !callerScope.projects.includes(card.project)) {
       throw new Error(`Card ${cardId} not found`);
     }
-    return textResult({ card, scope });
+    return textResult({ card, execution: taskExecutionSnapshot(card), scope });
   });
 
   if (!readOnlyApp) {
