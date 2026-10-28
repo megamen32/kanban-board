@@ -1387,8 +1387,13 @@ describe('task execution API', () => {
     mocks.sessionInfo.value = {
       id: sessionId, harness: 'opencode', hostId: 'roomhacker-server-100', cwd: projectBinding.cwd,
       model: projectBinding.model, status: 'idle', needsPermission: false,
-      meta: { nativeLastTurn: { turnId: 'turn-1', status: 'completed' } },
+      meta: { nativeLastTurn: { turnId: 'turn-2', status: 'completed' } },
     };
+    let recentMessages: Record<string, unknown>[] = [{
+      id: 'msg_later_assistant_123456', role: 'assistant', turnId: 'turn-2', phase: 'completed',
+      nativeParentMessageId: 'msg_later_user_123456',
+      parts: [{ type: 'text', text: 'A later user task result; must not be attached to the original card.' }],
+    }];
     mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
       if (tool === 'job_get') return { structuredContent: { job: {
         id: args.jobId, state: 'completed', ownerSessionId: sessionId,
@@ -1401,8 +1406,7 @@ describe('task execution API', () => {
       uri, mimeType: 'application/json', text: JSON.stringify(uri === firstUserUri
         ? originalUserMessage
         : uri === messagesUri
-          ? [{ id: 'msg_final_assistant_123456', role: 'assistant', turnId: 'turn-1', phase: 'completed',
-            parts: [{ type: 'text', text: 'QA result saved from the original task; total 2500.' }] }]
+          ? recentMessages
           : null),
     }] }));
     mocks.validateTransition.mockImplementation((_card: KanbanCard, updates: { executorResult?: { summary?: string } }) => ({
@@ -1411,10 +1415,25 @@ describe('task execution API', () => {
       }] },
     }));
 
-    const response = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+    const request = () => new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
       method: 'PATCH', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action: 'sync-result', operationId: exactOperationId, expectedVersion: 5 }),
-    }), { params: Promise.resolve({ id: baseCard.id }) });
+    });
+    const writesBefore = mocks.updateCard.mock.calls.length;
+    const hiddenLaterUser = await PATCH(request(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!hiddenLaterUser) throw new Error('OpenCode hidden later-user result response missing');
+    expect(hiddenLaterUser.status, JSON.stringify(await hiddenLaterUser.clone().json())).toBe(202);
+    expect(mocks.updateCard).toHaveBeenCalledTimes(writesBefore);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.phase).toBe('dispatch-unknown');
+    expect(mocks.currentCard.value?.resultHistory).toBeUndefined();
+
+    recentMessages = [{
+      id: 'msg_final_assistant_123456', role: 'assistant', turnId: 'turn-1', phase: 'completed',
+      nativeParentMessageId: originalUserMessage.id,
+      parts: [{ type: 'text', text: 'QA result saved from the original task; total 2500.' }],
+    }];
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, meta: { nativeLastTurn: { turnId: 'turn-1', status: 'completed' } } };
+    const response = await PATCH(request(), { params: Promise.resolve({ id: baseCard.id }) });
     if (!response) throw new Error('OpenCode result reconciliation response missing');
 
     expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);

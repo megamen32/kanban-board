@@ -954,7 +954,8 @@ async function verifiedOpenCodeInput(receipt: TaskExecutionReceipt, inputId: str
   return { ...delivery, messages, userIndex: matches[0]! };
 }
 
-function completedOpenCodeAssistant(messages: RecordValue[], userIndex: number, expectedTurnId?: string): RecordValue | undefined {
+function completedOpenCodeAssistant(messages: RecordValue[], userIndex: number, expectedTurnId?: string,
+  expectedNativeParentMessageId?: string): RecordValue | undefined {
   const afterTask = messages.slice(userIndex + 1);
   const nextUserIndex = afterTask.findIndex(message => message.role === 'user');
   const taskMessages = nextUserIndex < 0 ? afterTask : afterTask.slice(0, nextUserIndex);
@@ -963,6 +964,7 @@ function completedOpenCodeAssistant(messages: RecordValue[], userIndex: number, 
     const expectedFinish = message.phase === 'stop' || message.phase === 'completed';
     if (message.role !== 'assistant' || !expectedFinish || !visibleText
         || (expectedTurnId && message.turnId !== expectedTurnId)
+        || (expectedNativeParentMessageId && message.nativeParentMessageId !== expectedNativeParentMessageId)
         || (!expectedTurnId && message.turnId !== undefined && typeof message.turnId !== 'string')) return [];
     return [{ ...message, text: visibleText }];
   });
@@ -2256,7 +2258,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
             : undefined
           : openCodeTaskMessageIndex(messages, context.card) : undefined;
       const assistant = messages && userIndex !== undefined
-        ? completedOpenCodeAssistant(messages, userIndex, resultTurnId ?? attempt.nativeTurnId) : undefined;
+        ? completedOpenCodeAssistant(messages, userIndex, resultTurnId ?? attempt.nativeTurnId,
+          userIndex === -1 ? mainNativeInputMessageId : undefined) : undefined;
       if (!assistant || assistant.text !== assistantText
           || (assistantMessageId !== undefined && assistant.id !== assistantMessageId)
           || (resultTurnId !== undefined && assistant.turnId !== resultTurnId)) {
