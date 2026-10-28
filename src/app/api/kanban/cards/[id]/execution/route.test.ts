@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   humanIdentity: { value: undefined as { username: string; scope: 'work' } | null | undefined },
   boardHumanIdentityFromRequest: vi.fn(),
   nativeProjectAccess: { value: null as null | { userId: string; forProject: ReturnType<typeof vi.fn> } },
+  nativeProjectAccessContextFromRequest: vi.fn(async () => null as null | { userId: string; forProject: ReturnType<typeof vi.fn> }),
   callOwnerHerderTool: vi.fn(),
   readOwnerHerderResource: vi.fn(),
   validateTransition: vi.fn(),
@@ -29,7 +30,7 @@ vi.mock('@/lib/kanban/file-store', () => ({ findCardById: mocks.findCardById, up
 vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => mocks.identity.value ?? { username: 'anonymous', scope: 'work' },
   identityFromRequest: () => mocks.identity.value,
-  nativeProjectAccessContextFromRequest: vi.fn(async () => mocks.nativeProjectAccess.value),
+  nativeProjectAccessContextFromRequest: mocks.nativeProjectAccessContextFromRequest,
 }));
 vi.mock('../../../../../../lib/auth/board-human', () => ({
   boardHumanIdentityFromRequest: mocks.boardHumanIdentityFromRequest,
@@ -364,6 +365,7 @@ describe('task execution API', () => {
     mocks.tasksDirForScope.mockReturnValue('/tasks/work');
     mocks.identity.value = { username: 'nikita', scope: 'work' };
     mocks.nativeProjectAccess.value = null;
+    mocks.nativeProjectAccessContextFromRequest.mockImplementation(async () => mocks.nativeProjectAccess.value);
     mocks.sessionInfo.value = {
       id: sessionId, harness: 'codex', hostId: 'roomhacker-server-100', cwd, model: 'gpt-6-luna', status: 'idle', needsPermission: false,
       lastActivity: '2026-10-20T10:05:00.000Z', lastMessage: 'Found two candidates',
@@ -516,8 +518,7 @@ describe('task execution API', () => {
         ? Response.json({ project, team: 'integrator', readAllowed: true, writeAllowed: true })
         : new Response(null, { status: 403 });
     });
-    const requestModule = await import('@/lib/auth/request');
-    vi.mocked(requestModule.nativeProjectAccessContextFromRequest).mockImplementation(request => nativeProjectAccessForRequest(request, {
+    mocks.nativeProjectAccessContextFromRequest.mockImplementation(request => nativeProjectAccessForRequest(request, {
       endpoint: 'https://todo.example.test/internal/todo/project-scope', publicKey: pair.publicKey,
       fetcher: fetcher as unknown as typeof fetch,
     }));
@@ -910,9 +911,12 @@ describe('task execution API', () => {
         text: taskMessage, parts: [{ type: 'text', text: taskMessage }] },
       { id: 'qa-assistant-progress', role: 'assistant', phase: 'tool-calls', text: 'Читаю только синтетические строки.', parts: [] },
     ];
+    const firstUserUri = `herder://sessions/opencode/${sessionId}/first-user-message`;
+    const firstUserMessage = { id: opencodeInputMessageId(queueInputId), role: 'user', inputId: queueInputId,
+      parts: [{ type: 'text', text: taskMessage }] };
     const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
-    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({ contents: [{
-      uri, mimeType: 'application/json', text: JSON.stringify(nativeMessages),
+    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({ contents: [{ uri, mimeType: 'application/json',
+      text: JSON.stringify(uri === firstUserUri ? firstUserMessage : nativeMessages),
     }] }));
     mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'running', meta: {} };
     let current = mocks.currentCard.value!;
@@ -992,12 +996,16 @@ describe('task execution API', () => {
     if (!started) throw new Error('OpenCode queued execution response missing');
     expect(started.status).toBe(202);
     const initial = mocks.currentCard.value!.taskExecutionHistory![0]!;
-    const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
     const taskMessage = String(mocks.callOwnerHerderTool.mock.calls.find(([tool]) => tool === 'send_message')?.[1]?.message);
+    const firstUserUri = `herder://sessions/opencode/${sessionId}/first-user-message`;
+    const firstUserMessage = { id: nativeInputMessageId, inputId: initial.messageInputId, role: 'user',
+      parts: [{ type: 'text', text: `Поручение пользователя, переданное агентом\n\n${taskMessage}` }] };
     mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'running', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
-    mocks.readOwnerHerderResource.mockResolvedValue({ contents: [{ uri: messagesUri, mimeType: 'application/json', text: JSON.stringify([
-      { id: nativeInputMessageId, inputId: initial.messageInputId, role: 'user', parts: [{ type: 'text', text: `Поручение пользователя, переданное агентом\n\n${taskMessage}` }] },
-    ]) }] });
+    const nativeMessages = [{ id: nativeInputMessageId, inputId: initial.messageInputId, role: 'user',
+      parts: [{ type: 'text', text: `Поручение пользователя, переданное агентом\n\n${taskMessage}` }] }];
+    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({ contents: [{ uri, mimeType: 'application/json',
+      text: JSON.stringify(uri === firstUserUri ? firstUserMessage : nativeMessages),
+    }] }));
     const response = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
       method: 'PATCH', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: mocks.currentCard.value!.version }),
@@ -1053,11 +1061,15 @@ describe('task execution API', () => {
 
     const model = 'omniroute/minimax-combo-m3.1';
     mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'running', harness: 'opencode', model };
-    const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
     const taskMessage = String(mocks.callOwnerHerderTool.mock.calls.find(([tool]) => tool === 'send_message')?.[1]?.message);
-    mocks.readOwnerHerderResource.mockResolvedValue({ contents: [{ uri: messagesUri, mimeType: 'application/json', text: JSON.stringify([
-      { id: nativeInputMessageId, inputId: initial.messageInputId, role: 'user', parts: [{ type: 'text', text: `Поручение пользователя, переданное агентом\n\n${taskMessage}` }] },
-    ]) }] });
+    const firstUserUri = `herder://sessions/opencode/${sessionId}/first-user-message`;
+    const firstUserMessage = { id: nativeInputMessageId, inputId: initial.messageInputId, role: 'user',
+      parts: [{ type: 'text', text: `Поручение пользователя, переданное агентом\n\n${taskMessage}` }] };
+    const nativeMessages = [{ id: nativeInputMessageId, inputId: initial.messageInputId, role: 'user',
+      parts: [{ type: 'text', text: `Поручение пользователя, переданное агентом\n\n${taskMessage}` }] }];
+    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({ contents: [{ uri, mimeType: 'application/json',
+      text: JSON.stringify(uri === firstUserUri ? firstUserMessage : nativeMessages),
+    }] }));
 
     const response = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
       method: 'PATCH', headers: { 'content-type': 'application/json' },
