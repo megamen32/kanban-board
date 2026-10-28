@@ -725,13 +725,14 @@ function stringArrayField(data: Record<string, unknown>, field: string): string[
 }
 
 function taskExecutionQuestionField(value: unknown, field: string): TaskExecutionQuestionProof {
-  const keys = ['choices', 'contextRef', 'humanRequestId', 'questionHash', 'registrationCallId', 'registrationMessageId',
+  const legacyKeys = ['choices', 'contextRef', 'humanRequestId', 'questionHash', 'registrationCallId', 'registrationMessageId',
     'registrationTarget', 'sourceInputMessageId', 'sourceJobId', 'sourceMessageHash', 'sourceMessageId', 'text', 'timeoutValue'];
-  if (!isRecord(value) || Object.keys(value).sort().join('\0') !== keys.join('\0')
+  const registryKeys = ['choices', 'contextRef', 'humanRequestId', 'questionHash', 'registrationRef', 'registrationTarget',
+    'sourceInputMessageId', 'sourceJobId', 'sourceMessageHash', 'sourceMessageId', 'text', 'timeoutValue'];
+  if (!isRecord(value)
+      || ![legacyKeys, registryKeys].some(keys => Object.keys(value).sort().join('\0') === keys.join('\0'))
       || typeof value.humanRequestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.humanRequestId)
       || typeof value.contextRef !== 'string' || !/^exmanager-task:[^:]+:[a-f0-9]{64}$/.test(value.contextRef)
-      || typeof value.registrationMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(value.registrationMessageId)
-      || typeof value.registrationCallId !== 'string' || !/^[A-Za-z0-9_-]{8,256}$/.test(value.registrationCallId)
       || !isRecord(value.registrationTarget) || Object.keys(value.registrationTarget).sort().join('\0') !== 'cwd\0harness\0sessionId'
       || value.registrationTarget.harness !== 'opencode'
       || typeof value.registrationTarget.sessionId !== 'string' || !value.registrationTarget.sessionId.trim() || value.registrationTarget.sessionId.length > 512
@@ -744,6 +745,20 @@ function taskExecutionQuestionField(value: unknown, field: string): TaskExecutio
       || !Array.isArray(value.choices) || value.choices.length < 2 || value.choices.length > 4
       || typeof value.timeoutValue !== 'string' || typeof value.questionHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.questionHash)) {
     throw invalidPlanningField(field, 'invalid immutable OpenCode executor question proof');
+  }
+  const legacyRegistration = Object.keys(value).sort().join('\0') === legacyKeys.join('\0');
+  if (legacyRegistration) {
+    if (typeof value.registrationMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(value.registrationMessageId)
+        || typeof value.registrationCallId !== 'string' || !/^[A-Za-z0-9_-]{8,256}$/.test(value.registrationCallId)) {
+      throw invalidPlanningField(field, 'invalid legacy native registration reference');
+    }
+  } else {
+    const reference = isRecord(value.registrationRef) ? value.registrationRef : undefined;
+    if (!reference || Object.keys(reference).sort().join('\0') !== 'contextRef\0kind\0requestId'
+        || reference.kind !== 'herder-registry' || reference.requestId !== value.humanRequestId
+        || reference.contextRef !== value.contextRef) {
+      throw invalidPlanningField(`${field}.registrationRef`, 'invalid Herder registry reference');
+    }
   }
   const choices: TaskExecutionQuestionChoice[] = [];
   for (const item of value.choices) {
@@ -759,13 +774,20 @@ function taskExecutionQuestionField(value: unknown, field: string): TaskExecutio
       || choices.some(choice => choice.value === 'stop' || choice.value === 'hold')) {
     throw invalidPlanningField(`${field}.choices`, 'duplicate, control-reserved or invalid timeout choice');
   }
-  return {
+  const common = {
     humanRequestId: value.humanRequestId, contextRef: value.contextRef,
-    registrationMessageId: value.registrationMessageId, registrationCallId: value.registrationCallId,
-    registrationTarget: { harness: 'opencode', sessionId: value.registrationTarget.sessionId, cwd: value.registrationTarget.cwd },
+    registrationTarget: { harness: 'opencode' as const, sessionId: value.registrationTarget.sessionId, cwd: value.registrationTarget.cwd },
     sourceMessageId: value.sourceMessageId, sourceMessageHash: value.sourceMessageHash,
     sourceInputMessageId: value.sourceInputMessageId, sourceJobId: value.sourceJobId,
     text: value.text, choices, timeoutValue: value.timeoutValue, questionHash: value.questionHash,
+  };
+  return legacyRegistration ? {
+    ...common, registrationMessageId: value.registrationMessageId as string, registrationCallId: value.registrationCallId as string,
+  } : {
+    ...common, registrationRef: {
+      kind: 'herder-registry', requestId: (value.registrationRef as Record<string, unknown>).requestId as string,
+      contextRef: value.contextRef,
+    },
   };
 }
 

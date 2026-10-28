@@ -219,11 +219,9 @@ export interface TaskExecutionQuestionTarget {
   cwd: string;
 }
 /** Source proof captured from the exact accepted OpenCode executor input. */
-export interface TaskExecutionQuestionProof {
+export interface TaskExecutionQuestionProofFields {
   humanRequestId: string;
   contextRef: string;
-  registrationMessageId: string;
-  registrationCallId: string;
   registrationTarget: TaskExecutionQuestionTarget;
   sourceMessageId: string;
   sourceMessageHash: string;
@@ -234,6 +232,17 @@ export interface TaskExecutionQuestionProof {
   timeoutValue: string;
   questionHash: string;
 }
+/** The native wrapper does not expose child MCP call IDs; bind it by durable registry UUID instead. */
+export interface TaskExecutionQuestionRegistrationRef {
+  kind: 'herder-registry';
+  requestId: string;
+  contextRef: string;
+}
+/** Legacy/direct proof keeps real native tool/message IDs; deferred proof uses only its typed registry reference. */
+export type TaskExecutionQuestionProof = TaskExecutionQuestionProofFields & (
+  | { registrationMessageId: string; registrationCallId: string; registrationRef?: never }
+  | { registrationRef: TaskExecutionQuestionRegistrationRef; registrationMessageId?: never; registrationCallId?: never }
+);
 /** One authenticated human answer proposal, stored under the current card CAS before Notice resolve. */
 export interface TaskDecisionAnswerProposal {
   proposalRef: string;

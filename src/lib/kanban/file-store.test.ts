@@ -256,6 +256,64 @@ describe('filesystem kanban contract', () => {
     expect(store.updateCard(created.id, { taskExecutionHistory: [receipt] }, created.version)).toMatchObject({ conflict: true });
   });
 
+  test('round-trips a typed Herder registry question reference without inventing native registration IDs', () => {
+    const created = store.createCard('Deferred OpenCode question', 'QA-only task', 'todo', 'medium', [], 'alpha');
+    const operationId = 'a'.repeat(64);
+    const inputId = 'b'.repeat(64);
+    const nativeInputMessageId = 'msg_17f4466d6001AtmOc1CmXoVyJf';
+    const projectBinding = {
+      contract: 'integrator-host-readiness-v1' as const, projectId: 'alpha', projectRoot: '/workspace/alpha',
+      rootIdentity: 'alpha-root', policyRevision: 'qa-policy-1', observedAtMs: 1792550000000, runtimeInstanceId: 'herder-qa',
+      hostId: 'roomhacker-server-100', harness: 'opencode' as const, harnessVersion: '', model: 'omniroute/minimax-combo-m3.1',
+      requiredTools: [], availableTools: [], availableModels: ['omniroute/minimax-combo-m3.1'], resourceReady: true as const,
+      cwd: '/workspace/alpha', pathResolution: { requestedCwd: '/workspace/alpha', canonicalCwd: '/workspace/alpha',
+        rootPath: '/workspace/alpha', contained: true as const, identityMatches: true as const },
+    };
+    const humanRequestId = '67ce04db-d775-4f81-a86d-31af4bbe1091';
+    const contextRef = `exmanager-task:${created.id}:${operationId}`;
+    const executorQuestion = {
+      humanRequestId, contextRef,
+      registrationRef: { kind: 'herder-registry' as const, requestId: humanRequestId, contextRef },
+      registrationTarget: { harness: 'opencode' as const, sessionId: 'opencode-qa-session', cwd: projectBinding.cwd },
+      sourceMessageId: 'msg_17f4466d6001QuestionQa', sourceMessageHash: 'c'.repeat(64),
+      sourceInputMessageId: nativeInputMessageId, sourceJobId: `job_${'d'.repeat(64)}`,
+      text: 'Какой формат сводки выбрать?',
+      choices: [{ value: 'brief', label: 'Краткая таблица' }, { value: 'total', label: 'Таблица с итоговой строкой' }],
+      timeoutValue: 'brief', questionHash: 'e'.repeat(64),
+    };
+    const receipt = {
+      operationId, requestHash: 'f'.repeat(64), lastBoardVersion: created.version + 1,
+      createInputId: inputId, messageInputId: inputId, phase: 'running' as const,
+      hostId: 'roomhacker-server-100', harness: 'opencode' as const, projectBinding,
+      nativeSessionId: 'opencode-qa-session', nativeDispatchJobId: executorQuestion.sourceJobId,
+      nativeInputMessageId, startedBy: 'testlogin', createdAt: '2026-10-29T00:00:00Z', updatedAt: '2026-10-29T00:00:00Z',
+      executorQuestion,
+    };
+    const saved = store.updateCard(created.id, { taskExecutionHistory: [receipt] }, created.version);
+    if (!saved || 'conflict' in saved) throw new Error('typed registry question receipt save failed');
+    expect(store.readCardFile(path.join(root, saved.fileName))?.taskExecutionHistory?.[0]?.executorQuestion).toEqual(executorQuestion);
+    expect(() => store.updateCard(created.id, { taskExecutionHistory: [{ ...receipt,
+      lastBoardVersion: saved.version + 1,
+      executorQuestion: { ...executorQuestion, registrationRef: { ...executorQuestion.registrationRef, contextRef: 'wrong-context' } },
+    }] }, saved.version)).toThrow('task_execution_history');
+
+    const legacyDirectQuestion = {
+      humanRequestId: executorQuestion.humanRequestId, contextRef: executorQuestion.contextRef,
+      registrationTarget: executorQuestion.registrationTarget,
+      sourceMessageId: executorQuestion.sourceMessageId, sourceMessageHash: executorQuestion.sourceMessageHash,
+      sourceInputMessageId: executorQuestion.sourceInputMessageId, sourceJobId: executorQuestion.sourceJobId,
+      text: executorQuestion.text, choices: executorQuestion.choices, timeoutValue: executorQuestion.timeoutValue,
+      questionHash: executorQuestion.questionHash,
+      registrationMessageId: 'msg_17f4466d6001RegistrationQa', registrationCallId: 'call_17f4466d6001Qa',
+    };
+    const legacySaved = store.updateCard(created.id, { taskExecutionHistory: [{ ...receipt,
+      lastBoardVersion: saved.version + 1, executorQuestion: legacyDirectQuestion,
+    }] }, saved.version);
+    if (!legacySaved || 'conflict' in legacySaved) throw new Error('legacy native question receipt save failed');
+    expect(store.readCardFile(path.join(root, legacySaved.fileName))?.taskExecutionHistory?.[0]?.executorQuestion)
+      .toMatchObject({ registrationMessageId: 'msg_17f4466d6001RegistrationQa', registrationCallId: 'call_17f4466d6001Qa' });
+  });
+
   test('round-trips a signed native requester on the parent receipt while leaving legacy receipts optional', () => {
     const created = store.createCard('Native actor receipt', 'Research', 'todo', 'medium', [], 'alpha');
     const receipt = {

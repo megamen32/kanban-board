@@ -223,6 +223,98 @@ function opencodeJobGetResult(jobId: string) {
   } }, content: [] };
 }
 
+function prepareRegistryExecutorQuestion(input: {
+  registryRecord?: Record<string, unknown> | null;
+  questionIds?: string[];
+  questionPhase?: string;
+} = {}) {
+  const humanRequestId = '67ce04db-d775-4f81-a86d-31af4bbe1091';
+  const project = 'UX QA 2026-10-26';
+  const model = 'omniroute/minimax-combo-m3.1';
+  mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model };
+  mocks.identity.value = { username: 'testlogin', scope: 'work' };
+  const readiness = scopedReadiness(project).projectReadiness;
+  const projectBinding: TaskExecutionProjectBinding = {
+    contract: 'integrator-host-readiness-v1', projectId: project, projectRoot: readiness.projectRoot,
+    rootIdentity: readiness.rootIdentity, policyRevision: readiness.policyRevision, observedAtMs: readiness.observedAtMs,
+    runtimeInstanceId: readiness.runtimeInstanceId, hostId: readiness.hostId, harness: 'opencode',
+    harnessVersion: readiness.harnessVersion, model: readiness.model,
+    requiredTools: readiness.requiredTools as string[], availableTools: readiness.availableTools as string[],
+    availableModels: readiness.availableModels as string[], resourceReady: true, cwd: readiness.cwd,
+    pathResolution: { ...readiness.pathResolution, contained: true, identityMatches: true },
+  };
+  const inputId = '4'.repeat(64);
+  const nativeInputMessageId = opencodeInputMessageId(inputId);
+  const nativeDispatchJobId = userMessageJobId(sessionId, inputId);
+  const card: KanbanCard = {
+    ...baseCard, id: 'f1b6dc21-ddde-4ddf-bd49-2c2a6b867fba', title: 'QA L06: вопрос о варианте тестовой сводки',
+    description: 'Синтетическая QA-задача.', project, owner: 'testlogin', column: 'todo', version: 7,
+  };
+  const attemptIdentity = {
+    id: card.id, title: card.title, description: card.description, project: card.project, owner: card.owner,
+    assignee: null, assignees: card.assignees, actor: 'testlogin', hostId: 'roomhacker-server-100',
+    harness: 'opencode', cwd: projectBinding.cwd, model, projectBinding,
+  };
+  const operationId = 'a'.repeat(64);
+  const requestHash = createHash('sha256').update(JSON.stringify(attemptIdentity)).digest('hex');
+  mocks.currentCard.value = { ...card, taskExecutionHistory: [{
+    operationId, requestHash, lastBoardVersion: card.version, createInputId: '3'.repeat(64), messageInputId: inputId,
+    phase: 'running', hostId: 'roomhacker-server-100', harness: 'opencode', projectBinding, nativeSessionId: sessionId,
+    nativeInputMessageId, nativeDispatchJobId, startedBy: 'testlogin', createdAt: card.created, updatedAt: card.updated,
+  }] };
+  mocks.sessionInfo.value = {
+    id: sessionId, harness: 'opencode', hostId: 'roomhacker-server-100', cwd: projectBinding.cwd,
+    model, status: 'idle', lastActivity: '2026-10-28T18:00:00.000Z',
+    meta: { nativeLastTurn: { status: 'completed' } },
+  };
+  const contextRef = `exmanager-task:${card.id}:${operationId}`;
+  const questionPayload = {
+    kind: 'question', human_request_id: humanRequestId, question: 'Какой формат сводки выбрать?',
+    choices: [{ value: 'brief', label: 'Краткая таблица' }, { value: 'total', label: 'Таблица с итоговой строкой' }],
+    timeoutValue: 'brief',
+  };
+  const questionIds = input.questionIds ?? [humanRequestId];
+  const questionMessages = questionIds.map((requestId, index) => ({
+    id: `msg_question_${String(index).padStart(8, '0')}`,
+    role: 'assistant', turnId: undefined, phase: input.questionPhase ?? 'completed',
+    parts: [{ type: 'text', text: JSON.stringify({ ...questionPayload, human_request_id: requestId }) }],
+  }));
+  const executeMessage = {
+    id: 'msg_execute_1234567890', role: 'assistant', phase: 'tool-calls',
+    parts: [{ type: 'tool_call', name: 'execute', input: { code:
+      `await tools["agent-herder"].human_request_create({kind:"user",harness:"opencode",sessionId:${JSON.stringify(sessionId)},cwd:${JSON.stringify(projectBinding.cwd)},contextRef:${JSON.stringify(contextRef)}});` } }],
+  };
+  const fillerMessages = Array.from({ length: Math.max(0, 50 - questionMessages.length - 1) }, (_, index) => ({
+    id: `msg_filler_${String(index).padStart(8, '0')}`, role: 'assistant', phase: 'tool-calls',
+    parts: [{ type: 'tool_call', name: 'shell', input: { command: 'bounded QA fixture' } }],
+  }));
+  const messages = [...fillerMessages, executeMessage, ...questionMessages];
+  const messagesUri = `herder://sessions/opencode/${encodeURIComponent(sessionId)}/messages`;
+  const firstUserUri = `herder://sessions/opencode/${encodeURIComponent(sessionId)}/first-user-message`;
+  const firstUserMessage = {
+    id: nativeInputMessageId, role: 'user',
+    parts: [{ type: 'text', text: expectedOpenCodeTaskPrompt(card, operationId, sessionId, projectBinding.cwd) }],
+  };
+  mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({ contents: [{
+    uri, mimeType: 'application/json', text: JSON.stringify(uri === firstUserUri ? firstUserMessage : messages),
+  }] }));
+  const record = input.registryRecord === undefined ? {
+    requestId: humanRequestId, kind: 'user',
+    target: { harness: 'opencode', sessionId, cwd: projectBinding.cwd }, contextRef,
+    status: 'pending', answerSource: 'human_channel', continuation: 'resume', createdAt: '2026-10-29T00:00:00.000Z',
+  } : input.registryRecord;
+  mocks.callOwnerHerderTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
+    if (tool === 'human_request_get') return { structuredContent: { request: record }, content: [] };
+    return toolResult(tool, args);
+  });
+  vi.stubEnv('EXMANAGER_NOTICE_PROJECT_TOKEN', 'qa-only');
+  vi.stubEnv('NOTIFY_CENTER_RECIPIENT', 'qa-board-only');
+  vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
+  vi.stubEnv('EXMANAGER_NOTICE_API_BASE_URL', 'http://192.168.192.1:19450');
+  return { humanRequestId, project, model, projectBinding, inputId, nativeInputMessageId, nativeDispatchJobId,
+    card, operationId, contextRef, questionPayload, messages, messagesUri, firstUserUri };
+}
+
 function controllableOpenCodeCard(): KanbanCard {
   const projectBinding = openCodeProjectBinding();
   mocks.sessionInfo.value = { id: controlSessionId, harness: 'opencode', hostId: 'roomhacker-server-100',
@@ -1711,6 +1803,92 @@ describe('task execution API', () => {
       questionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
     }, taskDecisionRequest: { requestId: expect.stringMatching(/^td-[a-f0-9]{40}$/) } });
     expect(JSON.parse(String(noticeRequest.mock.calls[0]?.[1]?.body)).mandate.executor_question).toEqual(persisted.executorQuestion);
+  });
+
+  it('uses a completed OpenCode question and exact Herder registry record when the first user input is outside the message tail', async () => {
+    const fixture = prepareRegistryExecutorQuestion();
+    const noticeRequest = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const mandate = JSON.parse(String(init?.body)).mandate as Record<string, unknown>;
+      const requestId = `td-${createHash('sha256').update(JSON.stringify([fixture.card.id, 'clarification', String(mandate.version)])).digest('hex').slice(0, 40)}`;
+      return new Response(JSON.stringify({ schema: 'noticeplace.task_decision_view.v1', request_id: requestId,
+        project: fixture.project, recipient: 'qa-board-only', status: 'pending', question: { text: mandate.message, mode: 'choice',
+          choices: mandate.choices, expires_at: null, reference: { task_ref: fixture.card.id, purpose: 'clarification',
+            version: String(mandate.version), mandate_ref: fixture.operationId } },
+        notification: { attempt_state: 'sent', receipt: { kind: 'successful_sender_response', confirmed_at: 100 }, deadline_at: 1900 },
+        winner: null, control: { state: 'clear' }, delivery_status: 'sent', idempotent: false }),
+      { status: 201, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', noticeRequest);
+
+    const response = await PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: fixture.card.version }),
+    }), { params: Promise.resolve({ id: fixture.card.id }) });
+
+    if (!response) throw new Error('executor question sync response missing');
+    expect(response.status).toBe(201);
+    expect(mocks.readOwnerHerderResource).toHaveBeenCalledWith(fixture.firstUserUri);
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('human_request_get', { requestId: fixture.humanRequestId });
+    expect(noticeRequest).toHaveBeenCalledTimes(1);
+    const persisted = mocks.currentCard.value!.taskExecutionHistory![0]!;
+    expect(persisted).toMatchObject({ phase: 'waiting', executorQuestion: {
+      humanRequestId: fixture.humanRequestId, contextRef: fixture.contextRef,
+      registrationRef: { kind: 'herder-registry', requestId: fixture.humanRequestId, contextRef: fixture.contextRef },
+      registrationTarget: { harness: 'opencode', sessionId, cwd: fixture.projectBinding.cwd },
+      sourceMessageId: expect.stringMatching(/^msg_[A-Za-z0-9_-]{8,256}$/),
+      sourceInputMessageId: fixture.nativeInputMessageId, sourceJobId: fixture.nativeDispatchJobId,
+      sourceMessageHash: expect.stringMatching(/^[a-f0-9]{64}$/), text: fixture.questionPayload.question,
+    } });
+    expect(persisted.executorQuestion).not.toHaveProperty('registrationCallId');
+    expect(persisted.executorQuestion).not.toHaveProperty('registrationMessageId');
+    expect(JSON.parse(String(noticeRequest.mock.calls[0]?.[1]?.body)).mandate.executor_question).toEqual(persisted.executorQuestion);
+  });
+
+  it.each([
+    { name: 'a different registered UUID', questionIds: ['88ce04db-d775-4f81-a86d-31af4bbe1091'], registryReads: 1 },
+    { name: 'a missing registry record', registryRecord: null, registryReads: 1 },
+    { name: 'a mismatched registry requestId', registryOverrides: { requestId: '88ce04db-d775-4f81-a86d-31af4bbe1091' }, registryReads: 1 },
+    { name: 'a secret request', registryOverrides: { kind: 'secret' }, registryReads: 1 },
+    { name: 'a different harness', registryOverrides: { target: { harness: 'codex', sessionId, cwd } }, registryReads: 1 },
+    { name: 'a different session', registryOverrides: { target: { harness: 'opencode', sessionId: 'other-session', cwd } }, registryReads: 1 },
+    { name: 'a different cwd', registryOverrides: { target: { harness: 'opencode', sessionId, cwd: '/other/project' } }, registryReads: 1 },
+    { name: 'a different task context', registryOverrides: { contextRef: 'exmanager-task:other:operation' }, registryReads: 1 },
+    { name: 'an unfinished assistant question', questionPhase: 'tool-calls', registryReads: 0 },
+    { name: 'ambiguous completed assistant questions', questionIds: [
+      '67ce04db-d775-4f81-a86d-31af4bbe1091', '88ce04db-d775-4f81-a86d-31af4bbe1091',
+    ], registryReads: 0 },
+  ])('does not publish an OpenCode question from $name', async scenario => {
+    const fixture = prepareRegistryExecutorQuestion({
+      ...(scenario.questionIds ? { questionIds: scenario.questionIds } : {}),
+      ...(scenario.questionPhase ? { questionPhase: scenario.questionPhase } : {}),
+    });
+    const registryRecord = {
+      requestId: fixture.humanRequestId, kind: 'user',
+      target: { harness: 'opencode', sessionId, cwd: fixture.projectBinding.cwd }, contextRef: fixture.contextRef,
+      status: 'pending', answerSource: 'human_channel', continuation: 'resume', createdAt: '2026-10-29T00:00:00.000Z',
+      ...(scenario.registryOverrides ?? {}),
+    };
+    const registryReads: Array<Record<string, unknown>> = [];
+    mocks.callOwnerHerderTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
+      if (tool === 'human_request_get') {
+        registryReads.push(args);
+        return { structuredContent: { request: scenario.registryRecord === null ? null : registryRecord }, content: [] };
+      }
+      return toolResult(tool, args);
+    });
+    const noticeRequest = vi.fn(async () => new Response('{}', { status: 503 }));
+    vi.stubGlobal('fetch', noticeRequest);
+
+    const response = await PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: fixture.card.version }),
+    }), { params: Promise.resolve({ id: fixture.card.id }) });
+
+    if (!response) throw new Error('executor question sync response missing');
+    expect(response.status).not.toBe(201);
+    expect(noticeRequest).not.toHaveBeenCalled();
+    expect(mocks.currentCard.value!.taskExecutionHistory?.[0]?.executorQuestion).toBeUndefined();
+    expect(registryReads).toHaveLength(scenario.registryReads);
   });
 
   it('synchronizes an exact completed OpenCode turn from its bound messages resource', async () => {

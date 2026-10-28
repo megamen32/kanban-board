@@ -960,7 +960,7 @@ function humanRequestBindingFromPart(
   };
 }
 
-function executorQuestionFromOpenCodeMessages(
+async function executorQuestionFromOpenCodeMessages(
   messages: RecordValue[],
   userIndex: number,
   expected: {
@@ -973,57 +973,101 @@ function executorQuestionFromOpenCodeMessages(
     sourceJobId: string;
     turnId?: string;
   },
-): TaskExecutionQuestionProof | undefined {
-  const userMessage = messages[userIndex];
-  if (!userMessage || userMessage.role !== 'user' || userMessage.id !== expected.sourceInputMessageId
+  firstUserProof?: VerifiedOpenCodeFirstUserInput,
+): Promise<TaskExecutionQuestionProof | undefined> {
+  const userMessage = userIndex >= 0 ? messages[userIndex] : userIndex === -1 ? firstUserProof?.message : undefined;
+  const firstUserBound = userIndex !== -1 || (!!firstUserProof
+    && firstUserProof.jobId === expected.sourceJobId
+    && firstUserProof.nativeInputMessageId === expected.sourceInputMessageId
+    && firstUserProof.message.id === expected.sourceInputMessageId
+    && !messages.some(message => message.role === 'user'));
+  if (!userMessage || !firstUserBound || userMessage.role !== 'user' || userMessage.id !== expected.sourceInputMessageId
       || userMessage.inputId !== undefined && userMessage.inputId !== expected.inputId
       || messages.slice(userIndex + 1).some(message => message.role === 'user')) return undefined;
+  const expectedContextRef = `exmanager-task:${expected.cardId}:${expected.operationId}`;
   const registrations: Array<{ messageIndex: number; binding: NonNullable<ReturnType<typeof humanRequestBindingFromPart>> }> = [];
+  const directRegistrationParts: Array<{ messageIndex: number; part: RecordValue }> = [];
   for (let index = userIndex + 1; index < messages.length; index++) {
     const message = messages[index]!;
     if (message.role !== 'assistant' || expected.turnId && typeof message.turnId === 'string' && message.turnId !== expected.turnId || !Array.isArray(message.parts)) continue;
     for (const part of message.parts.filter(isRecord)) {
+      if (part.type === 'tool' && part.tool === 'agent-herder_human_request_create') directRegistrationParts.push({ messageIndex: index, part });
       const binding = humanRequestBindingFromPart(part, expected);
       if (binding) registrations.push({ messageIndex: index, binding: { ...binding, messageId: String(message.id ?? '') } });
     }
   }
-  if (registrations.length !== 1) return undefined;
-  const registration = registrations[0]!;
-  if (!/^msg_[A-Za-z0-9_-]{8,256}$/.test(registration.binding.messageId)
-      || !/^[A-Za-z0-9_-]{8,256}$/.test(registration.binding.callId)) return undefined;
-  const questions: Array<{ messageId: string; rawText: string; payload: NonNullable<ReturnType<typeof parseExecutorQuestionPayload>> }> = [];
-  for (let index = registration.messageIndex + 1; index < messages.length; index++) {
-    const message = messages[index]!;
-    if (message.role !== 'assistant' || expected.turnId && typeof message.turnId === 'string' && message.turnId !== expected.turnId
-        || !['stop', 'completed'].includes(String(message.phase)) || !Array.isArray(message.parts)) continue;
-    const textParts = message.parts.filter(isRecord).filter(part => part.type === 'text' && part.ignored !== true && typeof part.text === 'string');
-    if (textParts.length !== 1 || typeof message.id !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(message.id)) continue;
-    const rawText = textParts[0]!.text as string;
-    let rawQuestion: unknown;
-    try { rawQuestion = JSON.parse(rawText); } catch { continue; }
-    const payload = parseExecutorQuestionPayload(rawQuestion, registration.binding.requestId);
-    if (payload) questions.push({ messageId: message.id, rawText, payload });
+  const questionsAfter = (startIndex: number, requestId?: string) => {
+    const questions: Array<{ messageId: string; rawText: string; payload: NonNullable<ReturnType<typeof parseExecutorQuestionPayload>> }> = [];
+    for (let index = startIndex; index < messages.length; index++) {
+      const message = messages[index]!;
+      if (message.role !== 'assistant' || expected.turnId && typeof message.turnId === 'string' && message.turnId !== expected.turnId
+          || !['stop', 'completed'].includes(String(message.phase)) || !Array.isArray(message.parts)) continue;
+      const textParts = message.parts.filter(isRecord).filter(part => part.type === 'text' && part.ignored !== true && typeof part.text === 'string');
+      if (textParts.length !== 1 || typeof message.id !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(message.id)) continue;
+      const rawText = textParts[0]!.text as string;
+      let rawQuestion: unknown;
+      try { rawQuestion = JSON.parse(rawText); } catch { continue; }
+      const questionId = requestId ?? (isRecord(rawQuestion) ? rawQuestion.human_request_id : undefined);
+      if (typeof questionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(questionId)) continue;
+      const payload = parseExecutorQuestionPayload(rawQuestion, questionId);
+      if (payload) questions.push({ messageId: message.id, rawText, payload });
+    }
+    return questions;
+  };
+  const proofFields = (question: NonNullable<ReturnType<typeof parseExecutorQuestionPayload>>, messageId: string, rawText: string) => {
+    const fields = {
+      humanRequestId: question.humanRequestId,
+      sourceMessageId: messageId,
+      sourceMessageHash: sha256(rawText),
+      sourceInputMessageId: expected.sourceInputMessageId,
+      sourceJobId: expected.sourceJobId,
+      text: question.text,
+      choices: question.choices,
+      timeoutValue: question.timeoutValue,
+    };
+    return { fields, questionHash: sha256(canonicalJson(fields)) };
+  };
+  if (directRegistrationParts.length > 0) {
+    if (directRegistrationParts.length !== 1 || registrations.length !== 1) return undefined;
+    const registration = registrations[0]!;
+    if (!/^msg_[A-Za-z0-9_-]{8,256}$/.test(registration.binding.messageId)
+        || !/^[A-Za-z0-9_-]{8,256}$/.test(registration.binding.callId)) return undefined;
+    const questions = questionsAfter(registration.messageIndex + 1, registration.binding.requestId);
+    if (questions.length !== 1) return undefined;
+    const question = questions[0]!;
+    const proof = proofFields(question.payload, question.messageId, question.rawText);
+    return {
+      ...proof.fields,
+      contextRef: registration.binding.contextRef,
+      registrationMessageId: registration.binding.messageId,
+      registrationCallId: registration.binding.callId,
+      registrationTarget: registration.binding.target,
+      questionHash: proof.questionHash,
+    };
   }
+
+  // OpenCode's execute source is model-authored JavaScript, so only a completed
+  // assistant question UUID followed by Herder's durable registry can prove registration.
+  const questions = questionsAfter(userIndex + 1);
   if (questions.length !== 1) return undefined;
   const question = questions[0]!;
-  const sourceMessageHash = sha256(question.rawText);
-  const fields = {
-    humanRequestId: question.payload.humanRequestId,
-    sourceMessageId: question.messageId,
-    sourceMessageHash,
-    sourceInputMessageId: expected.sourceInputMessageId,
-    sourceJobId: expected.sourceJobId,
-    text: question.payload.text,
-    choices: question.payload.choices,
-    timeoutValue: question.payload.timeoutValue,
-  };
+  let result: HerderToolResult;
+  try { result = await callOwnerHerderTool('human_request_get', { requestId: question.payload.humanRequestId }); }
+  catch { return undefined; }
+  if (result.isError === true) return undefined;
+  const response = jsonFromTool(result);
+  const request = response && isRecord(response.request) ? response.request : undefined;
+  const target = request && isRecord(request.target) ? request.target : undefined;
+  if (!request || request.requestId !== question.payload.humanRequestId || request.kind !== 'user'
+      || request.contextRef !== expectedContextRef || !target || target.harness !== 'opencode'
+      || target.sessionId !== expected.sessionId || target.cwd !== expected.cwd) return undefined;
+  const proof = proofFields(question.payload, question.messageId, question.rawText);
   return {
-    ...fields,
-    contextRef: registration.binding.contextRef,
-    registrationMessageId: registration.binding.messageId,
-    registrationCallId: registration.binding.callId,
-    registrationTarget: registration.binding.target,
-    questionHash: sha256(canonicalJson(fields)),
+    ...proof.fields,
+    contextRef: expectedContextRef,
+    registrationRef: { kind: 'herder-registry', requestId: question.payload.humanRequestId, contextRef: expectedContextRef },
+    registrationTarget: { harness: 'opencode', sessionId: expected.sessionId, cwd: expected.cwd },
+    questionHash: proof.questionHash,
   };
 }
 
@@ -2783,7 +2827,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const questionJobId = directInput?.nativeDispatchJobId ?? mainNativeDispatchJobId;
       if (attempt.projectBinding && questionInputMessageId && questionJobId
           && questionJobId === userMessageJobId('opencode', attempt.nativeSessionId, questionInputId)) {
-        const executorQuestion = executorQuestionFromOpenCodeMessages(messages, userIndex, {
+        const executorQuestion = await executorQuestionFromOpenCodeMessages(messages, userIndex, {
           cardId: context.card.id,
           operationId: attempt.operationId,
           sessionId: attempt.nativeSessionId,
@@ -2792,7 +2836,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           sourceInputMessageId: questionInputMessageId,
           sourceJobId: questionJobId,
           ...(expectedOpenCodeTurnId ? { turnId: expectedOpenCodeTurnId } : {}),
-        });
+        }, verifiedInitialInputProof);
         if (executorQuestion) {
           return await createTaskQuestion(context, {
             action: 'sync-executor-question', expectedVersion: context.card.version,
