@@ -35,4 +35,15 @@ describe('CardHierarchyPanel', () => {
     expect(html).toContain('Родительская задача скрыта текущей выборкой.');
     expect(html).not.toContain('filtered-parent-id');
   });
+
+  test('keeps long parent labels readable and clickable within a narrow breadcrumb row', () => {
+    const root = card('synthetic-root-id', 'Долгий путь реализации плана мероприятий ForEnergo');
+    const child = card('synthetic-child-id', 'Проработка обязательных документов и материалов', root.id);
+    const onSelectCard = vi.fn();
+    const html = renderToStaticMarkup(<CardHierarchyPanel card={child} relatedCards={[root, child]} onSelectCard={onSelectCard} />);
+    expect(html).toContain('Долгий путь реализации плана мероприятий ForEnergo</button>');
+    expect(html).toContain('whitespace-normal');
+    expect(html).toContain('break-words');
+    expect(html).toContain('min-w-0');
+  });
 });

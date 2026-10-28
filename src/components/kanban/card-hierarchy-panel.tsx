@@ -19,13 +19,13 @@ export function CardHierarchyPanel({ card, relatedCards, breadcrumbCards = relat
   const visibleCard = (id: string) => relatedCards.find(item => item.id === id);
   return (
     <section aria-label="Иерархия задач" className="space-y-2 rounded-md border bg-muted/20 p-3">
-      {ancestors.length > 0 && <nav aria-label="Путь к задаче" className="flex flex-wrap items-center gap-1 text-sm">
+      {ancestors.length > 0 && <nav aria-label="Путь к задаче" className="flex w-full min-w-0 flex-wrap items-center gap-1 text-sm">
         <span className="text-muted-foreground">Родительский путь:</span>
-        {ancestors.map((ancestor, index) => <span key={ancestor.id} className="inline-flex items-center gap-1">
+        {ancestors.map((ancestor, index) => <span key={ancestor.id} className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1">
           {index > 0 && <span aria-hidden className="text-muted-foreground">›</span>}
           {onSelectCard && visibleCard(ancestor.id)
-            ? <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={() => onSelectCard(visibleCard(ancestor.id)!)}>{ancestor.title}</Button>
-            : <span>{ancestor.title}</span>}
+            ? <Button type="button" variant="link" size="sm" className="h-auto min-w-0 max-w-full whitespace-normal break-words p-0 text-left" onClick={() => onSelectCard(visibleCard(ancestor.id)!)}>{ancestor.title}</Button>
+            : <span className="min-w-0 max-w-full break-words">{ancestor.title}</span>}
         </span>)}
         <span aria-hidden className="text-muted-foreground">›</span><span className="font-medium">{card.title}</span>
       </nav>}
