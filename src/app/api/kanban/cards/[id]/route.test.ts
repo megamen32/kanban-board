@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KanbanCard } from '@/lib/kanban/types';
 import { nativeProjectAccessForRequest } from '../../../../../lib/kanban/native-project-access';
 
-const { findCardById, updateCard, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated, managerAuthorized, nativeAccess, nativeProjectAccessContextFromRequest } = vi.hoisted(() => ({
+const { findCardById, updateCard, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated, managerAuthorized, nativeAccess, nativeProjectAccessContextFromRequest, ownerBrowserReadAllowed } = vi.hoisted(() => ({
   findCardById: vi.fn(),
   updateCard: vi.fn(),
   validateTransition: vi.fn(),
@@ -16,6 +16,7 @@ const { findCardById, updateCard, validateTransition, dispatchCardEvent, startDu
   managerAuthorized: { current: false },
   nativeAccess: { current: null as null | { userId: string; forProject: (project: string) => Promise<{ project: string; team: string; readAllowed: true; writeAllowed: boolean }> } },
   nativeProjectAccessContextFromRequest: vi.fn(async (_request?: Request) => nativeAccess.current),
+  ownerBrowserReadAllowed: vi.fn(async () => false),
 }));
 
 vi.mock('@/lib/kanban/file-store', () => ({ findCardById, updateCard, deleteCard: vi.fn() }));
@@ -27,6 +28,7 @@ vi.mock('@/lib/auth/request', () => ({
   managerRequestAuthorized: () => managerAuthorized.current,
   nativeProjectAccessContextFromRequest,
 }));
+vi.mock('@/lib/auth/owner-browser-read', () => ({ ownerBrowserReadAllowed }));
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope }));
 vi.mock('@/lib/notifications/push', () => ({ dispatchCardEvent }));
 vi.mock('@/lib/notifications/scheduler', () => ({ startDueReminderScheduler }));
@@ -75,7 +77,8 @@ describe('PATCH /api/kanban/cards/[id]', () => {
     authenticated.current = { username: 'nikita', scope: 'work' };
     managerAuthorized.current = false;
     nativeAccess.current = null;
-    nativeProjectAccessContextFromRequest.mockImplementation(async () => nativeAccess.current);
+    nativeProjectAccessContextFromRequest.mockReset().mockImplementation(async () => nativeAccess.current);
+    ownerBrowserReadAllowed.mockReset().mockResolvedValue(false);
     tasksDirForScope.mockReturnValue('/scoped/work');
     findCardById.mockReturnValue(existingCard);
     updateCard.mockReturnValue({ ...existingCard, version: 3 });
@@ -351,6 +354,9 @@ describe('PATCH /api/kanban/cards/[id]', () => {
 describe('GET /api/kanban/cards/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    nativeAccess.current = null;
+    nativeProjectAccessContextFromRequest.mockReset().mockImplementation(async () => nativeAccess.current);
+    ownerBrowserReadAllowed.mockReset().mockResolvedValue(false);
     identity.current = { username: 'anonymous', scope: 'work' };
     authenticated.current = null;
     managerAuthorized.current = false;
@@ -544,6 +550,35 @@ describe('GET /api/kanban/cards/[id]', () => {
     const response = await GET(new NextRequest('http://localhost/api/kanban/cards/card-1'), { params: Promise.resolve({ id: 'card-1' }) });
     expect(response.status).toBe(200);
     expect((await response.json()).card.project).toBe('Олег и Никита');
+  });
+
+  it('uses the existing owner browser read grant before the unavailable native resolver', async () => {
+    authenticated.current = { username: 'nikita', scope: 'work' };
+    ownerBrowserReadAllowed.mockResolvedValueOnce(true);
+    nativeProjectAccessContextFromRequest.mockRejectedValueOnce(new Error('native_identity_unconfigured'));
+    const card = { ...existingCard, project: 'Олег и Никита' };
+    findCardById.mockReturnValue(card);
+    const response = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards/card-1', {
+      headers: {
+        cookie: 'kanban_session=owner-session',
+        'X-Airlock-Todo-Native-Identity': 'verified-owner-assertion',
+      },
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ card });
+    expect(ownerBrowserReadAllowed).toHaveBeenCalledOnce();
+    expect(nativeProjectAccessContextFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('keeps a native-only card read on the existing fail-closed project resolver', async () => {
+    ownerBrowserReadAllowed.mockResolvedValueOnce(false);
+    nativeProjectAccessContextFromRequest.mockRejectedValueOnce(new Error('native_identity_unconfigured'));
+    const response = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards/card-1', {
+      headers: { 'X-Airlock-Todo-Native-Identity': 'verified-native-assertion' },
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+    expect(response.status).toBe(503);
+    expect(nativeProjectAccessContextFromRequest).toHaveBeenCalledOnce();
   });
 
   it('does not let nikita read a card from a project outside the verified board scope', async () => {

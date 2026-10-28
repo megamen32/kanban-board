@@ -3,6 +3,7 @@ import { findCardById, updateCard, deleteCard } from '@/lib/kanban/file-store';
 import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
 import { boardIdentityFromRequest, managerRequestAuthorized, nativeProjectAccessContextFromRequest } from '@/lib/auth/request';
 import { boardHumanIdentityFromRequest } from '@/lib/auth/board-human';
+import { ownerBrowserReadAllowed } from '@/lib/auth/owner-browser-read';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import type { NativeProjectAccessContext } from '@/lib/kanban/native-project-access';
 import { normalizeDueAt } from '@/lib/kanban/due-at';
@@ -49,7 +50,8 @@ function qaTestLoginCardReadAllowed(req: NextRequest, identity: { username: stri
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let nativeContext: NativeProjectAccessContext | null;
   try {
-    nativeContext = await nativeProjectAccessContextFromRequest(req);
+    const ownerBrowserRead = await ownerBrowserReadAllowed(req);
+    nativeContext = ownerBrowserRead ? null : await nativeProjectAccessContextFromRequest(req);
   } catch (error) {
     const reason = error instanceof Error ? error.message : '';
     return NextResponse.json({ error: 'native identity could not be verified' }, {

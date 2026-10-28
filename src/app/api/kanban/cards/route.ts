@@ -3,6 +3,7 @@ import { getAllCards, createCard, updateCard } from '@/lib/kanban/file-store';
 import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
 import { boardIdentityFromRequest, managerRequestAuthorized, nativeProjectAccessContextFromRequest } from '@/lib/auth/request';
 import { boardHumanIdentityFromRequest } from '@/lib/auth/board-human';
+import { ownerBrowserReadAllowed } from '@/lib/auth/owner-browser-read';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { listProjects } from '../../../../lib/kanban/project-store';
 import { normalizeDueAt } from '@/lib/kanban/due-at';
@@ -42,7 +43,8 @@ function qaTestLoginCardReadAllowed(req: NextRequest, identity: { username: stri
 }
 export async function GET(req: NextRequest) {
   try {
-    const nativeContext = await nativeProjectAccessContextFromRequest(req);
+    const ownerBrowserRead = await ownerBrowserReadAllowed(req);
+    const nativeContext = ownerBrowserRead ? null : await nativeProjectAccessContextFromRequest(req);
     startDueReminderScheduler();
     if (nativeContext) {
       const tasksDir = tasksDirForScope('work');
@@ -90,7 +92,7 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const reason = e instanceof Error ? e.message : '';
     const status = reason === 'native_identity_unconfigured' ? 503
-      : reason === 'native_identity_invalid' || reason === 'native_project_hint_invalid' ? 403
+      : reason === 'native_identity_invalid' || reason === 'native_project_hint_invalid' || reason === 'native_owner_read_mismatch' ? 403
         : reason.startsWith('native_') ? 503 : 500;
     return NextResponse.json({ error: status === 403 ? 'native identity could not be verified' : 'cards could not be read' }, { status });
   }
