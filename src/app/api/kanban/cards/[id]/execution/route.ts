@@ -6,7 +6,7 @@ import { boardIdentityFromRequest, identityFromRequest, nativeProjectAccessConte
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { findCardById, updateCard } from '@/lib/kanban/file-store';
 import { taskExecutionSnapshot } from '@/lib/kanban/task-execution';
-import { callOwnerHerderTool, readOwnerHerderResource, type HerderToolResult } from '@/lib/kanban/task-execution-client';
+import { callOwnerHerderTool, readOwnerHerderResource, type HerderResourceResult, type HerderToolResult } from '@/lib/kanban/task-execution-client';
 import { validateTransition } from '@/lib/kanban/transition-policy';
 import { markSourceIntentConsumed } from '../../../../../../lib/kanban/source-operation';
 import { currentNativeProjectContext } from '../../../../../../lib/kanban/native-request-context';
@@ -858,6 +858,17 @@ function openCodeBoundInputMessageIndex(messages: RecordValue[], nativeInputMess
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/** A verified first-user record may anchor a result only if the recent tail has no later user message. */
+function openCodeResultInputIndex(messages: RecordValue[], nativeInputMessageId: string, inputId: string,
+  firstUserProof?: VerifiedOpenCodeFirstUserInput): number | undefined {
+  const visibleIndex = openCodeBoundInputMessageIndex(messages, nativeInputMessageId, inputId);
+  if (visibleIndex !== undefined) return visibleIndex;
+  if (!firstUserProof || firstUserProof.nativeInputMessageId !== nativeInputMessageId
+      || (firstUserProof.message.inputId !== undefined && firstUserProof.message.inputId !== inputId)
+      || messages.some(message => message.role === 'user')) return undefined;
+  return -1;
+}
+
 function openCodeVisibleText(message: RecordValue): string | undefined {
   if (!Array.isArray(message.parts)) return undefined;
   const text = message.parts.filter(isRecord)
@@ -882,6 +893,10 @@ interface VerifiedOpenCodeDeliveryJob {
   nativeInputMessageId: string;
 }
 
+interface VerifiedOpenCodeFirstUserInput extends VerifiedOpenCodeDeliveryJob {
+  message: RecordValue;
+}
+
 /** Reconcile one exact accepted user-message job without relying on a truncated transcript projection. */
 async function verifiedOpenCodeDeliveryJob(receipt: TaskExecutionReceipt, inputId: string): Promise<VerifiedOpenCodeDeliveryJob | undefined> {
   if (receipt.harness !== 'opencode' || !receipt.nativeSessionId || !receipt.projectBinding
@@ -900,6 +915,26 @@ async function verifiedOpenCodeDeliveryJob(receipt: TaskExecutionReceipt, inputI
       || job.onceKey !== onceKey || result?.ok !== true || result.admitted !== true || result.inputId !== inputId
       || typeof nativeInputMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(nativeInputMessageId)) return undefined;
   return { jobId, nativeInputMessageId };
+}
+
+/** Verify the exact admitted initial input through Herder's durable first-user-message resource. */
+async function verifiedOpenCodeFirstUserInput(receipt: TaskExecutionReceipt, inputId: string,
+  expectedText: string): Promise<VerifiedOpenCodeFirstUserInput | undefined> {
+  const delivery = await verifiedOpenCodeDeliveryJob(receipt, inputId);
+  if (!delivery || !receipt.nativeSessionId) return undefined;
+  const uri = `herder://sessions/opencode/${encodeURIComponent(receipt.nativeSessionId)}/first-user-message`;
+  let resource: HerderResourceResult;
+  try { resource = await readOwnerHerderResource(uri); }
+  catch { return undefined; }
+  const contents = resource.contents.filter(item => item.uri === uri && item.mimeType === 'application/json'
+    && typeof item.text === 'string');
+  if (contents.length !== 1) return undefined;
+  let value: unknown;
+  try { value = JSON.parse(contents[0]!.text!); } catch { return undefined; }
+  if (!isRecord(value) || value.role !== 'user' || value.id !== delivery.nativeInputMessageId
+      || (value.inputId !== undefined && value.inputId !== inputId)
+      || !openCodeVisibleText(value)?.includes(expectedText)) return undefined;
+  return { ...delivery, message: value };
 }
 
 /** Link an accepted Herder delivery job to its exact user message in the bound OpenCode session. */
@@ -2017,23 +2052,21 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: 'native session identity could not be verified' }, { status: 502 });
     }
     let openCodeMessagesForAttempt: RecordValue[] | undefined;
-    let queuedAdmissionProof: VerifiedOpenCodeInput | undefined;
+    let queuedAdmissionProof: VerifiedOpenCodeFirstUserInput | undefined;
     if (pendingOpenCodeDispatchReadback) {
       failureStage = 'verify-project-binding';
       if (!attempt.projectBinding || !await currentScopedBinding(attempt.projectBinding, context.card.project)) {
         return NextResponse.json({ error: 'saved project route is no longer ready; readback is denied' }, { status: 503 });
       }
       failureStage = 'read-bound-session-messages';
-      queuedAdmissionProof = await verifiedOpenCodeInput(attempt, attempt.messageInputId, taskPrompt(context.card));
-      openCodeMessagesForAttempt = queuedAdmissionProof?.messages;
-      const taskMessageIndex = openCodeMessagesForAttempt ? openCodeTaskMessageIndex(openCodeMessagesForAttempt, context.card) : undefined;
-      if (!queuedAdmissionProof || taskMessageIndex === undefined || taskMessageIndex !== queuedAdmissionProof.userIndex
-          || openCodeMessagesForAttempt?.[taskMessageIndex]?.id !== queuedAdmissionProof.nativeInputMessageId) {
+      queuedAdmissionProof = await verifiedOpenCodeFirstUserInput(attempt, attempt.messageInputId, taskPrompt(context.card));
+      if (!queuedAdmissionProof) {
         return NextResponse.json({ ...taskExecutionSnapshot(context.card),
           waitReason: 'Ожидаю подтверждённую квитанцию доставки и совпадающее сообщение этой карточки. Повтор не выполнялся.' }, {
           status: 202, headers: { 'Cache-Control': 'no-store' },
         });
       }
+      openCodeMessagesForAttempt = await readOpenCodeMessages(attempt.nativeSessionId);
     }
     const nativeLastTurn = isRecord(session.meta) && isRecord(session.meta.nativeLastTurn)
       ? session.meta.nativeLastTurn : undefined;
@@ -2114,6 +2147,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     let assistantText: string | undefined;
     let assistantMessageId: string | undefined;
     let resultTurnId: string | undefined = attempt.nativeTurnId;
+    let verifiedInitialInputProof = queuedAdmissionProof;
     if (attempt.harness === 'opencode') {
       failureStage = 'read-completed-session-result';
       const messagesUri = `herder://sessions/opencode/${encodeURIComponent(attempt.nativeSessionId)}/messages`;
@@ -2128,10 +2162,18 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const mainNativeDispatchJobId = queuedAdmissionProof?.jobId ?? attempt.nativeDispatchJobId;
       const mainBindingIsExact = !!mainNativeInputMessageId && !!mainNativeDispatchJobId
         && mainNativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, attempt.messageInputId);
+      if (!directInput && mainBindingIsExact && mainNativeInputMessageId
+          && openCodeBoundInputMessageIndex(messages, mainNativeInputMessageId, attempt.messageInputId) === undefined
+          && !verifiedInitialInputProof) {
+        failureStage = 'read-first-user-message';
+        verifiedInitialInputProof = await verifiedOpenCodeFirstUserInput(attempt, attempt.messageInputId, taskPrompt(context.card));
+      }
       const userIndex = directInput
         ? directBindingIsExact ? openCodeBoundInputMessageIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined
         : mainNativeInputMessageId || mainNativeDispatchJobId
-          ? mainBindingIsExact ? openCodeBoundInputMessageIndex(messages, mainNativeInputMessageId!, attempt.messageInputId) : undefined
+          ? mainBindingIsExact && mainNativeInputMessageId
+            ? openCodeResultInputIndex(messages, mainNativeInputMessageId, attempt.messageInputId, verifiedInitialInputProof)
+            : undefined
           : openCodeTaskMessageIndex(messages, context.card);
       if (userIndex === undefined) return NextResponse.json({ ...taskExecutionSnapshot(context.card),
         waitReason: directBindingIsExact
@@ -2200,10 +2242,18 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const mainNativeDispatchJobId = queuedAdmissionProof?.jobId ?? attempt.nativeDispatchJobId;
       const mainBindingIsExact = !!mainNativeInputMessageId && !!mainNativeDispatchJobId
         && mainNativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, attempt.messageInputId);
+      if (!directInput && mainBindingIsExact && mainNativeInputMessageId
+          && messages && openCodeBoundInputMessageIndex(messages, mainNativeInputMessageId, attempt.messageInputId) === undefined
+          && !verifiedInitialInputProof) {
+        failureStage = 'reconfirm-first-user-message';
+        verifiedInitialInputProof = await verifiedOpenCodeFirstUserInput(attempt, attempt.messageInputId, taskPrompt(context.card));
+      }
       const userIndex = messages ? directInput
         ? directBindingIsExact ? openCodeBoundInputMessageIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined
         : mainNativeInputMessageId || mainNativeDispatchJobId
-          ? mainBindingIsExact ? openCodeBoundInputMessageIndex(messages, mainNativeInputMessageId!, attempt.messageInputId) : undefined
+          ? mainBindingIsExact && mainNativeInputMessageId
+            ? openCodeResultInputIndex(messages, mainNativeInputMessageId, attempt.messageInputId, verifiedInitialInputProof)
+            : undefined
           : openCodeTaskMessageIndex(messages, context.card) : undefined;
       const assistant = messages && userIndex !== undefined
         ? completedOpenCodeAssistant(messages, userIndex, resultTurnId ?? attempt.nativeTurnId) : undefined;

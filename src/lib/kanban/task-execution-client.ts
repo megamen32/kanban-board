@@ -47,8 +47,10 @@ export async function callOwnerHerderTool(name: HerderToolName, args: Record<str
 /** Read an exact bound-session resource through the same protected server route. */
 export async function readOwnerHerderResource(uri: string, timeoutMs = 30_000): Promise<HerderResourceResult> {
   const parsed = new URL(uri);
+  const allowedSessionResource = /^\/(codex|opencode|zcode)\/[^/]+\/messages$/.test(parsed.pathname)
+    || /^\/opencode\/[^/]+\/first-user-message$/.test(parsed.pathname);
   if (parsed.protocol !== 'herder:' || parsed.hostname !== 'sessions' || parsed.username || parsed.password
-      || parsed.search || parsed.hash || !/^\/(codex|opencode|zcode)\/[^/]+\/messages$/.test(parsed.pathname)) {
+      || parsed.search || parsed.hash || !allowedSessionResource) {
     throw new Error('task_execution_resource_out_of_scope');
   }
   const token = process.env.AGENT_HERDER_HTTP_TOKEN?.trim();

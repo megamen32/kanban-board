@@ -1352,6 +1352,82 @@ describe('task execution API', () => {
     expect(mocks.currentCard.value?.resultHistory?.at(-1)?.summary).toBe('Found two candidates');
   });
 
+  it('reconciles the same accepted OpenCode operation when its first user message is outside the recent messages window', async () => {
+    const projectBinding = openCodeProjectBinding();
+    const exactOperationId = 'd'.repeat(64);
+    const exactInputId = createHash('sha256').update(`${exactOperationId}\0dispatch`).digest('hex');
+    const firstUserUri = `herder://sessions/opencode/${sessionId}/first-user-message`;
+    const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
+    const exactTaskPrompt = [
+      `Выполни задачу канбан карточки ${baseCard.id} из проекта «${baseCard.project}».`,
+      `Название: ${baseCard.title}`,
+      `Описание задачи:\n${baseCard.description}`,
+      'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
+      'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
+    ].join('\n\n');
+    const originalUserMessage = {
+      id: 'msg_first_user_message_123456', role: 'user', inputId: exactInputId,
+      parts: [{ type: 'text', text: `Поручение пользователя, переданное агентом\n\n${exactTaskPrompt}` }],
+    };
+    const requestHash = createHash('sha256').update(JSON.stringify({
+      id: baseCard.id, title: baseCard.title, description: baseCard.description, project: baseCard.project,
+      owner: baseCard.owner ?? 'nikita', assignee: baseCard.assignee ?? null, assignees: baseCard.assignees,
+      actor: 'nikita', hostId: 'roomhacker-server-100', harness: 'opencode',
+      cwd: projectBinding.cwd, model: projectBinding.model, projectBinding,
+    })).digest('hex');
+    mocks.currentCard.value = {
+      ...baseCard, column: 'in-progress', version: 5,
+      taskExecutionHistory: [{
+        operationId: exactOperationId, requestHash, lastBoardVersion: 5,
+        createInputId: '1'.repeat(64), messageInputId: exactInputId, phase: 'dispatch-unknown',
+        hostId: 'roomhacker-server-100', harness: 'opencode', nativeSessionId: sessionId,
+        projectBinding, startedBy: 'nikita', createdAt: baseCard.created, updatedAt: baseCard.updated,
+      }],
+    };
+    mocks.sessionInfo.value = {
+      id: sessionId, harness: 'opencode', hostId: 'roomhacker-server-100', cwd: projectBinding.cwd,
+      model: projectBinding.model, status: 'idle', needsPermission: false,
+      meta: { nativeLastTurn: { turnId: 'turn-1', status: 'completed' } },
+    };
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'job_get') return { structuredContent: { job: {
+        id: args.jobId, state: 'completed', ownerSessionId: sessionId,
+        onceKey: ['user-message', 'opencode', sessionId, exactInputId].join('\0'),
+        result: { ok: true, admitted: true, inputId: exactInputId, nativeInputMessageId: originalUserMessage.id },
+      } }, content: [] };
+      return toolResult(tool, args);
+    });
+    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({ contents: [{
+      uri, mimeType: 'application/json', text: JSON.stringify(uri === firstUserUri
+        ? originalUserMessage
+        : uri === messagesUri
+          ? [{ id: 'msg_final_assistant_123456', role: 'assistant', turnId: 'turn-1', phase: 'completed',
+            parts: [{ type: 'text', text: 'QA result saved from the original task; total 2500.' }] }]
+          : null),
+    }] }));
+    mocks.validateTransition.mockImplementation((_card: KanbanCard, updates: { executorResult?: { summary?: string } }) => ({
+      kind: 'redirected', patch: { column: 'review', needsReview: true, resultHistory: [{
+        summary: updates.executorResult?.summary ?? '', evidenceRefs: [], submittedBy: 'nikita', submittedAt: '2026-10-28T00:00:00.000Z',
+      }] },
+    }));
+
+    const response = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId: exactOperationId, expectedVersion: 5 }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('OpenCode result reconciliation response missing');
+
+    expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
+    expect(mocks.readOwnerHerderResource).toHaveBeenCalledWith(firstUserUri);
+    expect(mocks.currentCard.value?.resultHistory?.at(-1)?.summary).toBe('QA result saved from the original task; total 2500.');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      operationId: exactOperationId, phase: 'result', nativeSessionId: sessionId,
+      nativeDispatchJobId: userMessageJobId(sessionId, exactInputId),
+      nativeInputMessageId: originalUserMessage.id,
+    });
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message' || tool === 'fleet_create_session')).toHaveLength(0);
+  });
+
   it('synchronizes an exact completed OpenCode turn from its bound messages resource', async () => {
     mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
     const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
