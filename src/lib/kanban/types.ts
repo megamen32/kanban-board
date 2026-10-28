@@ -45,7 +45,8 @@ export interface KanbanCard {
   reviewHistory?: TaskReviewRecord[];
   /** Durable native-session launch/dispatch receipts stored on this Markdown card. */
   taskExecutionHistory?: TaskExecutionReceipt[];
-  nextAction?: string;
+  /** null is a durable human clear that must suppress executor-history fallback. */
+  nextAction?: string | null;
   /** Immutable source admission identity; the board operation journal owns lifecycle state. */
   sourceAdmission?: SourceAdmissionBinding;
   /** Immutable canonical catalog references; IDs and causal revisions only. */
@@ -172,6 +173,9 @@ export interface TaskExecutionContinuation {
   readonly requestHash: string;
   /** Signed native actor that created this child intent; absent on legacy continuations. */
   readonly requestedBy?: string;
+  /** OpenCode delivery proof; these message IDs are not native turn IDs. */
+  readonly nativeDispatchJobId?: string;
+  readonly nativeInputMessageId?: string;
   readonly phase: TaskExecutionContinuationPhase;
   readonly nativeTurnId?: string;
   readonly summary?: string;
@@ -184,10 +188,18 @@ export type TaskExecutionSessionControlPhase = 'intent' | 'accepted' | 'unknown'
 export interface TaskExecutionSessionControl {
   requestHash: string;
   phase: TaskExecutionSessionControlPhase;
+  /** Stop generation: initial task input or the latest accepted direct continuation. */
+  controlEpoch?: string;
+  /** Stable Agent Herder delivery identity for queue-mode OpenCode control input. */
+  nativeDispatchJobId?: string;
+  /** Provider message ID verified against the same session's native messages resource. */
+  nativeInputMessageId?: string;
   updatedAt: string;
 }
 export interface TaskExecutionSessionControls {
   direct?: readonly TaskExecutionSessionControl[];
+  /** Append-only stop receipts; `stop` remains the latest receipt for legacy readers. */
+  stops?: readonly TaskExecutionSessionControl[];
   stop?: TaskExecutionSessionControl;
 }
 /** Opaque Notice request identity attached to the exact execution operation. */
@@ -237,6 +249,10 @@ export interface TaskExecutionReceipt {
   projectBinding?: TaskExecutionProjectBinding;
   nativeSessionId?: string;
   nativeTurnId?: string;
+  /** OpenCode's stable accepted user-message ID; does not pretend to be a native turn ID. */
+  nativeInputMessageId?: string;
+  /** Durable Agent Herder admission job that yielded nativeInputMessageId. */
+  nativeDispatchJobId?: string;
   /** Signed native actor that created this parent intent; absent on legacy receipts. */
   requestedBy?: string;
   /** Immutable Notice request link; the question body remains in Notice. */

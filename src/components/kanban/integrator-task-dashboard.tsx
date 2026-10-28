@@ -2,16 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUpRight, CircleHelp, Clock3, Pencil, Play, UserRoundCheck } from 'lucide-react';
-import type { KanbanCard, TaskExecutionSessionControlPhase } from '@/lib/kanban/types';
+import type { KanbanCard, TaskExecutionReceipt, TaskExecutionSessionControlPhase } from '@/lib/kanban/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import { MarkdownText } from './markdown-text';
 import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
+import { matchesTaskExecutionOperation } from './notice-question-model';
 import {
   canRetrySameOperation,
   canContinueTask,
   confirmedTaskRequests,
+  durableExecutionReceiptId,
+  hasUnresolvedDurableExecution,
+  hasStopReceiptForCurrentEpoch,
+  latestSessionStopControl,
+  openCodeControlReceipt,
+  sessionControlStopEpoch,
   executionOperationStorageKey,
   executionSignalLabel,
   executionStartRequest,
@@ -42,8 +49,83 @@ function safeSourceUrl(value: string): string | null {
   } catch { return null; }
 }
 
-async function sessionControlRequestHash(cardId: string, operationId: string, action: 'direct' | 'stop', message: string): Promise<string> {
-  const payload = JSON.stringify({ cardId, operationId, action, message });
+function sessionRecoveryAttemptStorageKey(cardId: string): string {
+  return `kanban:task-execution-session-recovery:${encodeURIComponent(cardId)}`;
+}
+
+type TaskStartFailure = {
+  kind: 'not_attempted' | 'unknown';
+  operation: StoredStartOperation;
+  retryable: boolean;
+  message: string;
+};
+
+export function isRecoverableNotAttemptedDispatch(receipt: TaskExecutionReceipt | undefined, cardVersion: number): receipt is TaskExecutionReceipt {
+  if (!receipt || receipt.phase !== 'dispatch-unknown' || receipt.harness !== 'opencode'
+      || !receipt.hostId || !receipt.nativeSessionId || receipt.nativeTurnId
+      || receipt.continuations?.length || receipt.lastBoardVersion !== cardVersion
+      || !receipt.messageInputId) return false;
+
+  let dispatchReceipt: unknown;
+  try {
+    dispatchReceipt = JSON.parse(receipt.dispatchReceiptText ?? 'null');
+  } catch {
+    return false;
+  }
+  return Boolean(dispatchReceipt && typeof dispatchReceipt === 'object' && !Array.isArray(dispatchReceipt)
+    && 'delivery' in dispatchReceipt && dispatchReceipt.delivery === 'not_attempted'
+    && 'nonRetryable' in dispatchReceipt && dispatchReceipt.nonRetryable === true
+    && 'inputId' in dispatchReceipt && dispatchReceipt.inputId === receipt.messageInputId);
+}
+
+export async function recoverableNoTurnOperationId(
+  cardId: string,
+  cardVersion: number,
+  receipt: TaskExecutionReceipt | undefined,
+  rawStoredOperation: string | null,
+  recoveryAttemptedOperationId?: string | null,
+): Promise<string | null> {
+  const stored = parseStoredStartOperation(rawStoredOperation);
+  if (!stored || stored === 'invalid' || stored.status === 'admitted'
+      || recoveryAttemptedOperationId === stored.operationId
+      || !isRecoverableNotAttemptedDispatch(receipt, cardVersion)) return null;
+  return await matchesTaskExecutionOperation(cardId, receipt.operationId, stored.operationId)
+    ? stored.operationId : null;
+}
+
+export function classifyTaskStartFailure(status: number, body: unknown, operationId: string): TaskStartFailure | null {
+  if (status !== 400 || !body || typeof body !== 'object' || Array.isArray(body)) return null;
+  if ('state' in body && body.state === 'not_attempted' && 'retryable' in body && body.retryable === true) {
+    return {
+      kind: 'not_attempted',
+      operation: { operationId, status: 'unknown' },
+      retryable: true,
+      message: 'Запуск не отправлен. Ключ сохранён; повторить тем же ключом можно после подтверждения готовности сервера.',
+    };
+  }
+  if ('error' in body && body.error === 'task execution request could not be processed safely') {
+    return {
+      kind: 'unknown',
+      operation: { operationId, status: 'unknown' },
+      retryable: false,
+      message: 'Исход запуска не подтверждён. Ключ сохранён; безопасный повтор не разрешён.',
+    };
+  }
+  return null;
+}
+
+export function canOfferTaskStartRetry(
+  operation: StoredOperationState | undefined,
+  execution: ExecutionSnapshot | null | undefined,
+  authorizedOperationId: string | undefined,
+): operation is StoredStartOperation {
+  if (!authorizedOperationId || !operation || operation === 'invalid') return false;
+  return operation.operationId === authorizedOperationId && canRetrySameOperation(operation, execution);
+}
+
+async function sessionControlRequestHash(cardId: string, operationId: string, action: 'direct' | 'stop', message: string, controlEpoch?: string | null): Promise<string> {
+  const payload = JSON.stringify({ cardId, operationId, action, message,
+    ...(action === 'stop' && controlEpoch ? { controlEpoch } : {}) });
   const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -51,6 +133,8 @@ async function sessionControlRequestHash(cardId: string, operationId: string, ac
 export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignReviewer, onAssignReviewer }: Props) {
   const [executions, setExecutions] = useState<Record<string, ExecutionSnapshot | null>>({});
   const [storedOperations, setStoredOperations] = useState<Record<string, StoredOperationState>>({});
+  const [safeRetryOperationIds, setSafeRetryOperationIds] = useState<Record<string, string | undefined>>({});
+  const [recoverableSessionOperationIds, setRecoverableSessionOperationIds] = useState<Record<string, string | undefined>>({});
   const [storageLoadedFor, setStorageLoadedFor] = useState<string | null>(null);
   const [startBusy, setStartBusy] = useState<Record<string, boolean>>({});
   const [syncBusy, setSyncBusy] = useState<Record<string, boolean>>({});
@@ -116,10 +200,33 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
     }
   }
 
+  const revokeSafeRetry = useCallback((cardId: string, operationId?: string) => {
+    setSafeRetryOperationIds(previous => {
+      if (operationId && previous[cardId] !== operationId) return previous;
+      if (!Object.hasOwn(previous, cardId)) return previous;
+      const next = { ...previous };
+      delete next[cardId];
+      return next;
+    });
+  }, []);
+
+  const revokeRecoverableSession = useCallback((cardId: string, operationId?: string) => {
+    setRecoverableSessionOperationIds(previous => {
+      if (operationId && previous[cardId] !== operationId) return previous;
+      if (!Object.hasOwn(previous, cardId)) return previous;
+      const next = { ...previous };
+      delete next[cardId];
+      return next;
+    });
+  }, []);
+
   const clearOperation = useCallback((cardId: string) => {
     try {
       window.localStorage.removeItem(executionOperationStorageKey(cardId));
+      window.localStorage.removeItem(sessionRecoveryAttemptStorageKey(cardId));
       setStoredOperations(previous => ({ ...previous, [cardId]: null }));
+      revokeSafeRetry(cardId);
+      revokeRecoverableSession(cardId);
       setStartMessages(previous => {
         if (!Object.hasOwn(previous, cardId)) return previous;
         const next = { ...previous };
@@ -129,12 +236,12 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
     } catch {
       // Keep the existing record and fail closed if browser storage is unavailable.
     }
-  }, []);
+  }, [revokeRecoverableSession, revokeSafeRetry]);
 
   async function startTask(card: KanbanCard, retryOperation?: StoredStartOperation) {
     if (inFlightStarts.current.has(card.id)) return;
     const prior = storedOperations[card.id];
-    if (retryOperation && (!canRetrySameOperation(prior, executions[card.id])
+    if (retryOperation && (!canOfferTaskStartRetry(prior, executions[card.id], safeRetryOperationIds[card.id])
         || prior.operationId !== retryOperation.operationId)) return;
     if (prior === 'invalid') {
       setStartMessages(previous => ({ ...previous, [card.id]: 'Сохранённая запись запуска повреждена; повторная отправка отключена.' }));
@@ -156,6 +263,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
       setStartMessages(previous => ({ ...previous, [card.id]: 'Не удалось сохранить ключ операции; запуск не отправлен.' }));
       return;
     }
+    if (retryOperation) revokeSafeRetry(card.id, retryOperation.operationId);
 
     inFlightStarts.current.add(card.id);
     setStartBusy(previous => ({ ...previous, [card.id]: true }));
@@ -171,10 +279,17 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
       const body: unknown = await response.json().catch(() => null);
       const snapshot = parseExecutionSnapshot(body, card.id);
       if (snapshot) setExecutions(previous => ({ ...previous, [card.id]: snapshot }));
+      const failure = classifyTaskStartFailure(response.status, body, operationId);
 
       if (response.status === 201 || response.status === 200) {
         writeOperation(card.id, { operationId, status: 'admitted' });
         setStartMessages(previous => ({ ...previous, [card.id]: 'Запуск принят. Повторная отправка отключена; результат появится после сохранения сервером.' }));
+      } else if (failure) {
+        writeOperation(card.id, failure.operation);
+        if (failure.kind === 'not_attempted' && failure.retryable) {
+          setSafeRetryOperationIds(previous => ({ ...previous, [card.id]: operationId }));
+        }
+        setStartMessages(previous => ({ ...previous, [card.id]: failure.message }));
       } else if (response.status === 409 && body && typeof body === 'object' && 'conflict' in body && body.conflict === true) {
         writeOperation(card.id, { operationId, status: 'unknown' });
         setStartMessages(previous => ({ ...previous, [card.id]: 'Запуск не подтверждён: версия карточки изменилась. Тот же ключ сохранён; новый запуск не создан.' }));
@@ -188,6 +303,68 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
     } finally {
       inFlightStarts.current.delete(card.id);
       await Promise.resolve(onRefresh()).catch(() => undefined);
+      setStartBusy(previous => ({ ...previous, [card.id]: false }));
+    }
+  }
+
+  async function continueStoppedSession(card: KanbanCard, receipt: TaskExecutionReceipt) {
+    if (inFlightStarts.current.has(card.id)) return;
+    let rawOperation: string | null;
+    let recoveryAttemptedOperationId: string | null;
+    try {
+      rawOperation = window.localStorage.getItem(executionOperationStorageKey(card.id));
+      recoveryAttemptedOperationId = window.localStorage.getItem(sessionRecoveryAttemptStorageKey(card.id));
+    } catch {
+      return;
+    }
+    const operationId = await recoverableNoTurnOperationId(card.id, card.version, receipt, rawOperation, recoveryAttemptedOperationId)
+      .catch(() => null);
+    const stored = parseStoredStartOperation(rawOperation);
+    const storedOperation = storedOperations[card.id];
+    if (!operationId || operationId !== recoverableSessionOperationIds[card.id]
+        || !stored || stored === 'invalid' || stored.operationId !== operationId
+        || !storedOperation || storedOperation === 'invalid' || storedOperation.operationId !== operationId) return;
+    if (inFlightStarts.current.has(card.id)) return;
+    try {
+      window.localStorage.setItem(sessionRecoveryAttemptStorageKey(card.id), operationId);
+    } catch {
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Не удалось сохранить отметку продолжения; запрос не отправлен.' }));
+      return;
+    }
+    revokeRecoverableSession(card.id, operationId);
+    inFlightStarts.current.add(card.id);
+    setStartBusy(previous => ({ ...previous, [card.id]: true }));
+    setStartMessages(previous => ({ ...previous, [card.id]: 'Продолжаю созданную сессию с тем же ключом…' }));
+    try {
+      const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(executionStartRequest(card.version, operationId)),
+      });
+      const body: unknown = await response.json().catch(() => null);
+      const snapshot = parseExecutionSnapshot(body, card.id);
+      if (snapshot) setExecutions(previous => ({ ...previous, [card.id]: snapshot }));
+      const failure = classifyTaskStartFailure(response.status, body, operationId);
+
+      if (response.status === 200 || response.status === 201) {
+        writeOperation(card.id, { operationId, status: 'admitted' });
+        setStartMessages(previous => ({ ...previous, [card.id]: 'Существующую сессию продолжили. Новый запуск не создавался.' }));
+      } else if (failure) {
+        writeOperation(card.id, failure.operation);
+        if (failure.kind === 'not_attempted' && failure.retryable) {
+          setSafeRetryOperationIds(previous => ({ ...previous, [card.id]: operationId }));
+        }
+        setStartMessages(previous => ({ ...previous, [card.id]: failure.message }));
+      } else {
+        writeOperation(card.id, { operationId, status: 'unknown' });
+        setStartMessages(previous => ({ ...previous, [card.id]: 'Продолжение не подтверждено. Тот же ключ сохранён; повтор не разрешён.' }));
+      }
+    } catch {
+      writeOperation(card.id, { operationId, status: 'unknown' });
+      setStartMessages(previous => ({ ...previous, [card.id]: 'Ответ продолжения не подтверждён. Тот же ключ сохранён; повтор не разрешён.' }));
+    } finally {
+      await Promise.resolve(onRefresh()).catch(() => undefined);
+      inFlightStarts.current.delete(card.id);
       setStartBusy(previous => ({ ...previous, [card.id]: false }));
     }
   }
@@ -287,22 +464,23 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
   }
 
   async function controlSession(card: KanbanCard, action: 'direct' | 'stop') {
-    const active = (card.taskExecutionHistory ?? []).filter(receipt => ['running', 'waiting'].includes(receipt.phase));
-    const receipt = active.length === 1 && active[0]?.harness === 'opencode'
-      && active[0].nativeSessionId && active[0].hostId ? active[0] : undefined;
+    const receipt = openCodeControlReceipt(card.taskExecutionHistory ?? [], action);
     if (!receipt) return;
     const message = action === 'direct' ? sessionControlText[card.id]?.trim() ?? '' : '';
     if (action === 'direct' && !message) return;
     if (action === 'stop' && !window.confirm('Остановить активную сессию исполнителя для этой карточки?')) return;
     let requestHash: string;
-    try { requestHash = await sessionControlRequestHash(card.id, receipt.operationId, action, message); }
+    const stopEpoch = action === 'stop' ? sessionControlStopEpoch(receipt) : null;
+    if (action === 'stop' && !stopEpoch) return;
+    try { requestHash = await sessionControlRequestHash(card.id, receipt.operationId, action, message, stopEpoch); }
     catch { return; }
     const controlKey = action === 'direct'
-      ? `${card.id}:${receipt.operationId}:direct:${requestHash}` : `${card.id}:${receipt.operationId}:stop`;
+      ? `${card.id}:${receipt.operationId}:direct:${requestHash}` : `${card.id}:${receipt.operationId}:stop:${stopEpoch}`;
     if (inFlightSessionControls.current.has(controlKey)) return;
     const existing = action === 'direct'
       ? receipt.sessionControls?.direct?.find(item => item.requestHash === requestHash)
-      : receipt.sessionControls?.stop;
+      : receipt.sessionControls?.stops?.find(item => item.requestHash === requestHash)
+        ?? (receipt.sessionControls?.stop?.requestHash === requestHash ? receipt.sessionControls.stop : undefined);
     if (existing) {
       setSessionControlPhase(previous => ({ ...previous, [controlKey]: existing.phase }));
       return;
@@ -368,6 +546,32 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
     return () => { cancelled = true; };
   }, [cards, cardIdsKey, clearOperation]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (storageLoadedFor !== cardIdsKey) {
+      setRecoverableSessionOperationIds({});
+      return () => { cancelled = true; };
+    }
+    const verifyReceipts = async () => {
+      const matches = await Promise.all(cards.map(async card => {
+        const stored = storedOperations[card.id];
+        const receipt = card.taskExecutionHistory?.at(-1);
+        if (!stored || stored === 'invalid') return [card.id, undefined] as const;
+        try {
+          const raw = window.localStorage.getItem(executionOperationStorageKey(card.id));
+          const attempted = window.localStorage.getItem(sessionRecoveryAttemptStorageKey(card.id));
+          const operationId = await recoverableNoTurnOperationId(card.id, card.version, receipt, raw, attempted);
+          return [card.id, operationId === stored.operationId ? operationId : undefined] as const;
+        } catch {
+          return [card.id, undefined] as const;
+        }
+      }));
+      if (!cancelled) setRecoverableSessionOperationIds(Object.fromEntries(matches));
+    };
+    void verifyReceipts();
+    return () => { cancelled = true; };
+  }, [cards, cardIdsKey, storageLoadedFor, storedOperations]);
+
   return (
     <section aria-labelledby="integrator-dashboard-title" className="min-h-0 flex-1 overflow-y-auto p-2 sm:p-6">
       <div className="mx-auto max-w-6xl space-y-3 sm:space-y-5">
@@ -389,23 +593,51 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
               const execution = executions[card.id];
               const storedOperation = storedOperations[card.id];
               const storageReady = storageLoadedFor === cardIdsKey && Object.hasOwn(storedOperations, card.id);
-              const canStart = storageReady && storedOperation === null && execution?.startAvailable === true && !startBusy[card.id];
-              const retryOperation = storageReady && canRetrySameOperation(storedOperation, execution) ? storedOperation : null;
-              const canRetry = retryOperation !== null && !startBusy[card.id] && !syncBusy[card.id];
               const executionReceipt = card.taskExecutionHistory?.at(-1);
-              const activeControlReceipts = (card.taskExecutionHistory ?? []).filter(receipt => ['running', 'waiting'].includes(receipt.phase));
+              const hasDurableExecution = hasUnresolvedDurableExecution(executionReceipt);
+              const canStart = storageReady && storedOperation === null && !hasDurableExecution
+                && execution?.startAvailable === true && !startBusy[card.id];
+              const retryOperation = storageReady && canOfferTaskStartRetry(storedOperation, execution, safeRetryOperationIds[card.id])
+                ? storedOperation : null;
+              const canRetry = retryOperation !== null && !startBusy[card.id] && !syncBusy[card.id];
+              const durableReceiptId = durableExecutionReceiptId(executionReceipt);
+              const canSyncDurableReceipt = storageReady && storedOperation === null && durableReceiptId !== null;
+              const canContinueCreatedSession = storageReady
+                && storedOperation !== null && storedOperation !== 'invalid'
+                && storedOperation.status !== 'admitted'
+                && storedOperation.operationId === recoverableSessionOperationIds[card.id]
+                && isRecoverableNotAttemptedDispatch(executionReceipt, card.version)
+                && !startBusy[card.id] && !syncBusy[card.id];
+              const activeControlReceipts = (card.taskExecutionHistory ?? []).filter(receipt => {
+                const active = ['running', 'waiting'].includes(receipt.phase);
+                const stopped = receipt.phase === 'stopped' && latestSessionStopControl(receipt)?.phase === 'accepted';
+                const exactTurn = !!receipt.nativeTurnId;
+                const exactInput = !!receipt.nativeInputMessageId && /^msg_[A-Za-z0-9_-]{8,256}$/.test(receipt.nativeInputMessageId)
+                  && !!receipt.nativeDispatchJobId && /^job_[a-f0-9]{64}$/.test(receipt.nativeDispatchJobId)
+                  && !!receipt.projectBinding && receipt.projectBinding.harness === 'opencode'
+                  && receipt.projectBinding.hostId === receipt.hostId;
+                return (active || stopped) && (exactTurn || exactInput);
+              });
               const controlReceipt = activeControlReceipts.length === 1 && activeControlReceipts[0]?.harness === 'opencode'
                 && activeControlReceipts[0].nativeSessionId && activeControlReceipts[0].hostId ? activeControlReceipts[0] : undefined;
+              const currentStop = latestSessionStopControl(controlReceipt);
+              const explicitResume = controlReceipt?.phase === 'stopped' && currentStop?.phase === 'accepted';
               const controlHashKey = controlReceipt ? `${card.id}:${controlReceipt.operationId}` : card.id;
               const directDraftHash = sessionControlHashes[controlHashKey];
               const directControlKey = controlReceipt && directDraftHash
                 ? `${card.id}:${controlReceipt.operationId}:direct:${directDraftHash}` : '';
-              const stopControlKey = controlReceipt ? `${card.id}:${controlReceipt.operationId}:stop` : '';
+              const stopEpoch = sessionControlStopEpoch(controlReceipt);
+              const stopControlKey = controlReceipt && stopEpoch ? `${card.id}:${controlReceipt.operationId}:stop:${stopEpoch}` : '';
               const existingDirect = controlReceipt && directDraftHash
                 ? controlReceipt.sessionControls?.direct?.find(item => item.requestHash === directDraftHash) : undefined;
               const directPhase = existingDirect?.phase ?? (directControlKey ? sessionControlPhase[directControlKey] : undefined);
-              const stopPhase = controlReceipt?.sessionControls?.stop?.phase ?? (stopControlKey ? sessionControlPhase[stopControlKey] : undefined);
+              const stopPhase = hasStopReceiptForCurrentEpoch(controlReceipt)
+                ? currentStop?.phase : (stopControlKey ? sessionControlPhase[stopControlKey] : undefined);
               const taskFollowUp = executionReceipt?.continuations?.[0];
+              const canSyncTaskFollowUp = taskFollowUp?.phase === 'running'
+                && (!!taskFollowUp.nativeTurnId || executionReceipt?.harness === 'opencode'
+                  && !!taskFollowUp.nativeDispatchJobId && /^job_[a-f0-9]{64}$/.test(taskFollowUp.nativeDispatchJobId)
+                  && !!taskFollowUp.nativeInputMessageId && /^msg_[A-Za-z0-9_-]{8,256}$/.test(taskFollowUp.nativeInputMessageId));
               const confirmedRequests = confirmedTaskRequests(card);
               const canContinue = canContinueTask(card) && !startBusy[card.id] && !syncBusy[card.id];
               const column = ['inbox', 'todo', 'someday'].includes(card.column) ? 'Входящие'
@@ -498,6 +730,11 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                         <Play aria-hidden className="mr-1 h-3.5 w-3.5" />
                         {startBusy[card.id] ? 'Запуск…' : 'Запустить задачу'}
                       </Button>
+                      {canContinueCreatedSession && executionReceipt && <Button size="sm" variant="outline"
+                        disabled={startBusy[card.id] || syncBusy[card.id]}
+                        onClick={() => void continueStoppedSession(card, executionReceipt)}>
+                        Продолжить эту сессию
+                      </Button>}
                       {storedOperation === 'invalid' && <p role="status" className="text-sm text-destructive">Сохранённая запись запуска повреждена; повторная отправка отключена.</p>}
                       {storedOperation && storedOperation !== 'invalid' && <p role="status" className="text-sm text-muted-foreground">
                         {syncBusy[card.id]
@@ -511,16 +748,24 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                       {storedOperation && storedOperation !== 'invalid' && <Button size="sm" variant="outline" disabled={startBusy[card.id] || syncBusy[card.id]} onClick={() => void syncResult(card, storedOperation)}>
                         {syncBusy[card.id] ? 'Проверяю…' : 'Проверить результат'}
                       </Button>}
+                      {canSyncDurableReceipt && durableReceiptId && <>
+                        <p role="status" className="text-sm text-muted-foreground">Найдена сохранённая квитанция запуска. Проверка не создаёт новый запуск.</p>
+                        <Button size="sm" variant="outline" disabled={startBusy[card.id] || syncBusy[card.id]}
+                          onClick={() => void syncResult(card, { operationId: durableReceiptId, status: 'unknown' })}>
+                          {syncBusy[card.id] ? 'Проверяю…' : 'Проверить результат'}
+                        </Button>
+                      </>}
                       {canRetry && retryOperation && <Button size="sm" variant="outline" disabled={startBusy[card.id] || syncBusy[card.id]} onClick={() => void startTask(card, retryOperation)}>
                         Повторить с тем же ключом
                       </Button>}
                       {!storedOperation && execution?.startAvailable === false && execution.unavailableReason && <p className="text-sm text-muted-foreground">{execution.unavailableReason}</p>}
+                      {!storedOperation && hasDurableExecution && <p role="status" className="text-sm text-muted-foreground">Для карточки уже сохранена квитанция сессии. Новый запуск отключён; продолжайте эту сессию ниже.</p>}
                       {!storedOperation && execution && execution.startAvailable === undefined && <p className="text-sm text-muted-foreground">Готовность к запуску пока не подтверждена.</p>}
                       {!storedOperation && !execution && <p className="text-sm text-muted-foreground">Проверяем доступность запуска…</p>}
                       {!storedOperation && startMessages[card.id] && <p role="status" className="text-sm text-muted-foreground">{startMessages[card.id]}</p>}
                       {controlReceipt && <div className="w-full rounded-md border p-3">
-                        <p className="text-sm font-medium">Управление активной OpenCode-сессией</p>
-                        <label htmlFor={`session-direct-${card.id}`} className="mt-2 block text-xs text-muted-foreground">Сообщение текущему ходу</label>
+                        <p className="text-sm font-medium">{explicitResume ? 'Продолжение остановленной OpenCode-сессии' : 'Управление активной OpenCode-сессией'}</p>
+                        <label htmlFor={`session-direct-${card.id}`} className="mt-2 block text-xs text-muted-foreground">{explicitResume ? 'Явное задание на продолжение' : 'Сообщение после текущего ответа'}</label>
                         <textarea id={`session-direct-${card.id}`} className="mt-1 min-h-20 w-full rounded-md border bg-background p-2 text-sm"
                           maxLength={4000} value={sessionControlText[card.id] ?? ''}
                           disabled={sessionControlBusy[directControlKey]}
@@ -543,21 +788,21 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                               }
                             });
                           }}
-                          placeholder="Коротко уточните следующий шаг" />
+                          placeholder={explicitResume ? 'Продолжить эту задачу и подготовить ответ для проверки' : 'Коротко укажите следующий шаг после ответа'} />
                         <div className="mt-2 flex flex-wrap gap-2">
                           <Button size="sm" variant="outline" disabled={!sessionControlText[card.id]?.trim() || !directDraftHash
                             || sessionControlBusy[directControlKey] || !!existingDirect || !!directPhase}
                             onClick={() => void controlSession(card, 'direct')}>
-                            {sessionControlBusy[directControlKey] ? 'Передаю…' : 'Передать в текущий ход'}
+                            {sessionControlBusy[directControlKey] ? 'Передаю…' : explicitResume ? 'Продолжить в той же сессии' : 'Поставить после ответа'}
                           </Button>
-                          <Button size="sm" variant="outline" disabled={sessionControlBusy[stopControlKey]
-                            || !!controlReceipt.sessionControls?.stop || !!stopPhase}
+                          <Button size="sm" variant="outline" disabled={explicitResume || sessionControlBusy[stopControlKey]
+                            || !!stopPhase}
                             onClick={() => void controlSession(card, 'stop')}>
                             {sessionControlBusy[stopControlKey] ? 'Останавливаю…' : 'Остановить исполнителя'}
                           </Button>
                         </div>
                         {directPhase && <p role="status" className="mt-2 text-xs text-muted-foreground">Передача: {directPhase === 'accepted'
-                          ? 'сообщение принято текущим ходом.' : directPhase === 'intent'
+                          ? 'задание принято в очередь той же сессии.' : directPhase === 'intent'
                             ? 'запрос записан; не отправляйте это сообщение повторно.' : 'исход неизвестен; это сообщение нельзя повторять.'}</p>}
                         {stopPhase && <p role="status" className="mt-2 text-xs text-muted-foreground">Остановка: {stopPhase === 'accepted'
                           ? 'команда принята; сверьте состояние карточки.' : stopPhase === 'intent'
@@ -579,7 +824,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                         <p className="text-xs font-medium text-muted-foreground">Уточнение: {taskFollowUp.instruction} · {taskFollowUp.phase === 'result' ? 'результат сохранён' : taskFollowUp.phase === 'running' ? 'выполняется' : taskFollowUp.phase === 'intent' ? 'запрос отправляется; повторная отправка отключена' : 'не удалось подтвердить, принят ли запрос; повторять его нельзя'}</p>
                         {taskFollowUp.summary && <p className="mt-2 whitespace-pre-wrap text-sm">{taskFollowUp.summary}</p>}
                         {taskFollowUp.evidenceRefs?.map(url => <a key={url} href={safeSourceUrl(url) ?? undefined} className="mt-1 block break-all text-xs underline" target="_blank" rel="noreferrer">{url}</a>)}
-                        {taskFollowUp.phase === 'running' && taskFollowUp.nativeTurnId && <Button size="sm" variant="outline" className="mt-2" disabled={syncBusy[card.id] || startBusy[card.id]} onClick={() => void syncTaskFollowUp(card, taskFollowUp.id)}>
+                        {canSyncTaskFollowUp && <Button size="sm" variant="outline" className="mt-2" disabled={syncBusy[card.id] || startBusy[card.id]} onClick={() => void syncTaskFollowUp(card, taskFollowUp.id)}>
                           {syncBusy[card.id] ? 'Проверяю…' : 'Проверить продолжение'}
                         </Button>}
                       </div>}

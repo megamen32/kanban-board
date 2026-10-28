@@ -6,7 +6,7 @@ import { boardIdentityFromRequest, identityFromRequest, nativeProjectAccessConte
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { findCardById, updateCard } from '@/lib/kanban/file-store';
 import { taskExecutionSnapshot } from '@/lib/kanban/task-execution';
-import { callOwnerHerderTool, type HerderToolResult } from '@/lib/kanban/task-execution-client';
+import { callOwnerHerderTool, readOwnerHerderResource, type HerderToolResult } from '@/lib/kanban/task-execution-client';
 import { validateTransition } from '@/lib/kanban/transition-policy';
 import { markSourceIntentConsumed } from '../../../../../../lib/kanban/source-operation';
 import { currentNativeProjectContext } from '../../../../../../lib/kanban/native-request-context';
@@ -28,6 +28,8 @@ const MAX_CONTINUATION_TEXT = 4_000;
 const MAX_SESSION_CONTROL_MESSAGE = 4_000;
 const PROJECT_READINESS_CONTRACT = 'integrator-host-readiness-v1' as const;
 const PROJECT_READINESS_MAX_AGE_MS = 30_000;
+const CREATED_SESSION_NOT_DISPATCHED_PROGRESS = 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено.';
+const QUEUE_AFTER_NOT_ATTEMPTED_PROGRESS = 'Первая передача подтверждённо не выполнялась; ставлю это же задание в очередь той же сессии.';
 /** The harnesses the owner MCP accepts for one project launch. */
 const ROUTE_HARNESSES = ['codex', 'zcode', 'opencode'] as const;
 type RouteHarness = (typeof ROUTE_HARNESSES)[number];
@@ -78,6 +80,14 @@ function jsonFromTool(result: HerderToolResult): RecordValue | undefined {
 }
 function taskOwner(card: KanbanCard, username: string): boolean {
   return (card.owner ?? 'nikita') === username || card.assignee === username || card.assignees.includes(username);
+}
+
+function assignedReworkFollowUp(card: KanbanCard, actor?: string): boolean {
+  const review = card.reviewHistory?.at(-1);
+  return card.column === 'in-progress' && card.needsReview !== true
+    && review?.decision === 'rework' && !!review.actor
+    && (card.requiresApprovalFrom ?? []).includes(review.actor)
+    && (actor === undefined || review.actor === actor);
 }
 
 function taskFingerprint(card: KanbanCard, actor: string, hostId: string, cwd: string, projectBinding?: TaskExecutionProjectBinding): string {
@@ -282,6 +292,7 @@ async function authorizedTaskCard(
   id: string,
   requiredAccess: 'read' | 'write' = 'write',
   verifiedNativeContext?: NativeProjectAccessContext | null,
+  allowAssignedReviewer = false,
 ): Promise<AuthorizedTaskCardResult> {
   let nativeContext = verifiedNativeContext;
   if (nativeContext === undefined) {
@@ -309,7 +320,10 @@ async function authorizedTaskCard(
   const tasksDir = tasksDirForScope(identity.scope);
   const card = findCardById(id, tasksDir);
   if (!card) return { response: NextResponse.json({ error: 'not found' }, { status: 404 }) };
-  if (!taskOwner(card, identity.username)) return { response: NextResponse.json({ error: 'task owner or assignee required' }, { status: 403 }) };
+  if (!taskOwner(card, identity.username)
+      && !(allowAssignedReviewer && (card.requiresApprovalFrom ?? []).includes(identity.username))) {
+    return { response: NextResponse.json({ error: 'task owner, assignee or assigned reviewer required' }, { status: 403 }) };
+  }
   return { actor: identity.username, native: false, tasksDir, card };
 }
 
@@ -329,7 +343,23 @@ function saveReceiptProgress(
     if (index < 0 || history[index]!.requestHash !== requestHash) return undefined;
     const old = history[index]!;
     const terminal = old.phase === 'result' || old.phase === 'stopped' || old.phase === 'create-unknown' || old.phase === 'dispatch-unknown';
-    if (terminal && old.phase !== patch.phase) return current;
+    const exactUnsentSessionRecovery = recoverableUnsentSession(old)
+      && old.nativeSessionId === patch.nativeSessionId
+      && (patch.phase === 'running' || patch.phase === 'dispatch-unknown');
+    const exactNotAttemptedQueueRecovery = recoverableNotAttemptedDispatch(old)
+      && old.nativeSessionId === patch.nativeSessionId
+      && (patch.phase === 'running' || patch.phase === 'dispatch-unknown');
+    const exactQueueAttemptRecovery = recoverableQueuedDispatch(old)
+      && old.nativeSessionId === patch.nativeSessionId
+      && (patch.phase === 'running' || patch.phase === 'waiting' || patch.phase === 'dispatch-unknown');
+    const exactStoppedContinuationRecovery = old.phase === 'stopped' && old.harness === 'opencode'
+      && latestStopControl(old.sessionControls)?.phase === 'accepted'
+      && old.sessionControls?.direct?.some(control => control.phase === 'accepted'
+        && !!control.nativeDispatchJobId && !!control.nativeInputMessageId)
+      && old.nativeSessionId === patch.nativeSessionId
+      && ['running', 'waiting', 'result'].includes(String(patch.phase));
+    if (terminal && old.phase !== patch.phase && !exactUnsentSessionRecovery
+        && !exactNotAttemptedQueueRecovery && !exactQueueAttemptRecovery && !exactStoppedContinuationRecovery) return current;
     const updated: TaskExecutionReceipt = { ...old, ...patch, lastBoardVersion: current.version + 1, updatedAt: now() };
     const nextHistory = [...history];
     nextHistory[index] = updated;
@@ -437,8 +467,11 @@ function commitTaskContinuationResult(input: {
   evidenceRefs: string[];
 }): KanbanCard | { conflict: true; serverCard: KanbanCard } | undefined {
   const current = findCardById(input.cardId, input.tasksDir);
-  if (!current || current.version !== input.expectedVersion || current.column !== 'review'
-      || current.needsReview !== true) return current ? { conflict: true, serverCard: current } : undefined;
+  const reworkContinuation = current ? assignedReworkFollowUp(current) : false;
+  if (!current || current.version !== input.expectedVersion
+      || !(current.column === 'review' && current.needsReview === true || reworkContinuation)) {
+    return current ? { conflict: true, serverCard: current } : undefined;
+  }
   const history = [...(current.taskExecutionHistory ?? [])];
   const parentIndex = history.findIndex(item => item.operationId === input.parentOperationId);
   const parent = history[parentIndex];
@@ -449,8 +482,11 @@ function commitTaskContinuationResult(input: {
       || parent.requestHash !== input.expectedParent.requestHash
       || parent.lastBoardVersion !== input.expectedVersion
       || parent.startedBy !== input.expectedParent.startedBy || parent.nativeSessionId !== input.expectedParent.nativeSessionId
-      || parent.nativeTurnId !== input.expectedParent.nativeTurnId || parent.hostId !== input.expectedParent.hostId
+      || parent.nativeTurnId !== input.expectedParent.nativeTurnId || parent.nativeDispatchJobId !== input.expectedParent.nativeDispatchJobId
+      || parent.nativeInputMessageId !== input.expectedParent.nativeInputMessageId || parent.hostId !== input.expectedParent.hostId
       || child.phase !== 'running' || child.nativeTurnId !== input.expectedChild.nativeTurnId
+      || child.nativeDispatchJobId !== input.expectedChild.nativeDispatchJobId
+      || child.nativeInputMessageId !== input.expectedChild.nativeInputMessageId
       || child.inputId !== input.expectedChild.inputId || child.requestHash !== input.expectedChild.requestHash
       || child.instruction !== input.expectedChild.instruction
       || taskFingerprint(current, parent.startedBy, parent.hostId, input.cwd, parent.projectBinding) !== parent.requestHash) {
@@ -464,7 +500,10 @@ function commitTaskContinuationResult(input: {
     summary: input.summary, evidenceRefs: [...input.evidenceRefs], runRef: `task-continuation:${input.continuationId}`,
     submittedBy: input.actor, submittedAt: now(),
   }];
-  return updateCard(input.cardId, { taskExecutionHistory: history, resultHistory }, input.expectedVersion, input.tasksDir);
+  return updateCard(input.cardId, {
+    ...(reworkContinuation ? { column: 'review', needsReview: true, nextAction: 'Результат доработки готов к проверке назначенным участником.' } : {}),
+    taskExecutionHistory: history, resultHistory,
+  }, input.expectedVersion, input.tasksDir);
 }
 
 function continuationResponse(card: KanbanCard, parentOperationId: string, continuationId: string, status = 202): NextResponse {
@@ -491,7 +530,11 @@ async function startTaskFollowUp(
   const instruction = body.continuationText.trim();
   if (body.expectedVersion !== context.card.version) return NextResponse.json({ conflict: true, serverCard: context.card }, { status: 409 });
   const parent = context.card.taskExecutionHistory?.find(item => item.operationId === body.operationId);
-  if (!parent || parent.phase !== 'result' || !parent.nativeSessionId || !parent.nativeTurnId) {
+  const openCodeTurnlessParent = parent?.harness === 'opencode' && !parent.nativeTurnId
+    && !!parent.projectBinding && parent.projectBinding.harness === 'opencode'
+    && !!parent.nativeDispatchJobId && /^job_[a-f0-9]{64}$/.test(parent.nativeDispatchJobId)
+    && !!parent.nativeInputMessageId && /^msg_[A-Za-z0-9_-]{8,256}$/.test(parent.nativeInputMessageId);
+  if (!parent || parent.phase !== 'result' || !parent.nativeSessionId || (!parent.nativeTurnId && !openCodeTurnlessParent)) {
     return NextResponse.json({ error: 'completed task execution receipt required' }, { status: 409 });
   }
   const id = taskFollowUpId(parent.operationId);
@@ -510,9 +553,12 @@ async function startTaskFollowUp(
   if (!cwd || !process.env.AGENT_HERDER_HTTP_TOKEN?.trim()) {
     return NextResponse.json({ error: 'protected task continuation channel is not configured' }, { status: 503 });
   }
-  if (context.card.column !== 'review' || context.card.needsReview !== true
-      || parent.lastBoardVersion !== context.card.version
-      || !context.native && parent.startedBy !== context.actor
+  const reworkContinuation = assignedReworkFollowUp(context.card);
+  const authorizedReworkActor = reworkContinuation && assignedReworkFollowUp(context.card, context.actor);
+  const unchangedReview = context.card.column === 'review' && context.card.needsReview === true
+    && parent.lastBoardVersion === context.card.version;
+  if ((!unchangedReview && !reworkContinuation)
+      || !context.native && parent.startedBy !== context.actor && !authorizedReworkActor
       || taskFingerprint(context.card, parent.startedBy, parent.hostId, cwd, parent.projectBinding) !== parent.requestHash) {
     return NextResponse.json({ error: 'task changed or is no longer awaiting human review' }, { status: 409 });
   }
@@ -533,10 +579,18 @@ async function startTaskFollowUp(
   const lastTurn = isRecord(session?.meta) && isRecord(session.meta.nativeLastTurn) ? session.meta.nativeLastTurn : undefined;
   if (!nodeInfo || nodeInfo.hostId !== parent.hostId || !session || session.id !== parent.nativeSessionId
       || session.harness !== parent.harness || session.cwd !== cwd || session.model !== expectedModel(parent)
-      || session.status !== 'idle' || !lastTurn || lastTurn.turnId !== parent.nativeTurnId
-      || lastTurn.status !== 'completed' || lastTurn.assistantSucceeded === false
-      || lastTurn.cancelledByUser === true || lastTurn.transportLost === true) {
+      || session.status !== 'idle'
+      || !openCodeTurnlessParent && (!lastTurn || lastTurn.turnId !== parent.nativeTurnId
+        || lastTurn.status !== 'completed' || lastTurn.assistantSucceeded === false
+        || lastTurn.cancelledByUser === true || lastTurn.transportLost === true)) {
     return NextResponse.json({ error: 'same-session exact completed turn could not be verified; no continuation was sent' }, { status: 409 });
+  }
+  if (openCodeTurnlessParent) {
+    const admittedParent = await verifiedOpenCodeDeliveryJob(parent, parent.messageInputId);
+    if (!admittedParent || admittedParent.jobId !== parent.nativeDispatchJobId
+        || admittedParent.nativeInputMessageId !== parent.nativeInputMessageId) {
+      return NextResponse.json({ error: 'same-session OpenCode admission receipt could not be verified; no continuation was sent' }, { status: 409 });
+    }
   }
 
   const prompt = taskFollowUpPrompt(context.card, instruction);
@@ -558,7 +612,7 @@ async function startTaskFollowUp(
   try {
     dispatch = await callOwnerHerderTool('send_message', {
       sessionId: parent.nativeSessionId, harness: parent.harness, inputId,
-      message: prompt, mode: 'steer', humanRequested: true,
+      message: prompt, mode: 'queue', humanRequested: true,
     });
   } catch {
     const savedUnknown = saveContinuationProgress(context.card.id, context.tasksDir, parent.operationId, id, { phase: 'unknown' });
@@ -570,13 +624,24 @@ async function startTaskFollowUp(
   if (receiptMatch?.[1]) {
     try { const parsed: unknown = JSON.parse(receiptMatch[1]); if (isRecord(parsed)) receipt = parsed; } catch { /* Unparsed admission stays unknown. */ }
   }
-  if (receipt?.admitted !== true || receipt.inputId !== inputId
-      || typeof receipt.turnId !== 'string' || !receipt.turnId.trim()) {
+  let nativeTurnId = receipt?.admitted === true && receipt.inputId === inputId
+      && typeof receipt.turnId === 'string' && receipt.turnId.trim() ? receipt.turnId : undefined;
+  let nativeDelivery: VerifiedOpenCodeDeliveryJob | undefined;
+  if (parent.harness === 'opencode') {
+    nativeDelivery = await verifiedOpenCodeDeliveryJob(parent, inputId);
+    if (!nativeDelivery) {
+      const savedUnknown = saveContinuationProgress(context.card.id, context.tasksDir, parent.operationId, id, { phase: 'unknown' });
+      return continuationResponse(savedUnknown ?? savedIntent, parent.operationId, id, 202);
+    }
+    // OpenCode exposes a stable message receipt, not necessarily a native turn ID.
+    // Never manufacture one from the session or job identity.
+  } else if (receipt?.admitted !== true || receipt.inputId !== inputId || !nativeTurnId) {
     const savedUnknown = saveContinuationProgress(context.card.id, context.tasksDir, parent.operationId, id, { phase: 'unknown' });
     return continuationResponse(savedUnknown ?? savedIntent, parent.operationId, id, 202);
   }
   const savedRunning = saveContinuationProgress(context.card.id, context.tasksDir, parent.operationId, id, {
-    phase: 'running', nativeTurnId: receipt.turnId,
+    phase: 'running', ...(nativeTurnId ? { nativeTurnId } : {}),
+    ...(nativeDelivery ? { nativeDispatchJobId: nativeDelivery.jobId, nativeInputMessageId: nativeDelivery.nativeInputMessageId } : {}),
   });
   return continuationResponse(savedRunning ?? savedIntent, parent.operationId, id, 202);
 }
@@ -592,22 +657,65 @@ async function syncTaskFollowUp(context: AuthorizedTaskCard, body: RecordValue):
   const child = parent?.continuations?.find(item => item.id === body.continuationId);
   if (!parent || !child) return NextResponse.json({ error: 'continuation receipt not found' }, { status: 404 });
   if (child.phase === 'result') return continuationResponse(context.card, parent.operationId, child.id, 200);
-  if (child.phase !== 'running' || !child.nativeTurnId || !parent.nativeSessionId) {
+  const openCodeTurnlessChild = parent.harness === 'opencode' && !!parent.projectBinding
+    && !!child.nativeDispatchJobId && /^job_[a-f0-9]{64}$/.test(child.nativeDispatchJobId)
+    && !!child.nativeInputMessageId && /^msg_[A-Za-z0-9_-]{8,256}$/.test(child.nativeInputMessageId);
+  if (child.phase !== 'running' || !parent.nativeSessionId || (!child.nativeTurnId && !openCodeTurnlessChild)) {
     return continuationResponse(context.card, parent.operationId, child.id, 202);
   }
   const cwd = executionReceiptCwd(parent);
   if (!cwd || !process.env.AGENT_HERDER_HTTP_TOKEN?.trim()) {
     return NextResponse.json({ error: 'protected task continuation channel is not configured' }, { status: 503 });
   }
-  if (context.card.column !== 'review' || context.card.needsReview !== true
+  const reworkContinuation = assignedReworkFollowUp(context.card);
+  const authorizedReworkActor = reworkContinuation && assignedReworkFollowUp(context.card, context.actor);
+  const unchangedReview = context.card.column === 'review' && context.card.needsReview === true;
+  if ((!unchangedReview && !reworkContinuation)
       || parent.phase !== 'result' || parent.lastBoardVersion !== context.card.version
-      || !context.native && parent.startedBy !== context.actor
+      || !context.native && parent.startedBy !== context.actor && !authorizedReworkActor
       || taskFingerprint(context.card, parent.startedBy, parent.hostId, cwd, parent.projectBinding) !== parent.requestHash) {
     return NextResponse.json({ error: 'task changed or is no longer awaiting human review', stale: true }, { status: 409 });
   }
   if (parent.projectBinding && !await currentScopedBinding(parent.projectBinding, context.card.project)) {
     return NextResponse.json({ error: 'saved project route is no longer ready; no continuation was sent' }, { status: 503 });
   }
+  let assistant: RecordValue | undefined;
+  if (openCodeTurnlessChild) {
+    const readSession = async (): Promise<RecordValue | undefined> => {
+      const result = await callOwnerHerderTool('agent_info', { harness: parent.harness, sessionId: parent.nativeSessionId });
+      const payload = isRecord(result.structuredContent) ? result.structuredContent : undefined;
+      return isRecord(payload?.session) ? payload.session : undefined;
+    };
+    let before: RecordValue | undefined;
+    try { before = await readSession(); }
+    catch { return continuationResponse(context.card, parent.operationId, child.id, 202); }
+    const exactSession = (session: RecordValue | undefined) => !!session
+      && session.id === parent.nativeSessionId && session.hostId === parent.hostId
+      && session.harness === 'opencode' && session.cwd === cwd && session.model === expectedModel(parent)
+      && session.needsPermission !== true;
+    if (!before || !exactSession(before) || before.status !== 'idle') return continuationResponse(context.card, parent.operationId, child.id, 202);
+    let delivery: VerifiedOpenCodeDeliveryJob | undefined;
+    try { delivery = await verifiedOpenCodeDeliveryJob(parent, child.inputId); }
+    catch { return continuationResponse(context.card, parent.operationId, child.id, 202); }
+    if (!delivery || delivery.jobId !== child.nativeDispatchJobId || delivery.nativeInputMessageId !== child.nativeInputMessageId) {
+      return continuationResponse(context.card, parent.operationId, child.id, 202);
+    }
+    const messages = await readOpenCodeMessages(parent.nativeSessionId);
+    if (!messages) return continuationResponse(context.card, parent.operationId, child.id, 202);
+    const userIndex = openCodeBoundInputMessageIndex(messages, child.nativeInputMessageId, child.inputId);
+    if (userIndex === undefined) return continuationResponse(context.card, parent.operationId, child.id, 202);
+    assistant = completedOpenCodeAssistant(messages, userIndex);
+    if (!assistant || typeof assistant.text !== 'string' || !assistant.text.trim()) {
+      return continuationResponse(context.card, parent.operationId, child.id, 202);
+    }
+    let after: RecordValue | undefined;
+    try { after = await readSession(); }
+    catch { return continuationResponse(context.card, parent.operationId, child.id, 202); }
+    if (!after || !exactSession(after) || after.status !== 'idle' || after.id !== before.id
+        || after.hostId !== before.hostId || after.cwd !== before.cwd || after.model !== before.model) {
+      return continuationResponse(context.card, parent.operationId, child.id, 202);
+    }
+  } else {
   const readExactTurn = async (): Promise<{ session?: RecordValue; turn?: RecordValue }> => {
     const result = await callOwnerHerderTool('agent_info', { harness: parent.harness, sessionId: parent.nativeSessionId });
     const data = isRecord(result.structuredContent) ? result.structuredContent : undefined;
@@ -646,7 +754,9 @@ async function syncTaskFollowUp(context: AuthorizedTaskCard, body: RecordValue):
     return continuationResponse(context.card, parent.operationId, child.id, 202);
   }
   const messages = details.messages.filter(isRecord);
-  const assistant = [...messages].reverse().find(message => message.role === 'assistant' && typeof message.text === 'string' && message.text.trim());
+  assistant = [...messages].reverse().find(message => message.role === 'assistant' && typeof message.text === 'string' && message.text.trim());
+  if (!assistant || typeof assistant.text !== 'string' || !assistant.text.trim()) return continuationResponse(context.card, parent.operationId, child.id, 202);
+  }
   if (!assistant || typeof assistant.text !== 'string' || !assistant.text.trim()) return continuationResponse(context.card, parent.operationId, child.id, 202);
   const summary = assistant.text.slice(0, 40_000);
   const evidenceRefs = [...new Set(summary.match(/https?:\/\/[^\s<>"')\]]+/g)?.map(url => url.replace(/[.,;:!?]+$/u, '')) ?? [])].slice(0, 50);
@@ -678,6 +788,147 @@ function exactSessionView(result: HerderToolResult, hostId: string, sessionId: s
   const native = isRecord(details?.session) ? details.session : undefined;
   return view?.hostId === hostId && native?.id === sessionId && native?.harness === harness
     && native.cwd === cwd && native.model === model;
+}
+
+/** Empty native sessions have no message view yet; verify their exact launch metadata through agent_info. */
+function exactIdleSessionInfo(result: HerderToolResult, hostId: string, sessionId: string, cwd: string,
+  harness: RouteHarness, model: string): boolean {
+  const info = isRecord(result.structuredContent) ? result.structuredContent : undefined;
+  const session = isRecord(info?.session) ? info.session : undefined;
+  return session?.id === sessionId && session.harness === harness && session.hostId === hostId
+    && session.cwd === cwd && session.model === model && session.status === 'idle'
+    && session.needsPermission !== true;
+}
+
+function recoverableUnsentSession(receipt: TaskExecutionReceipt): boolean {
+  return receipt.phase === 'stopped' && !!receipt.nativeSessionId && !receipt.nativeTurnId
+    && receipt.lastProgress === CREATED_SESSION_NOT_DISPATCHED_PROGRESS
+    && !!receipt.projectBinding && !!receipt.messageInputId;
+}
+
+/** A queue retry is safe only for the exact typed refusal of the initial steer. */
+function recoverableNotAttemptedDispatch(receipt: TaskExecutionReceipt): boolean {
+  const initialInputId = sha256(`${receipt.operationId}\0dispatch`);
+  if (receipt.phase !== 'dispatch-unknown' || receipt.harness !== 'opencode' || !receipt.hostId
+      || !receipt.nativeSessionId || receipt.nativeTurnId || receipt.continuations?.length
+      || receipt.messageInputId !== initialInputId || !receipt.dispatchReceiptText) return false;
+  try {
+    const value: unknown = JSON.parse(receipt.dispatchReceiptText);
+    if (!isRecord(value)) return false;
+    return value.delivery === 'not_attempted' && value.nonRetryable === true
+      && value.inputId === initialInputId && typeof value.error === 'string'
+      && value.error.includes('Выберите «После ответа»');
+  } catch { return false; }
+}
+
+function recoverableQueuedDispatch(receipt: TaskExecutionReceipt): boolean {
+  return receipt.phase === 'dispatch-unknown' && receipt.harness === 'opencode'
+    && !!receipt.hostId && !!receipt.nativeSessionId && !receipt.nativeTurnId
+    && receipt.messageInputId === sha256(`${receipt.operationId}\0dispatch-after-not-attempted`)
+    && !!receipt.projectBinding;
+}
+
+function openCodeTaskMessageIndex(messages: RecordValue[], card: KanbanCard): number | undefined {
+  const prompt = taskPrompt(card);
+  const matches = messages.flatMap((message, index) => message.role === 'user'
+    && openCodeVisibleText(message)?.includes(prompt) ? [index] : []);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function openCodeBoundInputMessageIndex(messages: RecordValue[], nativeInputMessageId: string, inputId: string): number | undefined {
+  const matches = messages.flatMap((message, index) => message.role === 'user' && message.id === nativeInputMessageId
+    && (message.inputId === undefined || message.inputId === inputId) ? [index] : []);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function openCodeVisibleText(message: RecordValue): string | undefined {
+  if (!Array.isArray(message.parts)) return undefined;
+  const text = message.parts.filter(isRecord)
+    .filter(part => part.type === 'text' && typeof part.text === 'string')
+    .map(part => part.text as string).join('\n').trim();
+  return text || undefined;
+}
+
+function userMessageJobId(harness: RouteHarness, sessionId: string, inputId: string): string {
+  return `job_${sha256(['user-message', harness, sessionId, inputId].join('\0'))}`;
+}
+
+interface VerifiedOpenCodeInput {
+  jobId: string;
+  nativeInputMessageId: string;
+  messages: RecordValue[];
+  userIndex: number;
+}
+
+interface VerifiedOpenCodeDeliveryJob {
+  jobId: string;
+  nativeInputMessageId: string;
+}
+
+/** Reconcile one exact accepted user-message job without relying on a truncated transcript projection. */
+async function verifiedOpenCodeDeliveryJob(receipt: TaskExecutionReceipt, inputId: string): Promise<VerifiedOpenCodeDeliveryJob | undefined> {
+  if (receipt.harness !== 'opencode' || !receipt.nativeSessionId || !receipt.projectBinding
+      || receipt.projectBinding.harness !== 'opencode' || receipt.projectBinding.hostId !== receipt.hostId
+      || !/^[a-f0-9]{64}$/.test(inputId)) return undefined;
+  const jobId = userMessageJobId(receipt.harness, receipt.nativeSessionId, inputId);
+  let jobTool: HerderToolResult;
+  try { jobTool = await callOwnerHerderTool('job_get', { jobId }); }
+  catch { return undefined; }
+  const jobPayload = jsonFromTool(jobTool);
+  const job = isRecord(jobPayload?.job) ? jobPayload.job : undefined;
+  const result = isRecord(job?.result) ? job.result : undefined;
+  const onceKey = ['user-message', receipt.harness, receipt.nativeSessionId, inputId].join('\0');
+  const nativeInputMessageId = result?.nativeInputMessageId;
+  if (!job || job.id !== jobId || job.state !== 'completed' || job.ownerSessionId !== receipt.nativeSessionId
+      || job.onceKey !== onceKey || result?.ok !== true || result.admitted !== true || result.inputId !== inputId
+      || typeof nativeInputMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(nativeInputMessageId)) return undefined;
+  return { jobId, nativeInputMessageId };
+}
+
+/** Link an accepted Herder delivery job to its exact user message in the bound OpenCode session. */
+async function verifiedOpenCodeInput(receipt: TaskExecutionReceipt, inputId: string,
+  expectedText?: string): Promise<VerifiedOpenCodeInput | undefined> {
+  const nativeSessionId = receipt.nativeSessionId;
+  if (!nativeSessionId) return undefined;
+  const delivery = await verifiedOpenCodeDeliveryJob(receipt, inputId);
+  if (!delivery) return undefined;
+  const messages = await readOpenCodeMessages(nativeSessionId);
+  if (!messages) return undefined;
+  const matches = messages.flatMap((message, index) => message.role === 'user' && message.id === delivery.nativeInputMessageId
+    && (message.inputId === undefined || message.inputId === inputId)
+    && (!expectedText || openCodeVisibleText(message)?.includes(expectedText))
+    && (expectedText || message.inputId === inputId) ? [index] : []);
+  if (matches.length !== 1) return undefined;
+  return { ...delivery, messages, userIndex: matches[0]! };
+}
+
+function completedOpenCodeAssistant(messages: RecordValue[], userIndex: number, expectedTurnId?: string): RecordValue | undefined {
+  const afterTask = messages.slice(userIndex + 1);
+  const nextUserIndex = afterTask.findIndex(message => message.role === 'user');
+  const taskMessages = nextUserIndex < 0 ? afterTask : afterTask.slice(0, nextUserIndex);
+  const candidates: RecordValue[] = taskMessages.flatMap((message): RecordValue[] => {
+    const visibleText = openCodeVisibleText(message);
+    const expectedFinish = message.phase === 'stop' || message.phase === 'completed';
+    if (message.role !== 'assistant' || !expectedFinish || !visibleText
+        || (expectedTurnId && message.turnId !== expectedTurnId)
+        || (!expectedTurnId && message.turnId !== undefined && typeof message.turnId !== 'string')) return [];
+    return [{ ...message, text: visibleText }];
+  });
+  const turnIds = new Set(candidates.map(message => message.turnId));
+  if (!expectedTurnId && [...turnIds].filter(value => typeof value === 'string').length > 1) return undefined;
+  return candidates.at(-1);
+}
+
+async function readOpenCodeMessages(sessionId: string): Promise<RecordValue[] | undefined> {
+  const uri = `herder://sessions/opencode/${encodeURIComponent(sessionId)}/messages`;
+  try {
+    const resource = await readOwnerHerderResource(uri);
+    const contents = resource.contents.filter(item => item.uri === uri && item.mimeType === 'application/json'
+      && typeof item.text === 'string');
+    if (contents.length !== 1) return undefined;
+    const value: unknown = JSON.parse(contents[0]!.text!);
+    return Array.isArray(value) ? value.filter(isRecord) : undefined;
+  } catch { return undefined; }
 }
 
 /**
@@ -750,7 +1001,7 @@ async function dispatchCreatedTask(input: {
   try {
     dispatchTool = await callOwnerHerderTool('send_message', {
       sessionId: input.nativeSessionId, harness: input.harness, inputId: input.messageInputId,
-      message: taskPrompt(input.card), mode: 'steer', humanRequested: true,
+      message: taskPrompt(input.card), mode: 'queue', humanRequested: true,
     });
   } catch {
     const saved = saveReceiptProgress(input.card.id, input.tasksDir, input.operationId, input.requestHash, {
@@ -1162,6 +1413,63 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       if (prior.requestHash !== priorHash || context.card.version !== prior.lastBoardVersion) {
         return NextResponse.json({ error: 'operation identity conflict or card changed after execution receipt' }, { status: 409 });
       }
+      const priorNativeSessionId = prior.nativeSessionId;
+      const priorProjectBinding = prior.projectBinding;
+      const priorMessageInputId = prior.messageInputId;
+      const retryFromExplicitNotAttempted = recoverableNotAttemptedDispatch(prior);
+      const retryFromUnsentSession = recoverableUnsentSession(prior)
+        && priorMessageInputId === sha256(`${prior.operationId}\0dispatch`);
+      if ((retryFromUnsentSession || retryFromExplicitNotAttempted)
+          && priorNativeSessionId && priorProjectBinding && priorMessageInputId) {
+        const cwd = executionReceiptCwd(prior);
+        if (!cwd || !await currentScopedBinding(priorProjectBinding, context.card.project)) {
+          return NextResponse.json({ ...taskExecutionSnapshot(context.card), operationId,
+            waitReason: 'Существующая сессия сохранена, но проектный маршрут не подтверждён; сообщение не отправлено.',
+            retryable: false }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
+        }
+        if (context.card.version !== prior.lastBoardVersion
+          || taskFingerprint(context.card, prior.startedBy, prior.hostId, cwd, priorProjectBinding) !== prior.requestHash) {
+          return NextResponse.json({ error: 'task changed after session creation; same-session recovery is denied' }, { status: 409 });
+        }
+        let sessionInfo: HerderToolResult;
+        try {
+          sessionInfo = await callOwnerHerderTool('agent_info', {
+            harness: expectedHarness(prior), sessionId: priorNativeSessionId, hostId: prior.hostId,
+          });
+        } catch {
+          return NextResponse.json({ ...taskExecutionSnapshot(context.card), operationId,
+            waitReason: 'Состояние существующей сессии пока недоступно; сообщение не отправлено.',
+            retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+        }
+        if (!exactIdleSessionInfo(sessionInfo, prior.hostId, priorNativeSessionId, cwd,
+          expectedHarness(prior), expectedModel(prior))) {
+          return NextResponse.json({ ...taskExecutionSnapshot(context.card), operationId, retryable: false,
+            waitReason: 'Существующая сессия не подтвердила точный проект и idle-состояние; сообщение не отправлено.' }, {
+            status: 409, headers: { 'Cache-Control': 'no-store' },
+          });
+        }
+        const retryMessageInputId = retryFromExplicitNotAttempted
+          ? sha256(`${prior.operationId}\0dispatch-after-not-attempted`) : priorMessageInputId;
+        const prepared = retryFromExplicitNotAttempted
+          ? saveReceiptProgress(context.card.id, context.tasksDir, operationId, prior.requestHash, {
+            phase: 'dispatch-unknown', nativeSessionId: priorNativeSessionId,
+            messageInputId: retryMessageInputId,
+            lastProgress: QUEUE_AFTER_NOT_ATTEMPTED_PROGRESS,
+            lastProgressAt: now(),
+          }) : context.card;
+        if (!prepared) return NextResponse.json({ error: 'same-session retry identity could not be saved' }, { status: 409 });
+        const current = findCardById(context.card.id, context.tasksDir);
+        if (!current || current.version !== prepared.version
+            || taskFingerprint(current, prior.startedBy, prior.hostId, cwd, priorProjectBinding) !== prior.requestHash) {
+          return NextResponse.json({ error: 'task changed during same-session recovery; no dispatch was attempted' }, { status: 409 });
+        }
+        return dispatchCreatedTask({
+          card: current, tasksDir: context.tasksDir, actor: prior.startedBy,
+          operationId: prior.operationId, requestHash: prior.requestHash,
+          nativeSessionId: priorNativeSessionId, messageInputId: retryMessageInputId,
+          admittedStatus: 200, harness: expectedHarness(prior),
+        });
+      }
       return NextResponse.json({ ...taskExecutionSnapshot(context.card), operationId: prior.operationId, replay: true }, {
         status: prior.phase === 'running' || prior.phase === 'result' ? 200 : 202,
         headers: { 'Cache-Control': 'no-store' },
@@ -1291,18 +1599,20 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
 
     // Verify exact native host/session/CWD/model before sending any task text.
-    let viewTool: HerderToolResult;
+    // An empty OpenCode session has no message view yet; its creation receipt plus
+    // idle agent_info is the supported pre-dispatch readback.
+    let sessionInfo: HerderToolResult;
     try {
-      viewTool = await callOwnerHerderTool('fleet_session_view', { harness: projectRoute.harness, sessionId: createdSessionId });
+      sessionInfo = await callOwnerHerderTool('agent_info', { harness: projectRoute.harness, sessionId: createdSessionId, hostId });
     } catch {
       return NextResponse.json({ ...taskExecutionSnapshot(launchReceiptCard), operationId,
         waitReason: 'Сессия создана; проверка её параметров временно недоступна. Повторите проверку этой же операции.',
         retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
-    if (!exactSessionView(viewTool, hostId, createdSessionId, cwd, projectRoute.harness, projectRoute.model)) {
+    if (!exactIdleSessionInfo(sessionInfo, hostId, createdSessionId, cwd, projectRoute.harness, projectRoute.model)) {
       const saved = saveReceiptProgress(context.card.id, context.tasksDir, operationId, requestHash, {
         phase: 'stopped', nativeSessionId: createdSessionId,
-        lastProgress: 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено.',
+        lastProgress: CREATED_SESSION_NOT_DISPATCHED_PROGRESS,
         lastProgressAt: now(),
       });
       return NextResponse.json({ ...(saved ? taskExecutionSnapshot(saved) : taskExecutionSnapshot(launchReceiptCard)), operationId, retryable: false }, { status: 409 });
@@ -1317,14 +1627,32 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 }
 
-type SessionControlAction = keyof TaskExecutionSessionControls;
+type SessionControlAction = 'direct' | 'stop';
+
+function latestStopControl(controls: TaskExecutionSessionControls | undefined): TaskExecutionSessionControl | undefined {
+  return controls?.stops?.at(-1) ?? controls?.stop;
+}
+
+function stopControlEpoch(receipt: TaskExecutionReceipt): string {
+  return receipt.sessionControls?.direct?.at(-1)?.requestHash ?? receipt.messageInputId;
+}
 
 function exactActiveOpenCodeReceipt(card: KanbanCard): TaskExecutionReceipt | undefined {
-  const active = (card.taskExecutionHistory ?? []).filter(receipt => ['running', 'waiting'].includes(receipt.phase));
-  if (active.length !== 1) return undefined;
-  const receipt = active[0]!;
+  const candidates = (card.taskExecutionHistory ?? []).filter(receipt => {
+    const stoppedByUser = receipt.phase === 'stopped' && latestStopControl(receipt.sessionControls)?.phase === 'accepted';
+    if (!['running', 'waiting'].includes(receipt.phase) && !stoppedByUser) return false;
+    const hasNativeTurn = !!receipt.nativeTurnId;
+    const hasTypedOpenCodeInput = receipt.harness === 'opencode' && !!receipt.nativeInputMessageId
+      && /^msg_[A-Za-z0-9_-]{8,256}$/.test(receipt.nativeInputMessageId)
+      && !!receipt.nativeDispatchJobId && /^job_[a-f0-9]{64}$/.test(receipt.nativeDispatchJobId)
+      && !!receipt.projectBinding && receipt.projectBinding.harness === 'opencode'
+      && receipt.projectBinding.hostId === receipt.hostId;
+    return hasNativeTurn || hasTypedOpenCodeInput;
+  });
+  if (candidates.length !== 1) return undefined;
+  const receipt = candidates[0]!;
   if (receipt.harness !== 'opencode' || !/^[a-f0-9]{64}$/.test(receipt.operationId)
-      || !receipt.nativeTurnId || !receipt.nativeSessionId?.trim() || receipt.nativeSessionId.length > 512
+      || (!receipt.nativeTurnId && !receipt.nativeInputMessageId) || !receipt.nativeSessionId?.trim() || receipt.nativeSessionId.length > 512
       || /[\r\n\x00]/.test(receipt.nativeSessionId) || !receipt.hostId.trim() || receipt.hostId.length > 512
       || /[/:\r\n\x00]/.test(receipt.hostId)) return undefined;
   return receipt;
@@ -1338,6 +1666,7 @@ function updateSessionControl(
   action: SessionControlAction,
   phase: TaskExecutionSessionControl['phase'],
   expectedVersion?: number,
+  proof?: Pick<TaskExecutionSessionControl, 'controlEpoch' | 'nativeDispatchJobId' | 'nativeInputMessageId'>,
 ): KanbanCard | { conflict: true; serverCard: KanbanCard } | undefined {
   for (let attemptNumber = 0; attemptNumber < 5; attemptNumber++) {
     const current = findCardById(cardId, tasksDir);
@@ -1346,23 +1675,37 @@ function updateSessionControl(
     const history = [...(current.taskExecutionHistory ?? [])];
     const index = history.findIndex(receipt => receipt.operationId === operationId);
     const receipt = history[index];
+    const activePhase = ['running', 'waiting'].includes(receipt?.phase ?? '');
+    const continuingStoppedSession = action === 'direct' && receipt?.phase === 'stopped'
+      && latestStopControl(receipt.sessionControls)?.phase === 'accepted';
     if (!receipt || receipt.harness !== 'opencode'
-        || phase === 'intent' && !['running', 'waiting'].includes(receipt.phase)) return undefined;
+        || phase === 'intent' && !activePhase && !continuingStoppedSession) return undefined;
     const controls = receipt.sessionControls ?? {};
     const old = action === 'direct'
       ? controls.direct?.find(control => control.requestHash === requestHash)
-      : controls.stop;
+      : controls.stops?.find(control => control.requestHash === requestHash)
+        ?? (controls.stop?.requestHash === requestHash ? controls.stop : undefined);
     if (phase === 'intent') {
       if (old) return current;
     } else if (!old || old.requestHash !== requestHash || old.phase !== 'intent') {
       return current;
     }
-    const state: TaskExecutionSessionControl = { requestHash, phase, updatedAt: now() };
+    const state: TaskExecutionSessionControl = {
+      requestHash, phase,
+      ...(old?.controlEpoch ? { controlEpoch: old.controlEpoch } : {}),
+      ...proof, updatedAt: now(),
+    };
     const sessionControls: TaskExecutionSessionControls = action === 'direct'
       ? { ...controls, direct: phase === 'intent'
         ? [...(controls.direct ?? []), state]
         : (controls.direct ?? []).map(control => control.requestHash === requestHash ? state : control) }
-      : { ...controls, stop: state };
+      : (() => {
+        const stops = controls.stops ?? (controls.stop ? [controls.stop] : []);
+        const updatedStops = phase === 'intent'
+          ? [...stops, state]
+          : stops.map(control => control.requestHash === requestHash ? state : control);
+        return { ...controls, stops: updatedStops, stop: state };
+      })();
     history[index] = { ...receipt, sessionControls, lastBoardVersion: current.version + 1, updatedAt: now() };
     const saved = updateCard(cardId, { taskExecutionHistory: history }, current.version, tasksDir);
     if (!('conflict' in saved)) return saved;
@@ -1374,28 +1717,11 @@ function updateSessionControl(
 function sessionControlResponse(cardId: string, receipt: TaskExecutionReceipt, action: SessionControlAction, requestHash: string, status: number): NextResponse {
   const control = action === 'direct'
     ? receipt.sessionControls?.direct?.find(item => item.requestHash === requestHash)
-    : receipt.sessionControls?.stop;
+    : receipt.sessionControls?.stops?.find(item => item.requestHash === requestHash)
+      ?? (receipt.sessionControls?.stop?.requestHash === requestHash ? receipt.sessionControls.stop : undefined);
   return NextResponse.json({ cardId, boardOperationId: receipt.operationId, action, requestHash, state: control?.phase ?? 'unknown' }, {
     status, headers: { 'Cache-Control': 'no-store' },
   });
-}
-
-function nativeDirectAccepted(result: HerderToolResult | undefined, receipt: TaskExecutionReceipt, inputId: string): boolean {
-  if (!result || result.isError === true) return false;
-  const text = herderDeliveryText(result);
-  const target = `[${receipt.harness}] ${receipt.nativeSessionId}`;
-  const hasTarget = text.startsWith(`Message sent to ${target} (steering).`)
-    || text.startsWith(`Message accepted by ${target}; native turn start is still being verified.`)
-    || text.startsWith(`Message reserved for the current turn of ${target}; model observation is not yet confirmed.`);
-  if (!hasTarget) return false;
-  const match = text.match(/\n(?:Native admission|Current-turn context reservation) receipt: (\{[^\n]*\})/);
-  if (!match) return false;
-  try {
-    const admission: unknown = JSON.parse(match[1]!);
-    return isRecord(admission) && admission.admitted === true && admission.inputId === inputId;
-  } catch {
-    return false;
-  }
 }
 
 function nativeStopAccepted(result: HerderToolResult | undefined, receipt: TaskExecutionReceipt): boolean {
@@ -1417,22 +1743,55 @@ async function controlTaskSession(context: AuthorizedTaskCard, body: RecordValue
   }
   if (body.expectedVersion !== context.card.version) return NextResponse.json({ conflict: true, serverCard: context.card }, { status: 409 });
   const receipt = exactActiveOpenCodeReceipt(context.card);
-  if (!receipt) return NextResponse.json({ error: 'one exact running or waiting OpenCode receipt is required' }, { status: 409 });
+  if (!receipt) return NextResponse.json({ error: 'one exact running, waiting or explicitly stopped OpenCode receipt is required' }, { status: 409 });
+  const continuingStoppedSession = receipt.phase === 'stopped' && latestStopControl(receipt.sessionControls)?.phase === 'accepted';
+  if (!receipt.projectBinding || receipt.projectBinding.projectId !== context.card.project
+      || !await currentScopedBinding(receipt.projectBinding, context.card.project)) {
+    return NextResponse.json({ error: 'saved project route is no longer ready; session control is denied' }, { status: 503 });
+  }
   const message = action === 'direct' ? (body.message as string).trim() : '';
-  const requestHash = sha256(JSON.stringify({ cardId: context.card.id, operationId: receipt.operationId, action, message }));
+  const controlEpoch = action === 'stop' ? stopControlEpoch(receipt) : undefined;
+  const requestHash = sha256(JSON.stringify({ cardId: context.card.id, operationId: receipt.operationId, action, message,
+    ...(controlEpoch ? { controlEpoch } : {}) }));
   const prior = action === 'direct'
     ? receipt.sessionControls?.direct?.find(item => item.requestHash === requestHash)
-    : receipt.sessionControls?.stop;
+    : receipt.sessionControls?.stops?.find(item => item.requestHash === requestHash)
+      ?? (receipt.sessionControls?.stop?.requestHash === requestHash ? receipt.sessionControls.stop : undefined);
   if (prior) {
     return sessionControlResponse(context.card.id, receipt, action, requestHash, prior.phase === 'accepted' ? 200 : 202);
   }
-  if (action === 'stop' && receipt.sessionControls?.stop) {
-    return NextResponse.json({ error: 'this stop action already has a durable outcome; do not retry it' }, { status: 409 });
+  const originalInput = await verifiedOpenCodeDeliveryJob(receipt, receipt.messageInputId);
+  if (!originalInput || originalInput.jobId !== receipt.nativeDispatchJobId
+      || originalInput.nativeInputMessageId !== receipt.nativeInputMessageId) {
+    return NextResponse.json({ error: 'accepted OpenCode input could not be linked to this project card; no control was sent' }, { status: 409 });
+  }
+  let sessionInfoTool: HerderToolResult;
+  try {
+    sessionInfoTool = await callOwnerHerderTool('agent_info', {
+      harness: receipt.harness, sessionId: receipt.nativeSessionId, hostId: receipt.hostId,
+    });
+  } catch {
+    return NextResponse.json({ error: 'the exact OpenCode session status is unavailable; no control was sent' }, { status: 503 });
+  }
+  const sessionPayload = isRecord(sessionInfoTool.structuredContent) ? sessionInfoTool.structuredContent : undefined;
+  const nativeSession = isRecord(sessionPayload?.session) ? sessionPayload.session : undefined;
+  const cwd = executionReceiptCwd(receipt);
+  if (!nativeSession || nativeSession.id !== receipt.nativeSessionId || nativeSession.harness !== 'opencode'
+      || nativeSession.hostId !== receipt.hostId || !cwd || nativeSession.cwd !== cwd
+      || nativeSession.model !== expectedModel(receipt)
+      || action === 'stop' && !['running', 'needs_input'].includes(String(nativeSession.status))
+      || action === 'direct' && (continuingStoppedSession
+        ? !['stopped', 'idle'].includes(String(nativeSession.status))
+        : !['running', 'needs_input'].includes(String(nativeSession.status)))) {
+    return NextResponse.json({ error: 'the exact OpenCode session state does not allow this control; no action was sent' }, { status: 409 });
   }
   if (!process.env.AGENT_HERDER_HTTP_TOKEN?.trim()) return NextResponse.json({ error: 'protected session control channel is not configured' }, { status: 503 });
 
+  const directInputId = action === 'direct' ? requestHash : undefined;
+  const directJobId = directInputId ? userMessageJobId('opencode', receipt.nativeSessionId!, directInputId) : undefined;
   const savedIntent = updateSessionControl(context.card.id, context.tasksDir, receipt.operationId,
-    requestHash, action, 'intent', context.card.version);
+    requestHash, action, 'intent', context.card.version,
+    directJobId ? { nativeDispatchJobId: directJobId } : controlEpoch ? { controlEpoch } : undefined);
   if (!savedIntent || 'conflict' in savedIntent) {
     return NextResponse.json({ conflict: true, ...(savedIntent && 'conflict' in savedIntent ? { serverCard: savedIntent.serverCard } : {}) }, { status: 409 });
   }
@@ -1455,7 +1814,8 @@ async function controlTaskSession(context: AuthorizedTaskCard, body: RecordValue
         hostId: durableReceipt.hostId,
         inputId: requestHash,
         message,
-        mode: 'steer',
+        mode: 'queue',
+        humanRequested: true,
       })
       : await callOwnerHerderTool('stop_agent', {
         sessionId: durableReceipt.nativeSessionId,
@@ -1466,31 +1826,72 @@ async function controlTaskSession(context: AuthorizedTaskCard, body: RecordValue
     // The durable intent is terminal for dispatch: transport failure may follow a
     // successful provider call, so this request is never sent a second time.
   }
-  const accepted = action === 'direct'
-    ? nativeDirectAccepted(toolResult, durableReceipt, requestHash)
-    : nativeStopAccepted(toolResult, durableReceipt);
-  const saved = updateSessionControl(context.card.id, context.tasksDir, receipt.operationId,
-    requestHash, action, accepted ? 'accepted' : 'unknown');
+  let accepted = false;
+  let directProof: VerifiedOpenCodeInput | undefined;
+  if (action === 'direct') {
+    directProof = await verifiedOpenCodeInput(durableReceipt, requestHash, message);
+    accepted = !!directProof && directProof.jobId === directJobId;
+  } else {
+    accepted = nativeStopAccepted(toolResult, durableReceipt);
+  }
+  let saved = accepted
+    ? updateSessionControl(context.card.id, context.tasksDir, receipt.operationId,
+      requestHash, action, 'accepted', undefined, directProof ? {
+        nativeDispatchJobId: directProof.jobId, nativeInputMessageId: directProof.nativeInputMessageId,
+      } : undefined)
+    : updateSessionControl(context.card.id, context.tasksDir, receipt.operationId, requestHash, action, 'unknown');
+  if (accepted && action === 'stop') {
+    let stopped = false;
+    try {
+      const readback = await callOwnerHerderTool('agent_info', {
+        harness: receipt.harness, sessionId: receipt.nativeSessionId, hostId: receipt.hostId,
+      });
+      const payload = isRecord(readback.structuredContent) ? readback.structuredContent : undefined;
+      const observed = isRecord(payload?.session) ? payload.session : undefined;
+      stopped = !!observed && observed.id === receipt.nativeSessionId && observed.hostId === receipt.hostId
+        && ['stopped', 'idle'].includes(String(observed.status));
+    } catch { /* The stop receipt remains durable; result polling can confirm status without retrying it. */ }
+    if (stopped) saved = saveReceiptProgress(context.card.id, context.tasksDir, receipt.operationId, receipt.requestHash, {
+      phase: 'stopped', nativeSessionId: receipt.nativeSessionId,
+      lastProgress: 'Исполнитель остановлен по команде с карточки; ожидает явного продолжения.', lastProgressAt: now(),
+    }) ?? saved;
+  } else if (accepted && action === 'direct' && continuingStoppedSession) {
+    saved = saveReceiptProgress(context.card.id, context.tasksDir, receipt.operationId, receipt.requestHash, {
+      phase: 'running', nativeSessionId: receipt.nativeSessionId,
+      lastProgress: 'Явное продолжение поставлено в очередь той же OpenCode-сессии; проверяю ответ.', lastProgressAt: now(),
+    }) ?? saved;
+  }
   const finalReceipt = saved && !('conflict' in saved)
     ? saved.taskExecutionHistory?.find(item => item.operationId === receipt.operationId) : undefined;
+  const finalControl = action === 'direct'
+    ? finalReceipt?.sessionControls?.direct?.find(item => item.requestHash === requestHash)
+    : finalReceipt?.sessionControls?.stops?.find(item => item.requestHash === requestHash)
+      ?? (finalReceipt?.sessionControls?.stop?.requestHash === requestHash ? finalReceipt.sessionControls.stop : undefined);
+  const finalPhase = finalControl?.phase;
   if (finalReceipt) return sessionControlResponse(context.card.id, finalReceipt, action, requestHash, accepted ? 200 : 202);
-  return NextResponse.json({ cardId: context.card.id, boardOperationId: receipt.operationId, action, requestHash, state: accepted ? 'accepted' : 'unknown' }, {
+  return NextResponse.json({ cardId: context.card.id, boardOperationId: receipt.operationId, action, requestHash, state: finalPhase ?? (accepted ? 'accepted' : 'unknown') }, {
     status: accepted ? 200 : 202, headers: { 'Cache-Control': 'no-store' },
   });
 }
 
 /** Sync one exact completed native result into the existing human-review card flow. */
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let failureStage = 'authorize-card';
   try {
     const { id } = await params;
-    const context = await authorizedTaskCard(request, id);
-    if ('response' in context) return context.response;
     const body: unknown = await request.json();
+    const allowAssignedReviewer = isRecord(body)
+      && ['continue-task', 'sync-task-continuation'].includes(String(body.action));
+    const context = await authorizedTaskCard(request, id, 'write', undefined, allowAssignedReviewer);
+    if ('response' in context) return context.response;
     if (context.native && isRecord(body) && typeof body.operationId === 'string') {
       const receiptId = ['continue-task', 'sync-task-continuation'].includes(String(body.action))
         ? /^[a-f0-9]{64}$/.test(body.operationId) ? body.operationId : undefined
-        : ['create-question', 'sync-result'].includes(String(body.action)) && /^[A-Za-z0-9_-]{16,128}$/.test(body.operationId)
-          ? operationIdFor(id, body.operationId) : undefined;
+        : body.action === 'sync-result' && /^[a-f0-9]{64}$/.test(body.operationId)
+            && context.card.taskExecutionHistory?.some(item => item.operationId === body.operationId)
+          ? body.operationId
+          : ['create-question', 'sync-result'].includes(String(body.action)) && /^[A-Za-z0-9_-]{16,128}$/.test(body.operationId)
+            ? operationIdFor(id, body.operationId) : undefined;
       const referenced = receiptId ? context.card.taskExecutionHistory?.find(item => item.operationId === receiptId) : undefined;
       if (referenced && referenced.startedBy !== context.actor && !['continue-task', 'sync-task-continuation'].includes(String(body.action))) {
         return NextResponse.json({ error: 'saved execution receipt owner does not match native identity; do not replay or remap this receipt' }, { status: 409 });
@@ -1506,8 +1907,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       || !/^[A-Za-z0-9_-]{16,128}$/.test(body.operationId) || !Number.isSafeInteger(body.expectedVersion)) {
       return NextResponse.json({ error: 'invalid result sync request' }, { status: 400 });
     }
+    failureStage = 'resolve-execution-receipt';
     if (body.expectedVersion !== context.card.version) return NextResponse.json({ conflict: true, serverCard: context.card }, { status: 409 });
-    const operationId = operationIdFor(id, body.operationId);
+    const durableOperationId = /^[a-f0-9]{64}$/.test(body.operationId)
+      ? context.card.taskExecutionHistory?.find(entry => entry.operationId === body.operationId)?.operationId
+      : undefined;
+    const operationId = durableOperationId ?? operationIdFor(id, body.operationId);
     const attempt = context.card.taskExecutionHistory?.find(entry => entry.operationId === operationId);
     if (!attempt) return NextResponse.json({ error: 'execution operation not found' }, { status: 404 });
     if (context.native && attempt.startedBy !== context.actor) {
@@ -1569,33 +1974,79 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         admittedStatus: 202, harness: expectedHarness(attempt),
       });
     }
-    if (!['running', 'waiting'].includes(attempt.phase) || !attempt.nativeSessionId) {
+    const queuedDispatchPendingReadback = recoverableQueuedDispatch(attempt);
+    if ((!['running', 'waiting'].includes(attempt.phase) && !queuedDispatchPendingReadback) || !attempt.nativeSessionId) {
       return NextResponse.json({ ...taskExecutionSnapshot(context.card), retryable: false }, { status: 409 });
     }
 
+    failureStage = 'read-native-session';
     const infoTool = await callOwnerHerderTool('agent_info', { harness: attempt.harness, sessionId: attempt.nativeSessionId });
     const info = isRecord(infoTool.structuredContent) ? infoTool.structuredContent : undefined;
     const session = isRecord(info?.session) ? info.session : undefined;
     const attemptCwd = executionReceiptCwd(attempt);
     if (!session || session.id !== attempt.nativeSessionId || session.harness !== attempt.harness
       || !attemptCwd || session.cwd !== attemptCwd
-      || session.model !== expectedModel(attempt) || typeof session.status !== 'string') {
+      || session.hostId !== attempt.hostId || session.model !== expectedModel(attempt) || typeof session.status !== 'string') {
       return NextResponse.json({ error: 'native session identity could not be verified' }, { status: 502 });
+    }
+    let openCodeMessagesForAttempt: RecordValue[] | undefined;
+    let queuedAdmissionProof: VerifiedOpenCodeInput | undefined;
+    if (queuedDispatchPendingReadback) {
+      failureStage = 'verify-project-binding';
+      if (!attempt.projectBinding || !await currentScopedBinding(attempt.projectBinding, context.card.project)) {
+        return NextResponse.json({ error: 'saved project route is no longer ready; readback is denied' }, { status: 503 });
+      }
+      failureStage = 'read-bound-session-messages';
+      queuedAdmissionProof = await verifiedOpenCodeInput(attempt, attempt.messageInputId, taskPrompt(context.card));
+      openCodeMessagesForAttempt = queuedAdmissionProof?.messages;
+      const taskMessageIndex = openCodeMessagesForAttempt ? openCodeTaskMessageIndex(openCodeMessagesForAttempt, context.card) : undefined;
+      if (!queuedAdmissionProof || taskMessageIndex === undefined || taskMessageIndex !== queuedAdmissionProof.userIndex
+          || openCodeMessagesForAttempt?.[taskMessageIndex]?.id !== queuedAdmissionProof.nativeInputMessageId) {
+        return NextResponse.json({ ...taskExecutionSnapshot(context.card),
+          waitReason: 'Ожидаю подтверждённую квитанцию доставки и совпадающее сообщение этой карточки. Повтор не выполнялся.' }, {
+          status: 202, headers: { 'Cache-Control': 'no-store' },
+        });
+      }
     }
     const nativeLastTurn = isRecord(session.meta) && isRecord(session.meta.nativeLastTurn)
       ? session.meta.nativeLastTurn : undefined;
     const lastActivity = typeof session.lastActivity === 'string' ? session.lastActivity : now();
     if (session.status === 'running') {
+      failureStage = 'persist-running-progress';
+      const queuedTurnId = typeof nativeLastTurn?.turnId === 'string' ? nativeLastTurn.turnId : undefined;
+      const queuedTurnVisible = !!queuedTurnId && openCodeMessagesForAttempt?.some(message =>
+        message.role === 'assistant' && message.turnId === queuedTurnId);
+      const persistPhase = 'running';
       const updated = saveReceiptProgress(id, context.tasksDir, operationId, attempt.requestHash, {
-        phase: 'running', lastProgress: 'Нативная сессия выполняет задачу.', lastProgressAt: lastActivity,
-      });
+        phase: persistPhase, nativeSessionId: attempt.nativeSessionId,
+        ...(queuedTurnVisible && queuedTurnId ? { nativeTurnId: queuedTurnId } : {}),
+        ...(queuedAdmissionProof ? {
+          nativeDispatchJobId: queuedAdmissionProof.jobId,
+          nativeInputMessageId: queuedAdmissionProof.nativeInputMessageId,
+        } : {}),
+        lastProgress: queuedAdmissionProof
+          ? queuedTurnVisible
+            ? 'Подтверждённая доставка и точный нативный ход этой карточки видны; исполнитель работает.'
+            : 'Подтверждённая доставка связана с точным сообщением этой карточки; исполнитель работает.'
+          : 'Нативная сессия выполняет задачу.', lastProgressAt: lastActivity,
+      }, queuedDispatchPendingReadback ? current => {
+        if (current.column === 'in-progress') return {};
+        const transition = validateTransition(current, { column: 'in-progress' }, { origin: 'automation', actor: attempt.startedBy });
+        return transition.kind === 'accepted' ? transition.patch : {};
+      } : undefined);
       return NextResponse.json(updated ? taskExecutionSnapshot(updated) : taskExecutionSnapshot(context.card), {
         status: 202, headers: { 'Cache-Control': 'no-store' },
       });
     }
     if (session.status === 'needs_input') {
+      failureStage = 'persist-waiting-progress';
       const updated = saveReceiptProgress(id, context.tasksDir, operationId, attempt.requestHash, {
-        phase: 'waiting', lastProgress: 'Нативной сессии требуется ввод или разрешение.', lastProgressAt: lastActivity,
+        phase: 'waiting', nativeSessionId: attempt.nativeSessionId,
+        ...(queuedAdmissionProof ? {
+          nativeDispatchJobId: queuedAdmissionProof.jobId,
+          nativeInputMessageId: queuedAdmissionProof.nativeInputMessageId,
+        } : {}),
+        lastProgress: 'Нативной сессии требуется ввод или разрешение.', lastProgressAt: lastActivity,
       });
       return NextResponse.json(updated ? taskExecutionSnapshot(updated) : taskExecutionSnapshot(context.card), {
         status: 202, headers: { 'Cache-Control': 'no-store' },
@@ -1604,62 +2055,136 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (session.status === 'stopped' || session.status === 'error') {
       const updated = saveReceiptProgress(id, context.tasksDir, operationId, attempt.requestHash, {
         phase: 'stopped', lastProgress: 'Нативная сессия остановлена; результат не принят в проверку.', lastProgressAt: lastActivity,
+        ...(queuedAdmissionProof ? {
+          nativeDispatchJobId: queuedAdmissionProof.jobId,
+          nativeInputMessageId: queuedAdmissionProof.nativeInputMessageId,
+        } : {}),
       });
       return NextResponse.json(updated ? taskExecutionSnapshot(updated) : taskExecutionSnapshot(context.card), { headers: { 'Cache-Control': 'no-store' } });
     }
 
     // Agent history can contain commentary or a previous idle turn. Only the
     // exact turn admitted by this Board operation can become a review result.
-    if (session.status !== 'idle' || !nativeLastTurn
-      || nativeLastTurn.turnId !== attempt.nativeTurnId || nativeLastTurn.status !== 'completed'
-      || nativeLastTurn.assistantSucceeded === false || nativeLastTurn.cancelledByUser === true
-      || nativeLastTurn.transportLost === true) {
+    const expectedOpenCodeTurnId = attempt.harness === 'opencode'
+      ? attempt.nativeTurnId ?? (typeof nativeLastTurn?.turnId === 'string' ? nativeLastTurn.turnId : undefined)
+      : attempt.nativeTurnId;
+    const nativeTurnCompleted = nativeLastTurn !== undefined
+      && !!expectedOpenCodeTurnId && nativeLastTurn.turnId === expectedOpenCodeTurnId && nativeLastTurn.status === 'completed'
+      && nativeLastTurn.assistantSucceeded !== false && nativeLastTurn.cancelledByUser !== true
+      && nativeLastTurn.transportLost !== true;
+    const nativeTurnMismatch = nativeLastTurn !== undefined && (attempt.harness === 'opencode'
+      ? nativeLastTurn.status !== 'completed' || nativeLastTurn.assistantSucceeded === false
+        || nativeLastTurn.cancelledByUser === true || nativeLastTurn.transportLost === true
+        || Boolean(expectedOpenCodeTurnId && nativeLastTurn.turnId !== expectedOpenCodeTurnId)
+      : !nativeTurnCompleted);
+    if (session.status !== 'idle' || (attempt.harness === 'opencode' ? nativeTurnMismatch : !nativeTurnCompleted)) {
       return NextResponse.json({
         ...taskExecutionSnapshot(context.card),
         waitReason: 'Ожидается точное подтверждение завершения переданного запуска',
       }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
 
-    const viewTool = await callOwnerHerderTool('fleet_session_view', { harness: attempt.harness, sessionId: attempt.nativeSessionId });
-    const view = isRecord(viewTool.structuredContent) ? viewTool.structuredContent : undefined;
-    const details = isRecord(view?.details) ? view.details : undefined;
-    const native = isRecord(details?.session) ? details.session : undefined;
-    if (!details || view?.hostId !== attempt.hostId || native?.id !== attempt.nativeSessionId
-      || native?.harness !== attempt.harness || native.cwd !== session.cwd || native.model !== session.model) {
-      return NextResponse.json({ error: 'native session identity could not be verified' }, { status: 502 });
-    }
-    if (details.historyUnavailable === true || !Array.isArray(details.messages)) {
-      return NextResponse.json({ ...taskExecutionSnapshot(context.card), waitReason: 'Нативная история пока недоступна' }, { status: 202 });
+    let assistantText: string | undefined;
+    let assistantMessageId: string | undefined;
+    let resultTurnId: string | undefined = attempt.nativeTurnId;
+    if (attempt.harness === 'opencode') {
+      failureStage = 'read-completed-session-result';
+      const messagesUri = `herder://sessions/opencode/${encodeURIComponent(attempt.nativeSessionId)}/messages`;
+      const messages = openCodeMessagesForAttempt ?? await readOpenCodeMessages(attempt.nativeSessionId);
+      if (!messages) return NextResponse.json({ ...taskExecutionSnapshot(context.card), waitReason: 'Нативная история пока недоступна' }, { status: 202 });
+      const directInput = attempt.sessionControls?.direct?.filter(control => control.phase === 'accepted'
+        && !!control.nativeDispatchJobId && !!control.nativeInputMessageId).at(-1);
+      const directInputId = directInput?.requestHash;
+      const directBindingIsExact = !!directInput && !!directInputId
+        && directInput.nativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, directInputId);
+      const mainBindingIsExact = !!attempt.nativeInputMessageId && !!attempt.nativeDispatchJobId
+        && attempt.nativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, attempt.messageInputId);
+      const userIndex = directInput
+        ? directBindingIsExact ? openCodeBoundInputMessageIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined
+        : attempt.nativeInputMessageId || attempt.nativeDispatchJobId
+          ? mainBindingIsExact ? openCodeBoundInputMessageIndex(messages, attempt.nativeInputMessageId!, attempt.messageInputId) : undefined
+          : openCodeTaskMessageIndex(messages, context.card);
+      if (userIndex === undefined) return NextResponse.json({ ...taskExecutionSnapshot(context.card),
+        waitReason: directBindingIsExact
+          ? 'Явное продолжение принято, но его точное сообщение пока не найдено в связанной сессии'
+          : 'Точное поручение этой карточки пока не найдено в связанной сессии' }, { status: 202 });
+      const assistant = completedOpenCodeAssistant(messages, userIndex, expectedOpenCodeTurnId);
+      resultTurnId = typeof assistant?.turnId === 'string' ? assistant.turnId : expectedOpenCodeTurnId;
+      assistantText = assistant && typeof assistant.text === 'string' ? assistant.text : undefined;
+      assistantMessageId = typeof assistant?.id === 'string' ? assistant.id : undefined;
+    } else {
+      const viewTool = await callOwnerHerderTool('fleet_session_view', { harness: attempt.harness, sessionId: attempt.nativeSessionId });
+      const view = isRecord(viewTool.structuredContent) ? viewTool.structuredContent : undefined;
+      const details = isRecord(view?.details) ? view.details : undefined;
+      const native = isRecord(details?.session) ? details.session : undefined;
+      if (!details || view?.hostId !== attempt.hostId || native?.id !== attempt.nativeSessionId
+        || native?.harness !== attempt.harness || native.cwd !== session.cwd || native.model !== session.model) {
+        return NextResponse.json({ error: 'native session identity could not be verified' }, { status: 502 });
+      }
+      if (details.historyUnavailable === true || !Array.isArray(details.messages)) {
+        return NextResponse.json({ ...taskExecutionSnapshot(context.card), waitReason: 'Нативная история пока недоступна' }, { status: 202 });
+      }
+      const messages = details.messages.filter(isRecord);
+      const assistant = [...messages].reverse().find(message => message.role === 'assistant'
+        && typeof message.text === 'string' && message.text.trim());
+      assistantText = assistant && typeof assistant.text === 'string' ? assistant.text : undefined;
     }
 
-    // The native transcript is the message source; the index summary is not.
-    // Reconfirm the same exact completed turn after reading it to fail closed
-    // if another turn started between the terminal proof and transcript read.
+    if (!assistantText?.trim()) {
+      return NextResponse.json({ ...taskExecutionSnapshot(context.card), waitReason: 'Завершённый запуск пока не содержит проверяемого ответа' }, { status: 202 });
+    }
+
+    // Reconfirm the same exact completed turn after reading the native last message/transcript.
+    // For OpenCode also require the same text so a subsequent turn cannot replace this result.
     const confirmTool = await callOwnerHerderTool('agent_info', { harness: attempt.harness, sessionId: attempt.nativeSessionId });
     const confirmPayload = isRecord(confirmTool.structuredContent) ? confirmTool.structuredContent : undefined;
     const confirmedSession = isRecord(confirmPayload?.session) ? confirmPayload.session : undefined;
     const confirmedLastTurn = isRecord(confirmedSession?.meta) && isRecord(confirmedSession.meta.nativeLastTurn)
       ? confirmedSession.meta.nativeLastTurn : undefined;
+    const confirmedOpenCodeTurnId = resultTurnId ?? attempt.nativeTurnId
+      ?? (typeof confirmedLastTurn?.turnId === 'string' ? confirmedLastTurn.turnId : undefined);
+    const confirmedTurnCompleted = confirmedLastTurn !== undefined
+      && !!confirmedOpenCodeTurnId && confirmedLastTurn.turnId === confirmedOpenCodeTurnId && confirmedLastTurn.status === 'completed'
+      && confirmedLastTurn.assistantSucceeded !== false && confirmedLastTurn.cancelledByUser !== true
+      && confirmedLastTurn.transportLost !== true;
+    const confirmedTurnMismatch = confirmedLastTurn !== undefined && (attempt.harness === 'opencode'
+      ? confirmedLastTurn.status !== 'completed' || confirmedLastTurn.assistantSucceeded === false
+        || confirmedLastTurn.cancelledByUser === true || confirmedLastTurn.transportLost === true
+        || Boolean(confirmedOpenCodeTurnId && confirmedLastTurn.turnId !== confirmedOpenCodeTurnId)
+      : !confirmedTurnCompleted);
     if (!confirmedSession || confirmedSession.id !== attempt.nativeSessionId || confirmedSession.harness !== attempt.harness
       || confirmedSession.cwd !== session.cwd || confirmedSession.model !== expectedModel(attempt) || confirmedSession.status !== 'idle'
-      || !confirmedLastTurn || confirmedLastTurn.turnId !== attempt.nativeTurnId || confirmedLastTurn.status !== 'completed'
-      || confirmedLastTurn.assistantSucceeded === false || confirmedLastTurn.cancelledByUser === true
-      || confirmedLastTurn.transportLost === true) {
+      || (attempt.harness === 'opencode' ? confirmedTurnMismatch : !confirmedTurnCompleted)) {
       return NextResponse.json({
         ...taskExecutionSnapshot(context.card),
         waitReason: 'Нативный turn изменился при проверке результата; требуется повторное чтение',
       }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
-    const messages = details.messages.filter(isRecord);
-
-    const assistant = [...messages].reverse().find(message => message.role === 'assistant' && typeof message.text === 'string' && message.text.trim());
-    if (!assistant || typeof assistant.text !== 'string' || !assistant.text.trim()) {
-      return NextResponse.json({
-        ...taskExecutionSnapshot(context.card),
-        waitReason: 'Завершённый запуск пока не содержит проверяемого ответа',
-      }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+    if (attempt.harness === 'opencode') {
+      const messages = await readOpenCodeMessages(attempt.nativeSessionId);
+      const directInput = attempt.sessionControls?.direct?.filter(control => control.phase === 'accepted'
+        && !!control.nativeDispatchJobId && !!control.nativeInputMessageId).at(-1);
+      const directInputId = directInput?.requestHash;
+      const directBindingIsExact = !!directInput && !!directInputId
+        && directInput.nativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, directInputId);
+      const mainBindingIsExact = !!attempt.nativeInputMessageId && !!attempt.nativeDispatchJobId
+        && attempt.nativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, attempt.messageInputId);
+      const userIndex = messages ? directInput
+        ? directBindingIsExact ? openCodeBoundInputMessageIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined
+        : attempt.nativeInputMessageId || attempt.nativeDispatchJobId
+          ? mainBindingIsExact ? openCodeBoundInputMessageIndex(messages, attempt.nativeInputMessageId!, attempt.messageInputId) : undefined
+          : openCodeTaskMessageIndex(messages, context.card) : undefined;
+      const assistant = messages && userIndex !== undefined
+        ? completedOpenCodeAssistant(messages, userIndex, resultTurnId ?? attempt.nativeTurnId) : undefined;
+      if (!assistant || assistant.text !== assistantText
+          || (assistantMessageId !== undefined && assistant.id !== assistantMessageId)
+          || (resultTurnId !== undefined && assistant.turnId !== resultTurnId)) {
+        return NextResponse.json({ ...taskExecutionSnapshot(context.card),
+          waitReason: 'Нативный результат изменился при повторном чтении сообщения сессии' }, { status: 202 });
+      }
+      if (!resultTurnId && typeof assistant.turnId === 'string') resultTurnId = assistant.turnId;
     }
-    const summary = assistant.text.slice(0, 40_000);
+    const summary = assistantText.slice(0, 40_000);
     const evidenceRefs = [...new Set(summary.match(/https?:\/\/[^\s<>"')\]]+/g)?.map(url => url.replace(/[.,;:!?]+$/u, '')) ?? [])].slice(0, 50);
     const transition = validateTransition(context.card, {
       executorResult: { summary, evidenceRefs, nextAction: 'Проверьте результат и источники, затем примите решение.' },
@@ -1668,11 +2193,19 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const nextHistory = [...(context.card.taskExecutionHistory ?? [])];
     const index = nextHistory.findIndex(entry => entry.operationId === operationId);
     if (index < 0) return NextResponse.json({ error: 'execution receipt disappeared' }, { status: 409 });
-    nextHistory[index] = { ...nextHistory[index]!, phase: 'result', lastBoardVersion: context.card.version + 1, lastProgress: 'Результат сохранён и ожидает проверки человека.', lastProgressAt: now(), updatedAt: now() };
+    nextHistory[index] = { ...nextHistory[index]!, phase: 'result',
+      ...(resultTurnId ? { nativeTurnId: resultTurnId } : {}),
+      lastBoardVersion: context.card.version + 1, lastProgress: 'Результат сохранён и ожидает проверки человека.', lastProgressAt: now(), updatedAt: now() };
     const saved = updateCard(id, { ...transition.patch, taskExecutionHistory: nextHistory }, context.card.version, context.tasksDir);
     if ('conflict' in saved) return NextResponse.json({ conflict: true, serverCard: saved.serverCard }, { status: 409 });
     return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved }, { headers: { 'Cache-Control': 'no-store' } });
-  } catch {
+  } catch (error) {
+    const errorCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+      ? error.code : undefined;
+    const errorMessage = error instanceof Error ? error.message.replace(/\s+/g, ' ')
+      .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
+      .replace(/[A-Za-z0-9_-]{40,}/g, '[redacted]').slice(0, 160) : undefined;
+    console.error('[kanban task execution PATCH]', { stage: failureStage, type: error instanceof Error ? error.name : typeof error, errorCode, errorMessage });
     return NextResponse.json({ error: 'native task result could not be synchronized' }, { status: 502 });
   }
 }

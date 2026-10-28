@@ -237,8 +237,8 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
 
   const { dueAt: dueAtUpdate, ...otherUpdates } = updates;
   const normalizedUpdates = Object.fromEntries(
-    Object.entries(otherUpdates).map(([key, value]) => [key, value === null ? undefined : value]),
-  ) as Omit<KanbanCardUpdates, 'dueAt' | 'nextAction' | 'blockerReason'> & { nextAction?: string; blockerReason?: string };
+    Object.entries(otherUpdates).map(([key, value]) => [key, key === 'nextAction' ? value : value === null ? undefined : value]),
+  ) as Omit<KanbanCardUpdates, 'dueAt' | 'blockerReason'> & { blockerReason?: string };
   if (normalizedUpdates.taskExecutionHistory !== undefined) {
     normalizedUpdates.taskExecutionHistory = taskExecutionHistoryField(normalizedUpdates.taskExecutionHistory);
   }
@@ -557,7 +557,7 @@ interface PlanningMetadata {
   approvalEvidence: PlanningEvidence[];
   resultHistory: TaskResult[];
   reviewHistory: TaskReviewRecord[];
-  nextAction?: string;
+  nextAction?: string | null;
 }
 
 function defaultPlanningMetadata(): PlanningMetadata {
@@ -671,6 +671,13 @@ function optionalString(data: Record<string, unknown>, field: string): string | 
   return value;
 }
 
+function optionalNullableString(data: Record<string, unknown>, field: string): string | null | undefined {
+  const value = data[field];
+  if (value === undefined || value === null) return value;
+  if (typeof value !== 'string' || !value.trim()) throw invalidPlanningField(field, 'expected a non-empty string or null');
+  return value;
+}
+
 function booleanField(data: Record<string, unknown>, field: string, fallback: boolean): boolean {
   const value = data[field];
   if (value === undefined) return fallback;
@@ -709,7 +716,8 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
   const seen = new Set<string>();
   return value.map((entry, index) => {
     const field = `task_execution_history[${index}]`;
-    const continuations = taskExecutionContinuationsField(entry, field);
+    const continuations = taskExecutionContinuationsField(entry, field,
+      isRecord(entry) && entry.harness === 'opencode' && entry.projectBinding !== undefined);
     const sessionControls = taskExecutionSessionControlsField(entry, field);
     if (!isRecord(entry)
       || typeof entry.operationId !== 'string' || !/^[a-f0-9]{64}$/.test(entry.operationId)
@@ -727,6 +735,10 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       || typeof entry.updatedAt !== 'string' || Number.isNaN(Date.parse(entry.updatedAt))
       || entry.nativeSessionId !== undefined && (typeof entry.nativeSessionId !== 'string' || !entry.nativeSessionId.trim() || entry.nativeSessionId.length > 512)
       || entry.nativeTurnId !== undefined && (typeof entry.nativeTurnId !== 'string' || !entry.nativeTurnId.trim() || entry.nativeTurnId.length > 512)
+      || entry.nativeInputMessageId !== undefined && (typeof entry.nativeInputMessageId !== 'string'
+        || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(entry.nativeInputMessageId))
+      || entry.nativeDispatchJobId !== undefined && (typeof entry.nativeDispatchJobId !== 'string'
+        || !/^job_[a-f0-9]{64}$/.test(entry.nativeDispatchJobId))
       || entry.createReceiptText !== undefined && (typeof entry.createReceiptText !== 'string' || entry.createReceiptText.length > 4096)
       || entry.dispatchReceiptText !== undefined && (typeof entry.dispatchReceiptText !== 'string' || entry.dispatchReceiptText.length > 4096)
       || entry.lastProgress !== undefined && (typeof entry.lastProgress !== 'string' || entry.lastProgress.length > 4000)
@@ -745,7 +757,9 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
     if (['created', 'dispatch-unknown', 'running', 'waiting', 'stopped', 'result'].includes(String(entry.phase)) && !entry.nativeSessionId) {
       throw invalidPlanningField(`${field}.nativeSessionId`, 'required after session creation');
     }
-    if (['running', 'waiting', 'result'].includes(String(entry.phase)) && !entry.nativeTurnId) {
+    const exactOpenCodeInputBinding = entry.harness === 'opencode' && entry.projectBinding !== undefined
+      && typeof entry.nativeInputMessageId === 'string' && typeof entry.nativeDispatchJobId === 'string';
+    if (['running', 'waiting', 'result'].includes(String(entry.phase)) && !entry.nativeTurnId && !exactOpenCodeInputBinding) {
       throw invalidPlanningField(`${field}.nativeTurnId`, 'required after native turn admission');
     }
     const projectBinding = entry.projectBinding === undefined ? undefined : normalizeTaskExecutionProjectBinding(entry.projectBinding);
@@ -762,6 +776,8 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       ...(projectBinding ? { projectBinding } : {}),
       ...(typeof entry.nativeSessionId === 'string' ? { nativeSessionId: entry.nativeSessionId } : {}),
       ...(typeof entry.nativeTurnId === 'string' ? { nativeTurnId: entry.nativeTurnId } : {}),
+      ...(typeof entry.nativeInputMessageId === 'string' ? { nativeInputMessageId: entry.nativeInputMessageId } : {}),
+      ...(typeof entry.nativeDispatchJobId === 'string' ? { nativeDispatchJobId: entry.nativeDispatchJobId } : {}),
       ...(typeof entry.requestedBy === 'string' ? { requestedBy: entry.requestedBy } : {}),
       ...(isRecord(entry.taskDecisionRequest) ? { taskDecisionRequest: {
         requestId: entry.taskDecisionRequest.requestId as string,
@@ -785,14 +801,17 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
 function taskExecutionSessionControlsField(entry: unknown, field: string): TaskExecutionSessionControls | undefined {
   if (!isRecord(entry) || entry.sessionControls === undefined) return undefined;
   const value = entry.sessionControls;
-  if (!isRecord(value) || Object.keys(value).some(key => !['direct', 'stop'].includes(key))) {
+  if (!isRecord(value) || Object.keys(value).some(key => !['direct', 'stop', 'stops'].includes(key))) {
     throw invalidPlanningField(`${field}.sessionControls`, 'expected direct/stop receipt states');
   }
   const result: TaskExecutionSessionControls = {};
   const parseControl = (item: unknown, itemField: string): TaskExecutionSessionControl => {
     if (!isRecord(item)
-      || Object.keys(item).some(key => !['requestHash', 'phase', 'updatedAt'].includes(key))
+      || Object.keys(item).some(key => !['requestHash', 'phase', 'controlEpoch', 'nativeDispatchJobId', 'nativeInputMessageId', 'updatedAt'].includes(key))
       || typeof item.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(item.requestHash)
+      || item.controlEpoch !== undefined && (typeof item.controlEpoch !== 'string' || !/^[a-f0-9]{64}$/.test(item.controlEpoch))
+      || item.nativeDispatchJobId !== undefined && (typeof item.nativeDispatchJobId !== 'string' || !/^job_[a-f0-9]{64}$/.test(item.nativeDispatchJobId))
+      || item.nativeInputMessageId !== undefined && (typeof item.nativeInputMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(item.nativeInputMessageId))
       || !['intent', 'accepted', 'unknown'].includes(String(item.phase))
       || typeof item.updatedAt !== 'string' || Number.isNaN(Date.parse(item.updatedAt))) {
       throw invalidPlanningField(itemField, 'invalid session control receipt');
@@ -800,6 +819,9 @@ function taskExecutionSessionControlsField(entry: unknown, field: string): TaskE
     return {
       requestHash: item.requestHash,
       phase: item.phase as TaskExecutionSessionControl['phase'],
+      ...(typeof item.controlEpoch === 'string' ? { controlEpoch: item.controlEpoch } : {}),
+      ...(typeof item.nativeDispatchJobId === 'string' ? { nativeDispatchJobId: item.nativeDispatchJobId } : {}),
+      ...(typeof item.nativeInputMessageId === 'string' ? { nativeInputMessageId: item.nativeInputMessageId } : {}),
       updatedAt: item.updatedAt,
     };
   };
@@ -814,6 +836,16 @@ function taskExecutionSessionControlsField(entry: unknown, field: string): TaskE
     });
   }
   if (value.stop !== undefined) result.stop = parseControl(value.stop, `${field}.sessionControls.stop`);
+  if (value.stops !== undefined) {
+    if (!Array.isArray(value.stops)) throw invalidPlanningField(`${field}.sessionControls.stops`, 'expected a stop action receipt list');
+    const seenHashes = new Set<string>();
+    result.stops = value.stops.map((item, index) => {
+      const parsed = parseControl(item, `${field}.sessionControls.stops[${index}]`);
+      if (seenHashes.has(parsed.requestHash)) throw invalidPlanningField(`${field}.sessionControls.stops`, 'duplicate stop request hash');
+      seenHashes.add(parsed.requestHash);
+      return parsed;
+    });
+  }
   return result;
 }
 
@@ -829,9 +861,10 @@ function isTaskExecutionProjectBinding(value: unknown, receiptHostId: unknown): 
       || Object.keys(paths).some(key => !pathKeys.includes(key))
       || Object.keys(binding).length !== bindingKeys.length || Object.keys(paths).length !== pathKeys.length) return false;
   const strings = ['projectId', 'projectRoot', 'rootIdentity', 'policyRevision', 'runtimeInstanceId',
-    'hostId', 'harnessVersion', 'model', 'cwd'] as const;
+    'hostId', 'model', 'cwd'] as const;
   if (binding.contract !== 'integrator-host-readiness-v1' || strings.some(key => typeof binding[key] !== 'string' || !(binding[key] as string).trim())
       || binding.hostId !== receiptHostId || !['codex', 'zcode', 'opencode'].includes(String(binding.harness))
+      || typeof binding.harnessVersion !== 'string' || binding.harness === 'codex' && !binding.harnessVersion.trim()
       || binding.resourceReady !== true || !Number.isSafeInteger(binding.observedAtMs) || (binding.observedAtMs as number) <= 0
       || !Array.isArray(binding.requiredTools) || binding.requiredTools.some(item => typeof item !== 'string' || !item.trim())
       || !Array.isArray(binding.availableTools) || binding.availableTools.some(item => typeof item !== 'string' || !item.trim())
@@ -876,7 +909,7 @@ function normalizeTaskExecutionProjectBinding(value: unknown): NonNullable<TaskE
   };
 }
 
-function taskExecutionContinuationsField(entry: unknown, field: string): TaskExecutionContinuation[] | undefined {
+function taskExecutionContinuationsField(entry: unknown, field: string, allowOpenCodeNoTurn = false): TaskExecutionContinuation[] | undefined {
   if (!isRecord(entry) || entry.continuations === undefined) return undefined;
   const value = entry.continuations;
   if (!Array.isArray(value) || value.length > 1) throw invalidPlanningField(`${field}.continuations`, 'expected at most one child turn');
@@ -885,7 +918,7 @@ function taskExecutionContinuationsField(entry: unknown, field: string): TaskExe
   return value.map((item, index) => {
     const childField = `${field}.continuations[${index}]`;
     if (!isRecord(item)
-      || Object.keys(item).some(key => !['id', 'kind', 'instruction', 'inputId', 'requestHash', 'requestedBy', 'phase', 'nativeTurnId', 'summary', 'evidenceRefs', 'createdAt', 'updatedAt'].includes(key))
+      || Object.keys(item).some(key => !['id', 'kind', 'instruction', 'inputId', 'requestHash', 'requestedBy', 'phase', 'nativeTurnId', 'nativeDispatchJobId', 'nativeInputMessageId', 'summary', 'evidenceRefs', 'createdAt', 'updatedAt'].includes(key))
       || typeof item.id !== 'string' || !/^[a-f0-9]{64}$/.test(item.id) || ids.has(item.id)
       || typeof item.inputId !== 'string' || !/^[a-f0-9]{64}$/.test(item.inputId) || inputs.has(item.inputId)
       || typeof item.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(item.requestHash)
@@ -894,12 +927,15 @@ function taskExecutionContinuationsField(entry: unknown, field: string): TaskExe
       || typeof item.instruction !== 'string' || !item.instruction.trim() || item.instruction.length > 4000
       || !['intent', 'unknown', 'running', 'result'].includes(String(item.phase))
       || item.nativeTurnId !== undefined && (typeof item.nativeTurnId !== 'string' || !item.nativeTurnId.trim() || item.nativeTurnId.length > 512)
+      || item.nativeDispatchJobId !== undefined && (typeof item.nativeDispatchJobId !== 'string' || !/^job_[a-f0-9]{64}$/.test(item.nativeDispatchJobId))
+      || item.nativeInputMessageId !== undefined && (typeof item.nativeInputMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(item.nativeInputMessageId))
       || item.summary !== undefined && (typeof item.summary !== 'string' || !item.summary.trim() || item.summary.length > 40_000)
       || item.evidenceRefs !== undefined && (!Array.isArray(item.evidenceRefs) || item.evidenceRefs.length > 50
         || item.evidenceRefs.some(ref => typeof ref !== 'string' || ref.length > 2048))
       || typeof item.createdAt !== 'string' || Number.isNaN(Date.parse(item.createdAt))
       || typeof item.updatedAt !== 'string' || Number.isNaN(Date.parse(item.updatedAt))
       || ['running', 'result'].includes(String(item.phase)) && !item.nativeTurnId
+        && !(allowOpenCodeNoTurn && typeof item.nativeDispatchJobId === 'string' && typeof item.nativeInputMessageId === 'string')
       || item.phase === 'result' && !item.summary) {
       throw invalidPlanningField(childField, 'invalid task continuation receipt');
     }
@@ -914,6 +950,8 @@ function taskExecutionContinuationsField(entry: unknown, field: string): TaskExe
       ...(typeof item.requestedBy === 'string' ? { requestedBy: item.requestedBy } : {}),
       phase: item.phase as TaskExecutionContinuation['phase'],
       ...(typeof item.nativeTurnId === 'string' ? { nativeTurnId: item.nativeTurnId } : {}),
+      ...(typeof item.nativeDispatchJobId === 'string' ? { nativeDispatchJobId: item.nativeDispatchJobId } : {}),
+      ...(typeof item.nativeInputMessageId === 'string' ? { nativeInputMessageId: item.nativeInputMessageId } : {}),
       ...(typeof item.summary === 'string' ? { summary: item.summary } : {}),
       ...(Array.isArray(item.evidenceRefs) ? { evidenceRefs: item.evidenceRefs as string[] } : {}),
       createdAt: item.createdAt,
@@ -1020,7 +1058,7 @@ function parsePlanningMetadata(data: Record<string, unknown>): PlanningMetadata 
     approvalEvidence: evidenceArrayField(data, 'approval_evidence'),
     resultHistory: resultHistoryField(data),
     reviewHistory: reviewHistoryField(data),
-    nextAction: optionalString(data, 'next_action'),
+    nextAction: optionalNullableString(data, 'next_action'),
   };
 }
 

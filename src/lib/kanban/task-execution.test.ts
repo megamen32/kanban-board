@@ -27,6 +27,19 @@ describe('taskExecutionSnapshot', () => {
     });
   });
 
+  it('does not resurrect an executor next action after a human explicitly clears it', () => {
+    const snapshot = taskExecutionSnapshot(card({
+      column: 'done',
+      nextAction: null,
+      resultHistory: [{
+        summary: 'v2 accepted in QA', evidenceRefs: [], nextAction: 'Old rework prompt',
+        submittedBy: 'executor', submittedAt: '2026-10-28T00:00:00.000Z',
+      }],
+    }));
+
+    expect(snapshot).not.toHaveProperty('nextAction');
+  });
+
   it('reports active, blocked and terminal Board states without inventing a session URL', () => {
     expect(taskExecutionSnapshot(card({ column: 'in-progress' })).state).toBe('running');
     expect(taskExecutionSnapshot(card({ column: 'blocked', waitingFor: ['Owner input'] }))).toMatchObject({ state: 'waiting', waitReason: 'Owner input' });

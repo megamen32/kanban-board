@@ -1,4 +1,4 @@
-import type { KanbanCard } from '@/lib/kanban/types';
+import type { KanbanCard, TaskExecutionReceipt } from '@/lib/kanban/types';
 import { SESSION_UI_BY_HOST, taskSessionUrl } from '../../lib/kanban/task-execution';
 
 export type ExecutionSnapshot = {
@@ -79,6 +79,58 @@ export function executionOperationStorageKey(cardId: string): string {
   return `kanban:task-execution:${encodeURIComponent(cardId)}`;
 }
 
+/** Recover a read-only status check from the durable Board receipt after browser storage is lost. */
+export function durableExecutionReceiptId(receipt: TaskExecutionReceipt | undefined): string | null {
+  if (!receipt || !/^[a-f0-9]{64}$/.test(receipt.operationId)
+      || !['dispatch-unknown', 'running', 'waiting'].includes(receipt.phase)
+      || !receipt.nativeSessionId || !receipt.hostId || !receipt.requestHash) return null;
+  return receipt.operationId;
+}
+
+export function latestSessionStopControl(receipt: TaskExecutionReceipt | undefined) {
+  return receipt?.sessionControls?.stops?.at(-1) ?? receipt?.sessionControls?.stop;
+}
+
+/** A distinct accepted direct input opens exactly one new stop epoch. */
+export function sessionControlStopEpoch(receipt: TaskExecutionReceipt | undefined): string | null {
+  if (!receipt || !/^[a-f0-9]{64}$/.test(receipt.messageInputId)) return null;
+  const latestDirect = receipt.sessionControls?.direct?.at(-1);
+  return latestDirect?.requestHash ?? receipt.messageInputId;
+}
+
+export function hasStopReceiptForCurrentEpoch(receipt: TaskExecutionReceipt | undefined): boolean {
+  const epoch = sessionControlStopEpoch(receipt);
+  const latestStop = latestSessionStopControl(receipt);
+  if (!epoch || !latestStop) return false;
+  // Legacy stop receipts always belong to the initial input epoch.
+  return (latestStop.controlEpoch ?? receipt?.messageInputId) === epoch;
+}
+
+/** Existing unresolved native work must never be exposed as a fresh start. */
+export function hasUnresolvedDurableExecution(receipt: TaskExecutionReceipt | undefined): boolean {
+  return Boolean(receipt && /^[a-f0-9]{64}$/.test(receipt.operationId)
+    && ['created', 'dispatch-unknown', 'running', 'waiting', 'stopped'].includes(receipt.phase)
+    && receipt.nativeSessionId && receipt.hostId && receipt.requestHash);
+}
+
+export function openCodeControlReceipt(
+  receipts: TaskExecutionReceipt[], action: 'direct' | 'stop',
+): TaskExecutionReceipt | undefined {
+  const candidates = receipts.filter(receipt => {
+    const active = ['running', 'waiting'].includes(receipt.phase);
+    const stoppedForResume = action === 'direct' && receipt.phase === 'stopped'
+      && latestSessionStopControl(receipt)?.phase === 'accepted';
+    if ((!active && !stoppedForResume) || receipt.harness !== 'opencode'
+        || !receipt.hostId || !receipt.nativeSessionId) return false;
+    const typedInput = !!receipt.nativeInputMessageId && /^msg_[A-Za-z0-9_-]{8,256}$/.test(receipt.nativeInputMessageId)
+      && !!receipt.nativeDispatchJobId && /^job_[a-f0-9]{64}$/.test(receipt.nativeDispatchJobId)
+      && !!receipt.projectBinding && receipt.projectBinding.harness === 'opencode'
+      && receipt.projectBinding.hostId === receipt.hostId;
+    return !!receipt.nativeTurnId || typedInput;
+  });
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
 /** A present but malformed record fails closed so a lost start is never replaced with a new ID. */
 export function parseStoredStartOperation(value: string | null): StoredStartOperation | null | 'invalid' {
   if (value === null) return null;
@@ -124,9 +176,17 @@ export function taskFollowUpSyncRequest(operationId: string, continuationId: str
 
 export function canContinueTask(card: KanbanCard): boolean {
   const parent = card.taskExecutionHistory?.at(-1);
-  return card.column === 'review' && card.needsReview === true
-    && parent?.phase === 'result' && !!parent.nativeSessionId && !!parent.nativeTurnId
-    && parent.lastBoardVersion === card.version
+  if (!parent || parent.phase !== 'result' || !parent.nativeSessionId || parent.continuations?.length) return false;
+  const openCodeReceipt = parent.harness === 'opencode' && !!parent.projectBinding
+    && parent.projectBinding.harness === 'opencode' && parent.projectBinding.hostId === parent.hostId
+    && !!parent.nativeDispatchJobId && /^job_[a-f0-9]{64}$/.test(parent.nativeDispatchJobId)
+    && !!parent.nativeInputMessageId && /^msg_[A-Za-z0-9_-]{8,256}$/.test(parent.nativeInputMessageId);
+  if (!parent.nativeTurnId && !openCodeReceipt) return false;
+  const review = card.reviewHistory?.at(-1);
+  const assignedRework = card.column === 'in-progress' && card.needsReview !== true
+    && review?.decision === 'rework' && !!review.actor && (card.requiresApprovalFrom ?? []).includes(review.actor);
+  const waitingForReview = card.column === 'review' && card.needsReview === true && parent.lastBoardVersion === card.version;
+  return (waitingForReview || assignedRework)
     && !parent.continuations?.length;
 }
 

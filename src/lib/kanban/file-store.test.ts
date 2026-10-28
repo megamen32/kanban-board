@@ -12,6 +12,21 @@ afterAll(() => {
 });
 
 describe('filesystem kanban contract', () => {
+  test('persists an explicit clear for an optional next action through the Markdown round trip', () => {
+    const created = store.createCard('Clear next action', 'Task body', 'done', 'medium', [], 'UX QA');
+    const set = store.updateCard(created.id, { nextAction: 'Old rework prompt' }, created.version);
+    if (!set || 'conflict' in set) throw new Error('initial next action update failed');
+
+    const cleared = store.updateCard(created.id, { nextAction: null }, set.version);
+    if (!cleared || 'conflict' in cleared) throw new Error('clear next action update failed');
+    const reopened = store.readCardFile(path.join(root, cleared.fileName));
+
+    expect(cleared.nextAction).toBeNull();
+    expect(reopened?.nextAction).toBeNull();
+    expect(fs.readFileSync(path.join(root, cleared.fileName), 'utf8')).toContain('next_action: null');
+    expect(store.deleteCard(created.id)).toBe(true);
+  });
+
   test('persists blocker reason separately from the task description', () => {
     const created = store.createCard('Blocked task', 'Task description', 'todo', 'medium', [], 'alpha');
     const saved = store.updateCard(created.id, { column: 'blocked', blockerReason: 'Ждём Excel от партнёра' }, created.version);
@@ -97,6 +112,40 @@ describe('filesystem kanban contract', () => {
     const reopened = store.readCardFile(path.join(root, created.fileName));
     expect(reopened?.taskExecutionHistory).toEqual([running]);
     expect(fs.readFileSync(path.join(root, created.fileName), 'utf8')).toContain('task_execution_history:');
+  });
+
+  test('round-trips a project-bound OpenCode intent without inventing a harness version', () => {
+    const created = store.createCard('Scoped OpenCode execution', 'QA-only task', 'todo', 'medium', [], 'alpha');
+    const projectRoot = '/tmp/kanban-qa-project';
+    const projectBinding = {
+      contract: 'integrator-host-readiness-v1' as const,
+      projectId: 'alpha', projectRoot, rootIdentity: '["/tmp/kanban-qa-project",1,2]',
+      policyRevision: '"qa-revision"', observedAtMs: 1_797_000_000_000,
+      runtimeInstanceId: 'qa-runtime', hostId: 'roomhacker-server-100', harness: 'opencode' as const,
+      harnessVersion: '', model: 'omniroute/minimax-combo-m3.1', requiredTools: [], availableTools: [],
+      availableModels: ['omniroute/minimax-combo-m3.1'], resourceReady: true as const, cwd: projectRoot,
+      pathResolution: { requestedCwd: projectRoot, canonicalCwd: projectRoot, rootPath: projectRoot, contained: true as const, identityMatches: true as const },
+    };
+    const intent = {
+      operationId: '1'.repeat(64), requestHash: '2'.repeat(64), lastBoardVersion: created.version + 1,
+      createInputId: '3'.repeat(64), messageInputId: '4'.repeat(64), phase: 'intent' as const,
+      hostId: 'roomhacker-server-100', harness: 'opencode' as const, projectBinding,
+      startedBy: 'testlogin', createdAt: '2026-10-27T20:00:00.000Z', updatedAt: '2026-10-27T20:00:00.000Z',
+    };
+
+    const saved = store.updateCard(created.id, { taskExecutionHistory: [intent] }, created.version);
+    if (!saved || 'conflict' in saved) throw new Error('OpenCode execution intent update failed');
+    const reopened = store.readCardFile(path.join(root, created.fileName));
+    expect(reopened?.taskExecutionHistory?.[0]?.projectBinding).toEqual(projectBinding);
+
+    const invalidCodexIntent = {
+      ...intent,
+      operationId: '5'.repeat(64), harness: 'codex' as const,
+      projectBinding: { ...projectBinding, harness: 'codex' as const, harnessVersion: '', model: 'gpt-6-luna',
+        requiredTools: ['web_search'], availableTools: ['web_search'], availableModels: ['gpt-6-luna'] },
+    };
+    expect(() => store.updateCard(created.id, { taskExecutionHistory: [invalidCodexIntent] }, saved.version))
+      .toThrow('task_execution_history');
   });
 
   test('persists the direct/stop no-replay states on the exact execution receipt', () => {
@@ -235,6 +284,48 @@ describe('filesystem kanban contract', () => {
       continuations: [{ id: child.id, phase: 'result', requestedBy: 'native-manager-b', nativeTurnId: 'child-turn', summary: 'Two researched candidates with source links' }],
     });
     expect(fs.readFileSync(path.join(root, created.fileName), 'utf8')).toContain('continuations:');
+  });
+
+  test('round-trips turnless OpenCode child delivery proof after an assigned rework', () => {
+    const created = store.createCard('OpenCode rework', 'Add a total row', 'todo', 'medium', [], 'alpha');
+    const projectBinding = {
+      contract: 'integrator-host-readiness-v1' as const, projectId: 'alpha', projectRoot: '/workspace/alpha',
+      rootIdentity: 'alpha-root', policyRevision: 'qa-policy-1', observedAtMs: Date.now(), runtimeInstanceId: 'herder-qa',
+      hostId: 'roomhacker-server-100', harness: 'opencode' as const, harnessVersion: '', model: 'omniroute/minimax-combo-m3.1',
+      requiredTools: [], availableTools: [], availableModels: ['omniroute/minimax-combo-m3.1'], resourceReady: true as const,
+      cwd: '/workspace/alpha', pathResolution: { requestedCwd: '/workspace/alpha', canonicalCwd: '/workspace/alpha',
+        rootPath: '/workspace/alpha', contained: true as const, identityMatches: true as const },
+    };
+    const inputId = 'd'.repeat(64);
+    const parent = {
+      operationId: 'a'.repeat(64), requestHash: 'b'.repeat(64), lastBoardVersion: created.version + 1,
+      createInputId: 'c'.repeat(64), messageInputId: inputId, phase: 'result' as const,
+      hostId: 'roomhacker-server-100', harness: 'opencode' as const, projectBinding,
+      nativeSessionId: 'opencode-qa-session', nativeDispatchJobId: `job_${'1'.repeat(64)}`,
+      nativeInputMessageId: 'msg_17f4466d6001AtmOc1CmXoVyJf', startedBy: 'nikita',
+      createdAt: '2026-10-28T00:00:00.000Z', updatedAt: '2026-10-28T00:00:00.000Z',
+    };
+    const rework = store.updateCard(created.id, {
+      column: 'in-progress', needsReview: false, requiresApprovalFrom: ['testlogin'],
+      resultHistory: [{ summary: 'v1', evidenceRefs: [], submittedBy: 'nikita', submittedAt: parent.updatedAt }],
+      reviewHistory: [{ decision: 'rework', actor: 'testlogin', decidedAt: parent.updatedAt, note: 'Add total.' }],
+      taskExecutionHistory: [parent],
+    }, created.version);
+    if (!rework || 'conflict' in rework) throw new Error('OpenCode rework receipt save failed');
+    const child = {
+      id: 'e'.repeat(64), kind: 'task-follow-up-v1' as const, instruction: 'Add total 2500.', inputId: 'f'.repeat(64),
+      requestHash: '2'.repeat(64), requestedBy: 'testlogin', phase: 'running' as const,
+      nativeDispatchJobId: `job_${'3'.repeat(64)}`, nativeInputMessageId: 'msg_17f4466d6001ChildQa',
+      createdAt: parent.updatedAt, updatedAt: parent.updatedAt,
+    };
+    const running = { ...parent, lastBoardVersion: rework.version + 1, continuations: [child] };
+    const saved = store.updateCard(created.id, { taskExecutionHistory: [running] }, rework.version);
+    if (!saved || 'conflict' in saved) throw new Error('turnless OpenCode continuation CAS failed');
+    const reopened = store.readCardFile(path.join(root, created.fileName));
+    expect(reopened?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'result', harness: 'opencode', nativeSessionId: 'opencode-qa-session', nativeInputMessageId: parent.nativeInputMessageId,
+      continuations: [{ phase: 'running', nativeDispatchJobId: child.nativeDispatchJobId, nativeInputMessageId: child.nativeInputMessageId }],
+    });
   });
 
   test('rejects malformed or duplicate execution operation receipts', () => {

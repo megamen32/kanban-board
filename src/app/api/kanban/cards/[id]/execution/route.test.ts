@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import type { KanbanCard } from '@/lib/kanban/types';
+import type { KanbanCard, TaskExecutionProjectBinding } from '@/lib/kanban/types';
 
 const mocks = vi.hoisted(() => ({
   currentCard: { value: undefined as KanbanCard | undefined },
@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   boardHumanIdentityFromRequest: vi.fn(),
   nativeProjectAccess: { value: null as null | { userId: string; forProject: ReturnType<typeof vi.fn> } },
   callOwnerHerderTool: vi.fn(),
+  readOwnerHerderResource: vi.fn(),
   validateTransition: vi.fn(),
   taskExecutionSnapshot: vi.fn(),
   sessionInfo: { value: undefined as Record<string, unknown> | undefined },
@@ -33,7 +34,10 @@ vi.mock('../../../../../../lib/auth/board-human', () => ({
 }));
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope: mocks.tasksDirForScope }));
 vi.mock('@/lib/kanban/task-execution', () => ({ taskExecutionSnapshot: mocks.taskExecutionSnapshot }));
-vi.mock('@/lib/kanban/task-execution-client', () => ({ callOwnerHerderTool: mocks.callOwnerHerderTool }));
+vi.mock('@/lib/kanban/task-execution-client', () => ({
+  callOwnerHerderTool: mocks.callOwnerHerderTool,
+  readOwnerHerderResource: mocks.readOwnerHerderResource,
+}));
 vi.mock('@/lib/kanban/transition-policy', () => ({ validateTransition: mocks.validateTransition }));
 
 import { GET, PATCH, POST } from './route';
@@ -103,6 +107,40 @@ function researchCard(description = baseCard.description): KanbanCard {
   return card;
 }
 
+function openCodeReworkCard(): KanbanCard {
+  const model = 'omniroute/minimax-combo-m3.1';
+  mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model };
+  const readiness = scopedReadiness('Demo').projectReadiness;
+  const projectBinding = {
+    contract: 'integrator-host-readiness-v1' as const,
+    projectId: readiness.projectId, projectRoot: readiness.projectRoot, rootIdentity: readiness.rootIdentity,
+    policyRevision: readiness.policyRevision, observedAtMs: readiness.observedAtMs,
+    runtimeInstanceId: readiness.runtimeInstanceId, hostId: readiness.hostId, harness: 'opencode' as const,
+    harnessVersion: readiness.harnessVersion, model: readiness.model,
+    requiredTools: readiness.requiredTools as string[], availableTools: readiness.availableTools as string[],
+    availableModels: readiness.availableModels as string[], resourceReady: true as const, cwd: readiness.cwd,
+    pathResolution: { ...readiness.pathResolution, contained: true as const, identityMatches: true as const },
+  };
+  const card: KanbanCard = {
+    ...researchCard(), column: 'in-progress', needsReview: false, version: 29, requiresApprovalFrom: ['testlogin'],
+    reviewHistory: [{ decision: 'rework', actor: 'testlogin', decidedAt: '2026-10-28T00:00:00.000Z', note: 'Добавить итоговую строку.' }],
+  };
+  const parentInputId = '2'.repeat(64);
+  const parent = {
+    ...card.taskExecutionHistory![0]!, phase: 'result' as const, lastBoardVersion: 8,
+    harness: 'opencode' as const, projectBinding, nativeSessionId: sessionId, nativeTurnId: undefined,
+    messageInputId: parentInputId,
+    nativeDispatchJobId: `job_${createHash('sha256').update(['user-message', 'opencode', sessionId, parentInputId].join('\0')).digest('hex')}`,
+    nativeInputMessageId: 'msg_17f4466d6001AtmOc1CmXoVyJf',
+  };
+  const identity = {
+    id: card.id, title: card.title, description: card.description, project: card.project,
+    owner: card.owner ?? 'nikita', assignee: card.assignee ?? null, assignees: card.assignees,
+    actor: 'nikita', hostId: 'roomhacker-server-100', harness: 'opencode', cwd: projectBinding.cwd, model, projectBinding,
+  };
+  return { ...card, taskExecutionHistory: [{ ...parent, requestHash: createHash('sha256').update(JSON.stringify(identity)).digest('hex') }] };
+}
+
 const continuationText = 'Research two relevant SMB integrators using official public sources; state hypotheses separately and do not contact them.';
 function followUpRequest(action: 'continue-task' | 'sync-task-continuation', expectedVersion: number,
   continuationId?: string, text = continuationText, native = false) {
@@ -117,16 +155,71 @@ function followUpRequest(action: 'continue-task' | 'sync-task-continuation', exp
 
 const controlCardId = '11111111-2222-4333-8444-555555555555';
 const controlOperationId = 'b'.repeat(64);
+const controlSessionId = 'opencode-session-1';
+const controlInputId = '2'.repeat(64);
+const controlNativeInputMessageId = 'msg_17f4466d6001AtmOc1CmXoVyJf';
+function opencodeInputMessageId(inputId: string): string { return `msg_${inputId.slice(0, 32)}`; }
+
+function userMessageJobId(sessionId: string, inputId: string): string {
+  return 'job_' + createHash('sha256').update(['user-message', 'opencode', sessionId, inputId].join('\0')).digest('hex');
+}
+
+function openCodeProjectBinding(): TaskExecutionProjectBinding {
+  const model = 'omniroute/minimax-combo-m3.1';
+  mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model };
+  const readiness = scopedReadiness('Demo').projectReadiness;
+  return {
+    contract: 'integrator-host-readiness-v1',
+    projectId: readiness.projectId as string,
+    projectRoot: readiness.projectRoot as string,
+    rootIdentity: readiness.rootIdentity as string,
+    policyRevision: readiness.policyRevision as string,
+    observedAtMs: readiness.observedAtMs as number,
+    runtimeInstanceId: readiness.runtimeInstanceId as string,
+    hostId: readiness.hostId as string,
+    harness: 'opencode', harnessVersion: '', model,
+    requiredTools: [], availableTools: [], availableModels: [model], resourceReady: true,
+    cwd: scopedProjectRoot,
+    pathResolution: { requestedCwd: scopedProjectRoot, canonicalCwd: scopedProjectRoot, rootPath: scopedProjectRoot,
+      contained: true, identityMatches: true },
+  };
+}
+
+function opencodeJobGetResult(jobId: string) {
+  const candidates = (mocks.currentCard.value?.taskExecutionHistory ?? []).flatMap(receipt => [
+    ...(receipt.nativeSessionId
+      ? [{ sessionId: receipt.nativeSessionId, inputId: receipt.messageInputId,
+          messageId: receipt.nativeInputMessageId ?? opencodeInputMessageId(receipt.messageInputId) }] : []),
+    ...(receipt.sessionControls?.direct ?? []).flatMap(control => control.nativeDispatchJobId
+      ? [{ sessionId: receipt.nativeSessionId ?? controlSessionId, inputId: control.requestHash,
+          messageId: control.nativeInputMessageId ?? opencodeInputMessageId(control.requestHash) }]
+      : []),
+    ...(receipt.continuations ?? []).flatMap(child => child.nativeDispatchJobId && child.nativeInputMessageId
+      ? [{ sessionId: receipt.nativeSessionId ?? controlSessionId, inputId: child.inputId, messageId: child.nativeInputMessageId }]
+      : []),
+  ]);
+  const match = candidates.find(candidate => userMessageJobId(candidate.sessionId, candidate.inputId) === jobId);
+  if (!match) return { structuredContent: { job: { id: jobId, state: 'not_found' } }, content: [] };
+  return { structuredContent: { job: {
+    id: jobId, state: 'completed', ownerSessionId: match.sessionId,
+    onceKey: ['user-message', 'opencode', match.sessionId, match.inputId].join('\0'),
+    result: { ok: true, admitted: true, inputId: match.inputId, nativeInputMessageId: match.messageId },
+  } }, content: [] };
+}
 
 function controllableOpenCodeCard(): KanbanCard {
+  const projectBinding = openCodeProjectBinding();
+  mocks.sessionInfo.value = { id: controlSessionId, harness: 'opencode', hostId: 'roomhacker-server-100',
+    cwd: projectBinding.cwd, model: projectBinding.model, status: 'running', needsPermission: false };
   return {
     ...baseCard,
     id: controlCardId,
     taskExecutionHistory: [{
       operationId: controlOperationId, requestHash: 'c'.repeat(64), lastBoardVersion: baseCard.version,
-      createInputId: '1'.repeat(64), messageInputId: '2'.repeat(64), phase: 'running',
-      hostId: 'roomhacker-server-100', harness: 'opencode', nativeSessionId: 'opencode-session-1',
-      nativeTurnId: 'opencode-turn-1', startedBy: 'nikita', createdAt: baseCard.created, updatedAt: baseCard.updated,
+      createInputId: '1'.repeat(64), messageInputId: controlInputId, phase: 'running',
+      hostId: 'roomhacker-server-100', harness: 'opencode', nativeSessionId: controlSessionId,
+      nativeDispatchJobId: userMessageJobId(controlSessionId, controlInputId), nativeInputMessageId: controlNativeInputMessageId,
+      projectBinding, startedBy: 'nikita', createdAt: baseCard.created, updatedAt: baseCard.updated,
     }],
   };
 }
@@ -191,13 +284,16 @@ function noticeResponse(body: unknown, status = 201): Response {
 }
 
 function toolResult(tool: string, args: Record<string, unknown>) {
+  if (tool === 'job_get') return opencodeJobGetResult(String(args.jobId));
   if (tool === 'fleet_node_info') {
     const info = typeof args.project === 'string' ? (mocks.projectReadinessOverride.value ?? scopedReadiness(args.project)) : { hostId: 'roomhacker-server-100', nativeUser: 'operator' };
     return { structuredContent: info, content: [{ type: 'text', text: JSON.stringify(info) }] };
   }
   if (tool === 'fleet_create_session') {
-    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, cwd: args.cwd };
     const readiness = args.projectReadiness as Record<string, unknown> | undefined;
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, cwd: args.cwd,
+      harness: readiness?.harness ?? 'codex', model: readiness?.model ?? 'gpt-6-luna',
+      hostId: readiness?.hostId ?? 'roomhacker-server-100', status: 'idle', needsPermission: false };
     const requiredTools = readiness?.requiredTools ?? [];
     const projectExecution = readiness ? {
       projectId: readiness.projectId, projectRoot: readiness.projectRoot,
@@ -267,7 +363,7 @@ describe('task execution API', () => {
     mocks.identity.value = { username: 'nikita', scope: 'work' };
     mocks.nativeProjectAccess.value = null;
     mocks.sessionInfo.value = {
-      id: sessionId, harness: 'codex', cwd, model: 'gpt-6-luna', status: 'idle',
+      id: sessionId, harness: 'codex', hostId: 'roomhacker-server-100', cwd, model: 'gpt-6-luna', status: 'idle', needsPermission: false,
       lastActivity: '2026-10-20T10:05:00.000Z', lastMessage: 'Found two candidates',
       meta: { nativeLastTurn: { turnId: 'turn-1', status: 'completed' } },
     };
@@ -280,7 +376,8 @@ describe('task execution API', () => {
     mocks.taskExecutionSnapshot.mockImplementation((card: KanbanCard) => ({
       cardId: card.id,
       state: card.taskExecutionHistory?.at(-1)?.phase === 'running' ? 'running'
-        : card.taskExecutionHistory?.at(-1)?.phase === 'created' ? 'waiting' : 'not-started',
+        : card.taskExecutionHistory?.at(-1)?.phase === 'created' ? 'waiting'
+          : card.taskExecutionHistory?.at(-1)?.phase === 'stopped' ? 'stopped' : 'not-started',
     }));
     process.env.EXMANAGER_TASK_EXECUTION_CWD = cwd;
     process.env.AGENT_HERDER_HTTP_TOKEN = 'test-only-protected-ref';
@@ -490,7 +587,7 @@ describe('task execution API', () => {
     expect(response.status).toBe(201);
     expect(await response.json()).toMatchObject({ state: 'running', operationId: expect.any(String), retryable: false });
     expect(mocks.callOwnerHerderTool.mock.calls.map(([tool]) => tool)).toEqual([
-      'fleet_node_info', 'fleet_create_session', 'fleet_session_view', 'send_message',
+      'fleet_node_info', 'fleet_create_session', 'agent_info', 'send_message',
     ]);
     expect(mocks.callOwnerHerderTool.mock.calls[1]?.[1]).toMatchObject({
       harness: 'codex', cwd: scopedProjectRoot, model: 'gpt-6-luna', project: 'canonical-project-from-card',
@@ -646,32 +743,30 @@ describe('task execution API', () => {
     expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(0);
   });
 
-  it('keeps a created receipt recoverable after transient view failure and resumes the same operation explicitly', async () => {
-    let failFirstView = true;
+  it('recovers the same idle native session after a pre-dispatch metadata mismatch without creating another session', async () => {
+    let mismatchFirstInfo = true;
     mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
-      if (tool === 'fleet_session_view' && failFirstView) {
-        failFirstView = false;
-        throw new Error('transient owner readback failure');
+      if (tool === 'agent_info' && mismatchFirstInfo) {
+        mismatchFirstInfo = false;
+        return { structuredContent: { session: { ...mocks.sessionInfo.value, cwd: '/wrong/qa/path' } }, content: [] };
       }
       return toolResult(tool, args);
     });
 
     const first = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
     if (!first) throw new Error('first task execution response missing');
-    expect(first.status).toBe(202);
-    expect((await first.json()).state).toBe('waiting');
+    expect(first.status).toBe(409);
+    expect(await first.json()).toMatchObject({ state: 'stopped', retryable: false });
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
-      phase: 'created', nativeSessionId: sessionId,
+      phase: 'stopped', nativeSessionId: sessionId,
+      lastProgress: 'Сессия создана, но её точный проект/model/session readback не совпал; задание не отправлено.',
     });
 
     const current = mocks.currentCard.value!;
-    const recovery = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
-      method: 'PATCH', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: current.version }),
-    }), { params: Promise.resolve({ id: baseCard.id }) });
+    const recovery = await POST(postRequest({ operationId, expectedVersion: current.version }), { params: Promise.resolve({ id: baseCard.id }) });
 
-    if (!recovery) throw new Error('created-session recovery response missing');
-    expect(recovery.status).toBe(202);
+    if (!recovery) throw new Error('same-session dispatch response missing');
+    expect(recovery.status).toBe(200);
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
       phase: 'running', nativeSessionId: sessionId, nativeTurnId: 'turn-1',
     });
@@ -681,6 +776,371 @@ describe('task execution API', () => {
       inputId: mocks.currentCard.value?.taskExecutionHistory?.[0]?.messageInputId,
       sessionId,
     });
+  });
+
+  it('continues the same OpenCode session only after the exact typed not-attempted receipt', async () => {
+    mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
+    const sent: Array<Record<string, unknown>> = [];
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool !== 'send_message') return toolResult(tool, args);
+      sent.push(args);
+      if (sent.length === 1) return { content: [{ type: 'text', text: JSON.stringify({
+        ok: false, delivery: 'not_attempted', inputId: args.inputId, nonRetryable: true,
+        error: 'Вставка в текущий ход для этого агента пока не поддерживается. Выберите «После ответа».',
+      }) }] };
+      return { content: [{ type: 'text', text: `Native admission receipt: ${JSON.stringify({
+        admitted: true, inputId: args.inputId, turnId: 'queued-turn-1',
+      })}` }] };
+    });
+
+    const first = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!first) throw new Error('first typed-refusal response missing');
+    expect(first.status).toBe(202);
+    const prior = mocks.currentCard.value!.taskExecutionHistory![0]!;
+    expect(prior).toMatchObject({ phase: 'dispatch-unknown', nativeSessionId: sessionId, messageInputId: createHash('sha256').update(`${prior.operationId}\0dispatch`).digest('hex') });
+    expect(JSON.parse(prior.dispatchReceiptText!)).toMatchObject({ delivery: 'not_attempted', nonRetryable: true, inputId: prior.messageInputId });
+
+    const current = mocks.currentCard.value!;
+    const continued = await POST(postRequest({ operationId, expectedVersion: current.version }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!continued) throw new Error('same-session queued continuation response missing');
+    expect(await continued.clone().json()).toMatchObject({ state: 'running' });
+    expect(continued.status).toBe(200);
+    const receipt = mocks.currentCard.value?.taskExecutionHistory?.[0];
+    const queueInputId = createHash('sha256').update(`${prior.operationId}\0dispatch-after-not-attempted`).digest('hex');
+    expect(receipt).toMatchObject({ phase: 'running', nativeSessionId: sessionId, nativeTurnId: 'queued-turn-1', messageInputId: queueInputId });
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toMatchObject({ sessionId, harness: 'opencode', mode: 'queue', humanRequested: true });
+    expect(sent[1]).toMatchObject({ sessionId, harness: 'opencode', mode: 'queue', humanRequested: true, inputId: queueInputId });
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(1);
+  });
+
+  it('reconciles a queued OpenCode send from the bound native messages without replay', async () => {
+    mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
+    const sent: Array<Record<string, unknown>> = [];
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool !== 'send_message') return toolResult(tool, args);
+      sent.push(args);
+      if (sent.length === 1) return { content: [{ type: 'text', text: JSON.stringify({
+        ok: false, delivery: 'not_attempted', inputId: args.inputId, nonRetryable: true,
+        error: 'Вставка в текущий ход для этого агента пока не поддерживается. Выберите «После ответа».',
+      }) }] };
+      throw new Error('simulated queue transport outcome unknown');
+    });
+
+    const first = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!first) throw new Error('typed-refusal start response missing');
+    const currentAfterRefusal = mocks.currentCard.value!;
+    const continued = await POST(postRequest({ operationId, expectedVersion: currentAfterRefusal.version }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!continued) throw new Error('queue dispatch response missing');
+    expect(continued.status).toBe(202);
+    const receiptAfterUnknown = mocks.currentCard.value?.taskExecutionHistory?.[0];
+    const queueInputId = createHash('sha256').update(`${receiptAfterUnknown?.operationId}\0dispatch-after-not-attempted`).digest('hex');
+    expect(receiptAfterUnknown).toMatchObject({ phase: 'dispatch-unknown', nativeSessionId: sessionId, messageInputId: queueInputId });
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatchObject({ sessionId, harness: 'opencode', mode: 'queue', humanRequested: true, inputId: queueInputId });
+
+    const taskMessage = String(sent[1]!.message);
+    let nativeMessages: Array<Record<string, unknown>> = [
+      { id: opencodeInputMessageId(queueInputId), role: 'user', inputId: queueInputId,
+        text: taskMessage, parts: [{ type: 'text', text: taskMessage }] },
+      { id: 'qa-assistant-progress', role: 'assistant', phase: 'tool-calls', text: 'Читаю только синтетические строки.', parts: [] },
+    ];
+    const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
+    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({ contents: [{
+      uri, mimeType: 'application/json', text: JSON.stringify(nativeMessages),
+    }] }));
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'running', meta: {} };
+    let current = mocks.currentCard.value!;
+    const progress = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: current.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!progress) throw new Error('same-session progress sync response missing');
+    expect(progress.status).toBe(202);
+    expect(await progress.json()).toMatchObject({ state: 'running' });
+    expect(mocks.currentCard.value?.column).toBe('in-progress');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'running', nativeSessionId: sessionId,
+      lastProgress: 'Подтверждённая доставка связана с точным сообщением этой карточки; исполнитель работает.',
+    });
+
+    nativeMessages = [
+      nativeMessages[0]!,
+      { id: 'qa-assistant-result', role: 'assistant', phase: 'stop',
+        text: 'reasoning нельзя показывать\nТаблица A 1200, B 800, C 500. Итог: 2500. Для A ожидается файл; B проверяет участник; C сверяет таблицу.',
+        parts: [{ type: 'thinking', text: 'reasoning нельзя показывать' }, { type: 'text', text: 'Таблица A 1200, B 800, C 500. Итог: 2500. Для A ожидается файл; B проверяет участник; C сверяет таблицу.' }] },
+    ];
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'idle', meta: {} };
+    mocks.validateTransition.mockImplementation((_card: KanbanCard, input: { executorResult?: { summary?: string } }) => ({
+      kind: 'redirected', patch: { column: 'review', needsReview: true, resultHistory: [{
+        summary: input.executorResult?.summary ?? '', evidenceRefs: [], submittedBy: 'nikita', submittedAt: '2026-10-20T10:06:00.000Z',
+      }] },
+    }));
+    current = mocks.currentCard.value!;
+    const result = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: current.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!result) throw new Error('same-session result sync response missing');
+    expect(result.status).toBe(200);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.phase).toBe('result');
+    expect(mocks.currentCard.value?.column).toBe('review');
+    expect(mocks.currentCard.value?.resultHistory?.at(-1)?.summary).toContain('Итог: 2500');
+    expect(mocks.currentCard.value?.resultHistory?.at(-1)?.summary).not.toContain('reasoning нельзя показывать');
+    expect(mocks.readOwnerHerderResource).toHaveBeenCalledWith(messagesUri);
+    expect(sent).toHaveLength(2);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(1);
+  });
+
+  it('promotes an OpenCode admission only from its accepted delivery job and matching native user message', async () => {
+    mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
+    const nativeInputMessageId = 'msg_17f4466d6001AtmOc1CmXoVyJf';
+    let inputId = '';
+    let sendCount = 0;
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'send_message') {
+        sendCount += 1;
+        inputId = String(args.inputId);
+        if (sendCount === 1) return { content: [{ type: 'text', text: JSON.stringify({
+          ok: false, delivery: 'not_attempted', nonRetryable: true, inputId,
+          error: 'Вставка в текущий ход для этого агента пока не поддерживается. Выберите «После ответа».',
+        }) }] };
+        return { content: [{ type: 'text', text: `Message accepted by [opencode] ${sessionId}; native turn start is still being verified.` }] };
+      }
+      if (tool === 'job_get') {
+        const exactJobId = `job_${createHash('sha256').update(['user-message', 'opencode', sessionId, inputId].join('\0')).digest('hex')}`;
+        expect(args).toEqual({ jobId: exactJobId });
+        return { structuredContent: { job: {
+          id: exactJobId, kind: 'Доставка сообщения', state: 'completed', ownerSessionId: sessionId,
+          onceKey: ['user-message', 'opencode', sessionId, inputId].join('\0'),
+          result: { ok: true, admitted: true, admission: 'accepted', inputId, nativeInputMessageId },
+        } }, content: [] };
+      }
+      return toolResult(tool, args);
+    });
+
+    const refused = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!refused) throw new Error('OpenCode execution response missing');
+    expect(refused.status).toBe(202);
+    const beforeQueue = mocks.currentCard.value!;
+    const started = await POST(postRequest({ operationId, expectedVersion: beforeQueue.version }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!started) throw new Error('OpenCode queued execution response missing');
+    expect(started.status).toBe(202);
+    const initial = mocks.currentCard.value!.taskExecutionHistory![0]!;
+    const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
+    const taskMessage = String(mocks.callOwnerHerderTool.mock.calls.find(([tool]) => tool === 'send_message')?.[1]?.message);
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'running', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
+    mocks.readOwnerHerderResource.mockResolvedValue({ contents: [{ uri: messagesUri, mimeType: 'application/json', text: JSON.stringify([
+      { id: nativeInputMessageId, inputId: initial.messageInputId, role: 'user', parts: [{ type: 'text', text: `Поручение пользователя, переданное агентом\n\n${taskMessage}` }] },
+    ]) }] });
+    const response = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: mocks.currentCard.value!.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('OpenCode admission readback response missing');
+
+    expect(response.status).toBe(202);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'running', harness: 'opencode', nativeSessionId: sessionId,
+      nativeDispatchJobId: expect.stringMatching(/^job_[a-f0-9]{64}$/), nativeInputMessageId,
+    });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.nativeTurnId).toBeUndefined();
+
+    const recovered = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId: initial.operationId, expectedVersion: mocks.currentCard.value!.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!recovered) throw new Error('durable receipt sync response missing');
+    expect(recovered.status).toBe(202);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(1);
+    expect(sendCount).toBe(2);
+  });
+
+  it('stops and explicitly continues the same typed OpenCode session through the card control route', async () => {
+    const model = 'omniroute/minimax-combo-m3.1';
+    mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model };
+    const rawProjectReadiness = scopedReadiness(baseCard.project).projectReadiness;
+    const rawPaths = rawProjectReadiness.pathResolution;
+    const projectBinding: NonNullable<NonNullable<KanbanCard['taskExecutionHistory']>[number]['projectBinding']> = {
+      contract: 'integrator-host-readiness-v1', projectId: rawProjectReadiness.projectId,
+      projectRoot: rawProjectReadiness.projectRoot, rootIdentity: rawProjectReadiness.rootIdentity,
+      policyRevision: rawProjectReadiness.policyRevision, observedAtMs: rawProjectReadiness.observedAtMs,
+      runtimeInstanceId: rawProjectReadiness.runtimeInstanceId, hostId: rawProjectReadiness.hostId,
+      harness: 'opencode', harnessVersion: rawProjectReadiness.harnessVersion, model: rawProjectReadiness.model,
+      requiredTools: rawProjectReadiness.requiredTools as string[], availableTools: rawProjectReadiness.availableTools as string[],
+      availableModels: rawProjectReadiness.availableModels as string[], resourceReady: true, cwd: rawProjectReadiness.cwd,
+      pathResolution: { ...rawPaths, contained: true, identityMatches: true },
+    };
+    const boardOperationId = createHash('sha256').update(`${baseCard.id}\0${operationId}`).digest('hex');
+    const initialInputId = 'd'.repeat(64);
+    const initialNativeInputId = 'msg_17f4466d6001AtmOc1CmXoVyJf';
+    const initialJobId = `job_${createHash('sha256').update(['user-message', 'opencode', sessionId, initialInputId].join('\0')).digest('hex')}`;
+    const continuationMessage = 'Продолжи эту же задачу после остановки: верни три синтетические строки, сумму 2500 и отдельно укажи, что именно ожидается.';
+    const directRequestHash = createHash('sha256').update(JSON.stringify({
+      cardId: baseCard.id, operationId: boardOperationId, action: 'direct', message: continuationMessage,
+    })).digest('hex');
+    const directJobId = `job_${createHash('sha256').update(['user-message', 'opencode', sessionId, directRequestHash].join('\0')).digest('hex')}`;
+    const directNativeInputId = 'msg_17f4466d6001AtmOc1CmXoVyK';
+    const finalContinuationMessage = 'Только итоговый Markdown: A 1200 ожидает тестовый файл, B 800 готова к проверке, C 500 в сверке таблицы. Итог 2500. Укажи требуемый файл и проверку участником. Не используй инструменты.';
+    const finalDirectRequestHash = createHash('sha256').update(JSON.stringify({
+      cardId: baseCard.id, operationId: boardOperationId, action: 'direct', message: finalContinuationMessage,
+    })).digest('hex');
+    const finalDirectJobId = `job_${createHash('sha256').update(['user-message', 'opencode', sessionId, finalDirectRequestHash].join('\0')).digest('hex')}`;
+    const finalDirectNativeInputId = 'msg_17f4466d6001FinalQa';
+    // The native messages projection is allowed to omit old user history; controls
+    // reconcile the durable initial job/input IDs instead of requiring transcript replay.
+    let nativeMessages: Array<Record<string, unknown>> = [];
+    const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
+    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({ contents: [{
+      uri, mimeType: 'application/json', text: JSON.stringify(nativeMessages),
+    }] }));
+    mocks.currentCard.value = {
+      ...baseCard, column: 'in-progress', version: 6,
+      taskExecutionHistory: [{
+        operationId: boardOperationId, requestHash: 'b'.repeat(64), lastBoardVersion: 6,
+        createInputId: 'e'.repeat(64), messageInputId: initialInputId, phase: 'running',
+        hostId: 'roomhacker-server-100', harness: 'opencode', projectBinding,
+        nativeSessionId: sessionId, nativeDispatchJobId: initialJobId, nativeInputMessageId: initialNativeInputId,
+        startedBy: 'nikita', createdAt: baseCard.created, updatedAt: baseCard.updated,
+      }],
+    };
+    mocks.sessionInfo.value = {
+      id: sessionId, harness: 'opencode', hostId: 'roomhacker-server-100', cwd: projectBinding.cwd,
+      model, status: 'running', needsPermission: false, lastActivity: baseCard.updated,
+    };
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'job_get') {
+        const initial = args.jobId === initialJobId;
+        const final = args.jobId === finalDirectJobId;
+        const inputId = initial ? initialInputId : final ? finalDirectRequestHash : directRequestHash;
+        const nativeInputMessageId = initial ? initialNativeInputId : final ? finalDirectNativeInputId : directNativeInputId;
+        const exactJobId = initial ? initialJobId : final ? finalDirectJobId : directJobId;
+        return { structuredContent: { job: {
+          id: exactJobId, kind: 'Доставка сообщения', state: 'completed', ownerSessionId: sessionId,
+          onceKey: ['user-message', 'opencode', sessionId, inputId].join('\0'),
+          result: { ok: true, admitted: true, admission: 'accepted', inputId, nativeInputMessageId },
+        } }, content: [] };
+      }
+      if (tool === 'stop_agent') {
+        mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'stopped' };
+        return { content: [{ type: 'text', text: `Stopped agent [opencode] ${sessionId} on host 'roomhacker-server-100'.` }] };
+      }
+      if (tool === 'send_message') {
+        const final = args.message === finalContinuationMessage;
+        expect(args).toMatchObject({ sessionId, harness: 'opencode', inputId: final ? finalDirectRequestHash : directRequestHash, mode: 'queue', humanRequested: true });
+        nativeMessages = [...nativeMessages, {
+          id: final ? finalDirectNativeInputId : directNativeInputId,
+          inputId: final ? finalDirectRequestHash : directRequestHash, role: 'user',
+          parts: [{ type: 'text', text: final ? finalContinuationMessage : continuationMessage }],
+        }];
+        mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'running' };
+        return { content: [{ type: 'text', text: `Message accepted by [opencode] ${sessionId}; native turn start is still being verified.` }] };
+      }
+      return toolResult(tool, args);
+    });
+
+    const stop = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'session-stop', expectedVersion: mocks.currentCard.value!.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!stop) throw new Error('OpenCode stop response missing');
+    if (stop.status !== 200) throw new Error(`OpenCode stop was refused: ${JSON.stringify(await stop.clone().json())}`);
+    expect(stop.status).toBe(200);
+    expect(await stop.json()).toMatchObject({ state: 'accepted', action: 'stop', boardOperationId });
+    expect(mocks.readOwnerHerderResource).not.toHaveBeenCalled();
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'stopped', nativeSessionId: sessionId,
+      sessionControls: { stop: { phase: 'accepted' } },
+    });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.nativeTurnId).toBeUndefined();
+
+    const continuation = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'session-direct', expectedVersion: mocks.currentCard.value!.version, message: continuationMessage }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!continuation) throw new Error('same-session explicit continuation response missing');
+    expect(continuation.status).toBe(200);
+    expect(await continuation.json()).toMatchObject({ state: 'accepted', action: 'direct', boardOperationId });
+    const receipt = mocks.currentCard.value?.taskExecutionHistory?.[0];
+    expect(receipt).toMatchObject({ phase: 'running', nativeSessionId: sessionId });
+    expect(receipt?.nativeTurnId).toBeUndefined();
+    expect(receipt?.sessionControls?.direct?.[0]).toMatchObject({
+      requestHash: directRequestHash, phase: 'accepted', nativeDispatchJobId: directJobId,
+      nativeInputMessageId: directNativeInputId,
+    });
+
+    const repeatedStop = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'session-stop', expectedVersion: mocks.currentCard.value!.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!repeatedStop) throw new Error('second OpenCode stop response missing');
+    expect(repeatedStop.status).toBe(200);
+    expect(await repeatedStop.json()).toMatchObject({ state: 'accepted', action: 'stop', boardOperationId });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.sessionControls?.stops).toHaveLength(2);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.sessionControls?.stops?.[0]?.requestHash)
+      .not.toBe(mocks.currentCard.value?.taskExecutionHistory?.[0]?.sessionControls?.stops?.[1]?.requestHash);
+
+    const finalContinuation = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'session-direct', expectedVersion: mocks.currentCard.value!.version, message: finalContinuationMessage }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!finalContinuation) throw new Error('final same-session table instruction response missing');
+    expect(finalContinuation.status).toBe(200);
+    expect(await finalContinuation.json()).toMatchObject({ state: 'accepted', action: 'direct', boardOperationId });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.sessionControls?.direct).toHaveLength(2);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(0);
+    expect(mocks.readOwnerHerderResource).toHaveBeenCalledWith(messagesUri);
+
+    nativeMessages = [...nativeMessages, {
+      id: 'msg_17f446789001PIjyje1dWmeMyw', role: 'assistant', phase: 'stop',
+      parts: [
+        { type: 'thinking', text: 'Скрытая мысль не должна попасть в карточку.' },
+        { type: 'text', text: '| Заявка | Сумма | Состояние |\n| A | 1200 | ожидается файл |\n| B | 800 | ожидает проверки |\n| C | 500 | сверка таблицы |\n\nИтого: 2500.' },
+      ],
+    }];
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'idle' };
+    mocks.validateTransition.mockImplementation((_card: KanbanCard, input: { executorResult?: { summary?: string } }) => ({
+      kind: 'redirected', patch: { column: 'review', needsReview: true, resultHistory: [{
+        summary: input.executorResult?.summary ?? '', evidenceRefs: [], submittedBy: 'nikita', submittedAt: '2026-10-28T00:00:00.000Z',
+      }] },
+    }));
+    const result = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: mocks.currentCard.value!.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!result) throw new Error('same-card continuation result readback missing');
+    expect(result.status).toBe(200);
+    expect(mocks.currentCard.value).toMatchObject({ column: 'review', needsReview: true });
+    expect(mocks.currentCard.value?.resultHistory?.at(-1)?.summary).toContain('Итого: 2500');
+    expect(mocks.currentCard.value?.resultHistory?.at(-1)?.summary).not.toContain('Скрытая мысль');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({ phase: 'result', nativeSessionId: sessionId });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.nativeTurnId).toBeUndefined();
+  });
+
+  it('does not attach a completed assistant message after another user input to the earlier card task', async () => {
+    mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
+    const first = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!first) throw new Error('first task execution response missing');
+    const current = mocks.currentCard.value!;
+    const taskMessage = String(mocks.callOwnerHerderTool.mock.calls.find(([tool]) => tool === 'send_message')?.[1]?.message);
+    const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'idle', meta: {} };
+    mocks.readOwnerHerderResource.mockResolvedValue({ contents: [{
+      uri: messagesUri, mimeType: 'application/json', text: JSON.stringify([
+        { id: 'qa-user-input', role: 'user', parts: [{ type: 'text', text: `Поручение пользователя, переданное агентом\n\n${taskMessage}` }] },
+        { id: 'later-user-input', role: 'user', parts: [{ type: 'text', text: 'Другой пользовательский запрос' }] },
+        { id: 'later-assistant-result', role: 'assistant', phase: 'stop', parts: [{ type: 'text', text: 'Ответ на другой запрос' }] },
+      ]),
+    }] });
+
+    const response = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: current.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('same-session result sync response missing');
+    expect(response.status).toBe(202);
+    expect(mocks.currentCard.value?.column).not.toBe('review');
+    expect(mocks.currentCard.value?.resultHistory).toBeUndefined();
   });
 
   it('does not promote stale idle commentary while the exact admitted turn is still running', async () => {
@@ -753,6 +1213,56 @@ describe('task execution API', () => {
     expect(mocks.currentCard.value?.resultHistory?.at(-1)?.summary).toBe('Found two candidates');
   });
 
+  it('synchronizes an exact completed OpenCode turn from its bound messages resource', async () => {
+    mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
+    const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('OpenCode task start response missing');
+    expect(response.status).toBe(201);
+    mocks.sessionInfo.value = {
+      ...mocks.sessionInfo.value,
+      lastMessage: undefined,
+      status: 'idle',
+      meta: {},
+    };
+    const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
+    const exactTaskPrompt = [
+      `Выполни задачу канбан карточки ${baseCard.id} из проекта «${baseCard.project}».`,
+      `Название: ${baseCard.title}`,
+      `Описание задачи:\n${baseCard.description}`,
+      'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
+      'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
+    ].join('\n\n');
+    mocks.readOwnerHerderResource.mockResolvedValue({ contents: [{
+      uri: messagesUri, mimeType: 'application/json', text: JSON.stringify([
+        { id: opencodeInputMessageId(mocks.currentCard.value?.taskExecutionHistory?.[0]?.messageInputId ?? ''), role: 'user',
+          turnId: 'turn-1', inputId: mocks.currentCard.value?.taskExecutionHistory?.[0]?.messageInputId,
+          phase: 'completed', text: exactTaskPrompt, parts: [{ type: 'text', text: exactTaskPrompt }] },
+        { id: 'assistant-1', role: 'assistant', turnId: 'turn-1', phase: 'completed',
+          text: 'QA result: three fictional rows; total 2500.',
+          parts: [{ type: 'text', text: 'QA result: three fictional rows; total 2500.' }] },
+      ]),
+    }] });
+    mocks.validateTransition.mockImplementation((_card: KanbanCard, updates: { executorResult?: { summary?: string } }) => ({
+      kind: 'redirected', patch: { column: 'review', needsReview: true, resultHistory: [{
+        summary: updates.executorResult?.summary ?? '', evidenceRefs: [], submittedBy: 'nikita', submittedAt: '2026-10-20T10:06:00.000Z',
+      }] },
+    }));
+    mocks.callOwnerHerderTool.mockClear();
+    const current = mocks.currentCard.value!;
+    const synchronized = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: current.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!synchronized) throw new Error('OpenCode result sync response missing');
+    expect(synchronized.status).toBe(200);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.phase).toBe('result');
+    expect(mocks.currentCard.value?.column).toBe('review');
+    expect(mocks.currentCard.value?.resultHistory?.at(-1)?.summary).toBe('QA result: three fictional rows; total 2500.');
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_session_view')).toHaveLength(0);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'agent_info')).toHaveLength(2);
+    expect(mocks.readOwnerHerderResource).toHaveBeenCalledWith(messagesUri);
+  });
+
   it('refuses transcript promotion if the exact native turn changes during the read', async () => {
     const first = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
     if (!first) throw new Error('first task execution response missing');
@@ -808,7 +1318,7 @@ describe('task execution API', () => {
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({ phase: 'result', nativeTurnId: 'parent-turn' });
     expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(0);
     const send = mocks.callOwnerHerderTool.mock.calls.find(([tool]) => tool === 'send_message');
-    expect(send?.[1]).toMatchObject({ sessionId, harness: 'codex', inputId: child?.inputId, mode: 'steer', humanRequested: true });
+    expect(send?.[1]).toMatchObject({ sessionId, harness: 'codex', inputId: child?.inputId, mode: 'queue', humanRequested: true });
     expect(send?.[1].message).toContain(continuationText);
     expect(send?.[1].message).toContain('Не пиши людям, не звони');
     expect(send?.[1].message).not.toContain('внедрение Airlock для малого и среднего бизнеса');
@@ -818,6 +1328,62 @@ describe('task execution API', () => {
     if (!replay) throw new Error('research continuation replay response missing');
     expect(replay.status).toBe(202);
     expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+  });
+
+  it('continues an assigned rework in the same turnless OpenCode session from exact parent and child delivery jobs', async () => {
+    mocks.identity.value = { username: 'testlogin', scope: 'work' };
+    mocks.currentCard.value = openCodeReworkCard();
+    const model = 'omniroute/minimax-combo-m3.1';
+    mocks.sessionInfo.value = { id: sessionId, harness: 'opencode', hostId: 'roomhacker-server-100',
+      cwd: scopedProjectRoot, model, status: 'idle', needsPermission: false, meta: {} };
+    const nativeMessageId = 'msg_17f4466d6001ChildQA';
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'send_message') return { content: [{ type: 'text', text: `Message accepted by [opencode] ${sessionId}; native turn start is still being verified.` }] };
+      if (tool === 'job_get') {
+        const jobId = String(args.jobId);
+        const parent = mocks.currentCard.value!.taskExecutionHistory![0]!;
+        const child = parent.continuations?.[0];
+        const isParent = jobId === parent.nativeDispatchJobId;
+        const inputId = isParent ? parent.messageInputId : child?.inputId;
+        const id = isParent ? parent.nativeInputMessageId : nativeMessageId;
+        return { structuredContent: { job: { id: jobId, kind: 'Доставка сообщения', state: 'completed', ownerSessionId: sessionId,
+          onceKey: ['user-message', 'opencode', sessionId, inputId].join('\0'),
+          result: { ok: true, admitted: true, admission: 'accepted', inputId, nativeInputMessageId: id },
+        } }, content: [] };
+      }
+      return toolResult(tool, args);
+    });
+
+    const response = await PATCH(followUpRequest('continue-task', 29, undefined,
+      'Добавь строку Итого 2500, сохрани три заявки и их статусы.', false), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('turnless OpenCode rework follow-up response missing');
+    expect(response.status).toBe(202);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]).toMatchObject({
+      phase: 'running', nativeDispatchJobId: expect.stringMatching(/^job_[a-f0-9]{64}$/), nativeInputMessageId: nativeMessageId,
+    });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]?.nativeTurnId).toBeUndefined();
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
+    expect(mocks.callOwnerHerderTool.mock.calls.find(([tool]) => tool === 'send_message')?.[1])
+      .toMatchObject({ sessionId, harness: 'opencode', mode: 'queue', humanRequested: true });
+
+    const child = mocks.currentCard.value!.taskExecutionHistory![0]!.continuations![0]!;
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'idle', meta: {} };
+    const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
+    mocks.readOwnerHerderResource.mockResolvedValue({ contents: [{ uri: messagesUri, mimeType: 'application/json', text: JSON.stringify([
+      { id: nativeMessageId, inputId: child.inputId, role: 'user', parts: [{ type: 'text', text: 'Добавь итоговую строку.' }] },
+      { id: 'msg_17f4466d6001FinalQa', role: 'assistant', phase: 'completed',
+        parts: [{ type: 'thinking', text: 'не сохранять' }, { type: 'text', text: '| A | 1200 | ожидает файл |\n| B | 800 | проверка |\n| C | 500 | сверка |\n| Итого | 2500 | |' }] },
+    ]) }] });
+    const synced = await PATCH(followUpRequest('sync-task-continuation', mocks.currentCard.value!.version, child.id),
+      { params: Promise.resolve({ id: baseCard.id }) });
+    if (!synced) throw new Error('turnless OpenCode rework result sync missing');
+    expect(synced.status).toBe(200);
+    expect(mocks.currentCard.value).toMatchObject({ column: 'review', needsReview: true, requiresApprovalFrom: ['testlogin'] });
+    expect(mocks.currentCard.value?.resultHistory?.map(item => item.summary)).toEqual([
+      'Original result', '| A | 1200 | ожидает файл |\n| B | 800 | проверка |\n| C | 500 | сверка |\n| Итого | 2500 | |',
+    ]);
+    expect(mocks.currentCard.value?.reviewHistory?.at(-1)?.decision).toBe('rework');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.continuations?.[0]).toMatchObject({ phase: 'result' });
   });
 
   it('unwraps an observed Herder envelope before accepting a continuation receipt', async () => {
@@ -1316,11 +1882,25 @@ describe('task execution API', () => {
 
   it('allows distinct direct messages once, stops the exact receipt, and never replays either action', async () => {
     mocks.currentCard.value = controllableOpenCodeCard();
-    mocks.callOwnerHerderTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => ({
-      content: [{ type: 'text', text: tool === 'send_message'
-        ? `Message sent to [${String(args.harness)}] ${String(args.sessionId)} (steering).\nNative admission receipt: ${JSON.stringify({ admitted: true, inputId: args.inputId })}`
-        : `Stopped agent [${String(args.harness)}] ${String(args.sessionId)} on host '${String(args.hostId)}'.` }],
+    const opencodeMessages: Array<Record<string, unknown>> = [];
+    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({
+      contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(opencodeMessages) }],
     }));
+    mocks.callOwnerHerderTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
+      if (tool === 'job_get' || tool === 'fleet_node_info' || tool === 'agent_info') return toolResult(tool, args);
+      if (tool === 'send_message') {
+        opencodeMessages.push({ id: opencodeInputMessageId(String(args.inputId)), role: 'user', inputId: args.inputId, text: args.message });
+        opencodeMessages.at(-1)!.parts = [{ type: 'text', text: args.message }];
+        return { content: [{ type: 'text', text:
+          `Message sent to [${String(args.harness)}] ${String(args.sessionId)} (queue).\nNative admission receipt: ${JSON.stringify({ admitted: true, inputId: args.inputId })}` }] };
+      }
+      if (tool === 'stop_agent') {
+        mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'stopped' };
+        return { content: [{ type: 'text', text:
+          `Stopped agent [${String(args.harness)}] ${String(args.sessionId)} on host '${String(args.hostId)}'.` }] };
+      }
+      throw new Error(`unexpected tool ${tool}`);
+    });
 
     const direct = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: 4, message: 'Проверь текущий шаг' }), {
       params: Promise.resolve({ id: controlCardId }),
@@ -1333,7 +1913,7 @@ describe('task execution API', () => {
       inputId: createHash('sha256').update(JSON.stringify({
         cardId: controlCardId, operationId: controlOperationId, action: 'direct', message: 'Проверь текущий шаг',
       })).digest('hex'),
-      message: 'Проверь текущий шаг', mode: 'steer',
+      message: 'Проверь текущий шаг', mode: 'queue', humanRequested: true,
     });
 
     const secondDirect = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: mocks.currentCard.value!.version, message: 'Сделай следующий шаг' }), {
@@ -1346,22 +1926,22 @@ describe('task execution API', () => {
       inputId: createHash('sha256').update(JSON.stringify({
         cardId: controlCardId, operationId: controlOperationId, action: 'direct', message: 'Сделай следующий шаг',
       })).digest('hex'),
-      message: 'Сделай следующий шаг', mode: 'steer',
+      message: 'Сделай следующий шаг', mode: 'queue', humanRequested: true,
     });
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.sessionControls?.direct).toHaveLength(2);
-    const callsAfterTwoMessages = mocks.callOwnerHerderTool.mock.calls.length;
+    const sideEffectsAfterTwoMessages = mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message' || tool === 'stop_agent').length;
     const replayFirstMessage = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: mocks.currentCard.value!.version, message: 'Проверь текущий шаг' }), {
       params: Promise.resolve({ id: controlCardId }),
     });
     if (!replayFirstMessage) throw new Error('direct replay response missing');
     expect(replayFirstMessage.status).toBe(200);
-    expect(mocks.callOwnerHerderTool).toHaveBeenCalledTimes(callsAfterTwoMessages);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message' || tool === 'stop_agent')).toHaveLength(sideEffectsAfterTwoMessages);
     const replaySecondMessage = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: mocks.currentCard.value!.version, message: 'Сделай следующий шаг' }), {
       params: Promise.resolve({ id: controlCardId }),
     });
     if (!replaySecondMessage) throw new Error('second direct replay response missing');
     expect(replaySecondMessage.status).toBe(200);
-    expect(mocks.callOwnerHerderTool).toHaveBeenCalledTimes(callsAfterTwoMessages);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message' || tool === 'stop_agent')).toHaveLength(sideEffectsAfterTwoMessages);
 
     const versionAfterDirect = mocks.currentCard.value!.version;
     const stop = await PATCH(sessionControlRequest({ action: 'session-stop', expectedVersion: versionAfterDirect }), {
@@ -1374,18 +1954,21 @@ describe('task execution API', () => {
       sessionId: 'opencode-session-1', harness: 'opencode', hostId: 'roomhacker-server-100',
     });
 
-    const beforeDuplicate = mocks.callOwnerHerderTool.mock.calls.length;
+    const beforeDuplicate = mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message' || tool === 'stop_agent').length;
     const duplicate = await PATCH(sessionControlRequest({ action: 'session-stop', expectedVersion: mocks.currentCard.value!.version }), {
       params: Promise.resolve({ id: controlCardId }),
     });
     if (!duplicate) throw new Error('duplicate stop response missing');
     expect(duplicate.status).toBe(200);
-    expect(mocks.callOwnerHerderTool).toHaveBeenCalledTimes(beforeDuplicate);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message' || tool === 'stop_agent')).toHaveLength(beforeDuplicate);
   });
 
   it('persists UNKNOWN before returning and refuses to repeat the same direct action', async () => {
     mocks.currentCard.value = controllableOpenCodeCard();
-    mocks.callOwnerHerderTool.mockRejectedValue(new Error('synthetic transport ambiguity'));
+    mocks.callOwnerHerderTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
+      if (tool === 'send_message') throw new Error('synthetic transport ambiguity');
+      return toolResult(tool, args);
+    });
     const first = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: 4, message: 'Продолжай текущий шаг' }), {
       params: Promise.resolve({ id: controlCardId }),
     });
@@ -1399,19 +1982,28 @@ describe('task execution API', () => {
     });
     if (!retry) throw new Error('unknown direct retry response missing');
     expect(retry.status).toBe(202);
-    expect(mocks.callOwnerHerderTool).toHaveBeenCalledTimes(1);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message')).toHaveLength(1);
   });
 
   it('accepts the native current-turn reservation only with its exact stable input receipt', async () => {
     mocks.currentCard.value = controllableOpenCodeCard();
+    const opencodeMessages: Array<Record<string, unknown>> = [];
+    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({
+      contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(opencodeMessages) }],
+    }));
     const message = 'Зарезервируй текущий шаг';
     const inputId = createHash('sha256').update(JSON.stringify({
       cardId: controlCardId, operationId: controlOperationId, action: 'direct', message,
     })).digest('hex');
-    mocks.callOwnerHerderTool.mockImplementation(async (_tool: string, args: Record<string, unknown>) => observedHerderDelivery(
-      `Message reserved for the current turn of [${String(args.harness)}] ${String(args.sessionId)}; model observation is not yet confirmed.\nCurrent-turn context reservation receipt: ${JSON.stringify({ admitted: true, inputId })}`,
-      inputId, { hostId: String(args.hostId), harness: String(args.harness), sessionId: String(args.sessionId) },
-    ));
+    mocks.callOwnerHerderTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
+      if (tool === 'job_get' || tool === 'fleet_node_info' || tool === 'agent_info') return toolResult(tool, args);
+      opencodeMessages.push({ id: opencodeInputMessageId(String(args.inputId)), role: 'user', inputId: args.inputId,
+        text: args.message, parts: [{ type: 'text', text: args.message }] });
+      return observedHerderDelivery(
+        `Message reserved for the current turn of [${String(args.harness)}] ${String(args.sessionId)}; model observation is not yet confirmed.\nCurrent-turn context reservation receipt: ${JSON.stringify({ admitted: true, inputId })}`,
+        inputId, { hostId: String(args.hostId), harness: String(args.harness), sessionId: String(args.sessionId) },
+      );
+    });
 
     const response = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: 4, message }), {
       params: Promise.resolve({ id: controlCardId }),

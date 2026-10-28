@@ -1,4 +1,4 @@
-import type { KanbanCard } from './types';
+import type { KanbanCard, TaskExecutionReceipt } from './types';
 
 export type TaskExecutionState = 'not-started' | 'running' | 'waiting' | 'stopped' | 'unknown';
 
@@ -9,6 +9,16 @@ export interface TaskExecutionSnapshot {
   nextAction?: string;
   waitReason?: string;
   sessionUrl?: string;
+}
+
+export const QUEUED_OPEN_CODE_ACTIVE_PROGRESS = 'Точное задание видно в связанной активной сессии; ожидаю квитанцию нативного хода. Повтор не выполнялся.';
+
+export function isObservedActiveQueuedSession(receipt: TaskExecutionReceipt | undefined): boolean {
+  return receipt?.phase === 'dispatch-unknown' && receipt.harness === 'opencode'
+    && /^[a-f0-9]{64}$/.test(receipt.operationId) && /^[a-f0-9]{64}$/.test(receipt.messageInputId ?? '')
+    && !receipt.nativeTurnId && !!receipt.nativeSessionId?.trim() && !!receipt.hostId?.trim()
+    && !!receipt.projectBinding && !!receipt.nativeDispatchJobId && /^job_[a-f0-9]{64}$/.test(receipt.nativeDispatchJobId)
+    && !!receipt.nativeInputMessageId && /^msg_[A-Za-z0-9_-]{8,256}$/.test(receipt.nativeInputMessageId);
 }
 
 export const SESSION_UI_BY_HOST: Readonly<Record<string, string>> = {
@@ -37,7 +47,7 @@ export function taskExecutionSnapshot(card: KanbanCard): TaskExecutionSnapshot {
   const progress = attempt?.lastProgress
     ? { summary: attempt.lastProgress, at: attempt.lastProgressAt ?? attempt.updatedAt }
     : latest ? { summary: latest.summary, at: latest.submittedAt } : undefined;
-  const state: TaskExecutionState = attempt?.phase === 'running'
+  const state: TaskExecutionState = attempt?.phase === 'running' || isObservedActiveQueuedSession(attempt)
     ? 'running'
     : attempt?.phase === 'waiting' || attempt?.phase === 'created'
       ? 'waiting'
@@ -59,8 +69,8 @@ export function taskExecutionSnapshot(card: KanbanCard): TaskExecutionSnapshot {
     cardId: card.id,
     state,
     ...(progress ? { lastProgress: progress } : {}),
-    ...(card.nextAction?.trim() ? { nextAction: card.nextAction.trim() } : latest?.nextAction?.trim()
-      ? { nextAction: latest.nextAction.trim() } : {}),
+    ...(card.nextAction === null ? {} : card.nextAction?.trim() ? { nextAction: card.nextAction.trim() }
+      : latest?.nextAction?.trim() ? { nextAction: latest.nextAction.trim() } : {}),
     ...(sessionUrl ? { sessionUrl } : {}),
     ...(state === 'waiting' ? {
       waitReason: attempt?.phase === 'created'
