@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canCreateTaskQuestion, isTaskQuestionOwner, matchesTaskExecutionOperation, parseTaskQuestion, taskQuestionCreateRequest, taskQuestionStateLabel } from './notice-question-model';
+import { canAnswerTaskQuestion, canCreateTaskQuestion, isTaskQuestionOwner, matchesTaskExecutionOperation, parseExecutorQuestionPayload, parseTaskQuestion, taskQuestionCreateRequest, taskQuestionStateLabel } from './notice-question-model';
 
 const view = {
   requestId: 'opaque-should-not-render', purpose: 'clarification', version: 8, state: 'pending',
@@ -8,6 +8,21 @@ const view = {
 };
 
 describe('Notice task-question UI model', () => {
+  it('accepts only the executor question result bound to the preceding Herder metadata request', () => {
+    const humanRequestId = '67ce04db-d775-4f81-a86d-31af4bbe1091';
+    const payload = {
+      kind: 'question', human_request_id: humanRequestId, question: 'Which summary format should I use?',
+      choices: [{ value: 'brief', label: 'Short table' }, { value: 'total', label: 'Table with total row' }],
+      timeoutValue: 'brief',
+    };
+    expect(parseExecutorQuestionPayload(payload, humanRequestId)).toEqual({
+      humanRequestId, text: payload.question, choices: payload.choices, timeoutValue: payload.timeoutValue,
+    });
+    expect(parseExecutorQuestionPayload(payload, '00000000-0000-4000-8000-000000000000')).toBeUndefined();
+    expect(parseExecutorQuestionPayload({ ...payload, message: 'operator supplied' }, humanRequestId)).toBeUndefined();
+    expect(parseExecutorQuestionPayload({ ...payload, choices: [{ value: 'brief', label: 'Short table' }] }, humanRequestId)).toBeUndefined();
+  });
+
   it('parses only the supported read projection and preserves delivery/deadline/decision facts', () => {
     expect(parseTaskQuestion(view)).toEqual({ kind: 'ready', view });
     expect(parseTaskQuestion({ state: 'unknown', requestId: 'opaque-id' })).toEqual({ kind: 'unknown', requestId: 'opaque-id' });
@@ -53,6 +68,23 @@ describe('Notice task-question UI model', () => {
     expect(canCreateTaskQuestion(card, 'lead', { operationId: 'client-key', status: 'unknown' }, true)).toBe(false);
     expect(canCreateTaskQuestion(card, 'lead', { operationId: 'client-key', status: 'admitted' }, false)).toBe(false);
     expect(canCreateTaskQuestion({ ...card, version: 8 }, 'lead', { operationId: 'client-key', status: 'admitted' }, true)).toBe(false);
+  });
+
+  it('offers an answer only for the current authorized executor question and exact card version', () => {
+    const card = { owner: 'qa-user', assignees: [], version: 9, taskExecutionHistory: [{
+      operationId: 'a'.repeat(64), lastBoardVersion: 9, phase: 'waiting', harness: 'opencode',
+      taskDecisionRequest: { requestId: 'td-' + 'b'.repeat(40) },
+      executorQuestion: { humanRequestId: '67ce04db-d775-4f81-a86d-31af4bbe1091', questionHash: 'c'.repeat(64), choices: view.question.choices },
+    }] };
+    const ready = parseTaskQuestion({ ...view, requestId: 'td-' + 'b'.repeat(40) });
+    expect(ready.kind).toBe('ready');
+    const taskQuestion = ready.kind === 'ready' ? ready.view : null;
+    expect(canAnswerTaskQuestion(card, 'qa-user', taskQuestion)).toBe(true);
+    expect(canAnswerTaskQuestion(card, null, taskQuestion)).toBe(false);
+    expect(canAnswerTaskQuestion({ ...card, version: 10 }, 'qa-user', taskQuestion)).toBe(false);
+    expect(canAnswerTaskQuestion({ ...card, taskExecutionHistory: [{ ...card.taskExecutionHistory[0]!, taskDecisionProposal: {
+      requestId: card.taskExecutionHistory[0]!.taskDecisionRequest.requestId, value: 'b', authenticatedActor: 'qa-user',
+    } }] }, 'qa-user', taskQuestion)).toBe(false);
   });
 
   it('matches the browser-held launch key only to its current card execution receipt', async () => {

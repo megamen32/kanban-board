@@ -209,6 +209,59 @@ export interface TaskDecisionRequestReference {
   purpose: string;
   version: number;
 }
+export interface TaskExecutionQuestionChoice {
+  value: string;
+  label: string;
+}
+export interface TaskExecutionQuestionTarget {
+  harness: 'opencode';
+  sessionId: string;
+  cwd: string;
+}
+/** Source proof captured from the exact accepted OpenCode executor input. */
+export interface TaskExecutionQuestionProof {
+  humanRequestId: string;
+  contextRef: string;
+  registrationMessageId: string;
+  registrationCallId: string;
+  registrationTarget: TaskExecutionQuestionTarget;
+  sourceMessageId: string;
+  sourceMessageHash: string;
+  sourceInputMessageId: string;
+  sourceJobId: string;
+  text: string;
+  choices: readonly TaskExecutionQuestionChoice[];
+  timeoutValue: string;
+  questionHash: string;
+}
+/** One authenticated human answer proposal, stored under the current card CAS before Notice resolve. */
+export interface TaskDecisionAnswerProposal {
+  proposalRef: string;
+  requestId: string;
+  humanRequestId: string;
+  requestHash: string;
+  purpose: string;
+  version: number;
+  value: string;
+  authenticatedActor: string;
+  cardVersion: number;
+  stopEpoch: string;
+  sourceMessageId: string;
+  sourceJobId: string;
+}
+/** Durable Notice and Herder receipts for the exact continuation caused by a task answer. */
+export interface TaskExecutionQuestionContinuation {
+  readonly requestId: string;
+  readonly resultRef: string;
+  readonly idempotencyKey: string;
+  readonly receipt: string;
+  readonly inputId: string;
+  readonly nativeDispatchJobId: string;
+  readonly nativeInputMessageId: string;
+  readonly nativeTurnId: string;
+  readonly assistantMessageId: string;
+  readonly updatedAt: string;
+}
 /** Server-observed H33 binding for newly scoped execution receipts; legacy receipts omit it. */
 export interface TaskExecutionProjectBinding {
   contract: 'integrator-host-readiness-v1';
@@ -257,6 +310,12 @@ export interface TaskExecutionReceipt {
   requestedBy?: string;
   /** Immutable Notice request link; the question body remains in Notice. */
   taskDecisionRequest?: TaskDecisionRequestReference;
+  /** Immutable executor-origin question and metadata-only Herder binding. */
+  executorQuestion?: TaskExecutionQuestionProof;
+  /** Server-authenticated answer intent; it is never populated from caller actor fields. */
+  taskDecisionProposal?: TaskDecisionAnswerProposal;
+  /** Source-bound Herder continuation, persisted only after its result is verified. */
+  taskDecisionContinuation?: TaskExecutionQuestionContinuation;
   createReceiptText?: string;
   dispatchReceiptText?: string;
   lastProgress?: string;

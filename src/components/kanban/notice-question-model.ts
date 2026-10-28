@@ -20,6 +20,48 @@ export interface TaskQuestionView {
     deadlineAt: number | null;
   };
   decision: TaskQuestionDecision | null;
+  answerStatus?: 'accepted' | 'duplicate' | 'unknown' | 'conflict' | 'pending' | 'timeout' | 'control_requested' | 'no_accept';
+  continuation?: Record<string, unknown>;
+}
+
+export interface ExecutorQuestionPayload {
+  humanRequestId: string;
+  text: string;
+  choices: Array<{ value: string; label: string }>;
+  timeoutValue: string;
+}
+
+const HUMAN_REQUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+
+/** Validate the exact typed result an executor emits after its metadata-only Herder binding. */
+export function parseExecutorQuestionPayload(value: unknown, expectedHumanRequestId: string): ExecutorQuestionPayload | undefined {
+  if (!HUMAN_REQUEST_ID_PATTERN.test(expectedHumanRequestId)
+      || !value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  const expectedKeys = ['choices', 'human_request_id', 'kind', 'question', 'timeoutValue'];
+  if (Object.keys(row).sort().join('\0') !== expectedKeys.join('\0')
+      || row.kind !== 'question' || row.human_request_id !== expectedHumanRequestId
+      || typeof row.question !== 'string' || !row.question.trim() || row.question.length > 4_000
+      || /[\x00-\x08\x0b-\x1f\x7f]/.test(row.question)
+      || !Array.isArray(row.choices) || row.choices.length < 2 || row.choices.length > 4
+      || typeof row.timeoutValue !== 'string') return undefined;
+  const choices: Array<{ value: string; label: string }> = [];
+  for (const item of row.choices) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+    const choice = item as Record<string, unknown>;
+    if (Object.keys(choice).sort().join('\0') !== 'label\0value'
+        || typeof choice.value !== 'string' || typeof choice.label !== 'string') return undefined;
+    const value = choice.value.trim();
+    const label = choice.label.trim();
+    if (!value || value.length > 128 || /[\x00-\x1f\x7f]/.test(value)
+        || !label || label.length > 256 || /[\x00-\x1f\x7f]/.test(label)) return undefined;
+    choices.push({ value, label });
+  }
+  const timeoutValue = row.timeoutValue.trim();
+  if (new Set(choices.map(choice => choice.value)).size !== choices.length
+      || !choices.some(choice => choice.value === timeoutValue)) return undefined;
+  return { humanRequestId: expectedHumanRequestId, text: row.question.trim(), choices, timeoutValue };
 }
 
 export type TaskQuestionRead =
@@ -58,6 +100,34 @@ export function isTaskQuestionOwner(card: {
 }, username: string | null): boolean {
   if (!username) return false;
   return (card.owner ?? 'nikita') === username || card.assignee === username || card.assignees.includes(username);
+}
+
+export function canAnswerTaskQuestion(card: {
+  owner?: string;
+  assignee?: string | null;
+  assignees: string[];
+  version: number;
+  taskExecutionHistory?: Array<{
+    lastBoardVersion: number;
+    phase: string;
+    harness: string;
+    taskDecisionRequest?: { requestId: string };
+    executorQuestion?: { humanRequestId: string; questionHash: string; choices: readonly { value: string; label: string }[] };
+    taskDecisionProposal?: { requestId: string; value: string; authenticatedActor: string };
+    sessionControls?: { stop?: { phase: string }; stops?: readonly { phase: string }[] };
+  }>;
+}, username: string | null, view: TaskQuestionView | null): boolean {
+  const latest = card.taskExecutionHistory?.at(-1);
+  const latestStop = latest?.sessionControls?.stops?.at(-1) ?? latest?.sessionControls?.stop;
+  return isTaskQuestionOwner(card, username) && view?.state === 'pending' && !view.decision
+    && latest?.harness === 'opencode' && latest.phase === 'waiting' && latest.lastBoardVersion === card.version
+    && latest.taskDecisionRequest?.requestId === view.requestId
+    && !!latest.executorQuestion?.humanRequestId && /^[0-9a-f-]{36}$/i.test(latest.executorQuestion.humanRequestId)
+    && /^[a-f0-9]{64}$/.test(latest.executorQuestion.questionHash)
+    && latest.executorQuestion.choices.length === view.question.choices.length
+    && latest.executorQuestion.choices.every((choice, index) => choice.value === view.question.choices[index]?.value
+      && choice.label === view.question.choices[index]?.label)
+    && !latest.taskDecisionProposal && !latestStop;
 }
 
 export function parseTaskQuestion(value: unknown): TaskQuestionRead {
@@ -108,6 +178,9 @@ export function parseTaskQuestion(value: unknown): TaskQuestionRead {
         deadlineAt: notification.deadlineAt as number | null,
       },
       decision,
+      ...(typeof row.answerStatus === 'string' && ['accepted', 'duplicate', 'unknown', 'conflict', 'pending', 'timeout', 'control_requested', 'no_accept'].includes(row.answerStatus)
+        ? { answerStatus: row.answerStatus as TaskQuestionView['answerStatus'] } : {}),
+      ...(isRecord(row.continuation) ? { continuation: row.continuation } : {}),
     },
   };
 }
