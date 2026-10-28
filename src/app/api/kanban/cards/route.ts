@@ -46,6 +46,10 @@ export async function GET(req: NextRequest) {
     const ownerBrowserRead = await ownerBrowserReadAllowed(req);
     const nativeContext = ownerBrowserRead ? null : await nativeProjectAccessContextFromRequest(req);
     startDueReminderScheduler();
+    if (ownerBrowserRead) {
+      const tasksDir = tasksDirForScope('work');
+      return NextResponse.json({ cards: getAllCards(tasksDir), projects: listProjects(tasksDir) });
+    }
     if (nativeContext) {
       const tasksDir = tasksDirForScope('work');
       const cards = getAllCards(tasksDir);

@@ -23,6 +23,7 @@ import { ReviewActionGate, reviewActionAccess } from './review-action-gate';
 import { CardResultPreview } from './card-result-preview';
 import { MarkdownText } from './markdown-text';
 import { CardBriefPanel } from './card-brief-panel';
+import { hasCardHistory } from './card-history';
 import { CardHierarchyPanel } from './card-hierarchy-panel';
 import { getEligibleParentCards } from './card-hierarchy';
 
@@ -255,7 +256,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
                 </div>
               </div>}
             </ReviewActionGate>}
-            <details className="border-t pt-2">
+            {hasCardHistory(card) && <details className="border-t pt-2">
               <summary className="cursor-pointer text-sm font-medium">История и связи</summary>
               <div className="mt-3 space-y-3">
             {(card.resultHistory ?? []).length > 0 && <div className="space-y-2">
@@ -274,7 +275,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               </p>)}
             </div>}
               </div>
-            </details>
+            </details>}
           </section>
           <div className="order-1 min-w-0 space-y-4 lg:order-1">
             <CardHierarchyPanel card={card} relatedCards={relatedCards} breadcrumbCards={breadcrumbCards} onSelectCard={onSelectCard} />

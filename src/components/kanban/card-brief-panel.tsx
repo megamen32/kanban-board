@@ -83,7 +83,7 @@ export function CardBriefPanel({ card, compact = false, autoSummarize = false }:
         <div><dt className="inline font-medium text-foreground">Действие: </dt><dd className="inline">{facts.action}</dd></div>
         <div><dt className="inline font-medium text-foreground">Исполнитель: </dt><dd className="inline">{facts.executor}</dd></div>
         <div><dt className="inline font-medium text-foreground">Срок: </dt><dd className="inline">{facts.deadline}</dd></div>
-        <div><dt className="inline font-medium text-foreground">Следующий шаг: </dt><dd className="inline">{facts.nextStep}</dd></div>
+        {facts.nextStep && <div><dt className="inline font-medium text-foreground">Следующий шаг: </dt><dd className="inline">{facts.nextStep}</dd></div>}
       </dl>
     </section>
   );

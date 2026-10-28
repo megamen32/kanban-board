@@ -12,7 +12,7 @@ export interface CardBriefFacts {
   action: string;
   executor: string;
   deadline: string;
-  nextStep: string;
+  nextStep?: string;
 }
 
 export type CardBriefSource = Pick<KanbanCard, 'id' | 'title' | 'description' | 'assignees' | 'assignee' | 'dueAt' | 'nextAction' | 'column'>;
@@ -44,7 +44,7 @@ export function getCardBriefFacts(card: Pick<KanbanCard, 'title' | 'assignees' |
     action: card.title.trim() || 'Действие не указано',
     executor,
     deadline,
-    nextStep: card.nextAction?.trim() || 'Не указан',
+    ...(card.nextAction?.trim() ? { nextStep: card.nextAction.trim() } : {}),
   };
 }
 

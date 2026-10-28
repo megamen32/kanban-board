@@ -332,7 +332,14 @@ describe('GET /api/kanban/cards', () => {
 
   it('uses the existing owner browser read grant before the unavailable native resolver', async () => {
     ownerBrowserReadAllowed.mockResolvedValueOnce(true);
-    nativeProjectAccessContextFromRequest.mockRejectedValueOnce(new Error('native_identity_unconfigured'));
+    const secondBusinessCard = { ...allowed, id: 'second-business-project-card', project: 'ForEnergo тендеры' };
+    getAllCards.mockReturnValue([allowed, secondBusinessCard, qaCard]);
+    const allProjects = [
+      { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' },
+      { id: 'forenergo-project', externalKey: 'forenergo', name: 'ForEnergo тендеры' },
+      { id: 'qa-project', externalKey: 'qa', name: 'ExManager QA' },
+    ];
+    listProjects.mockReturnValue(allProjects);
     const response = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards', {
       headers: {
         cookie: 'kanban_session=owner-session',
@@ -341,12 +348,23 @@ describe('GET /api/kanban/cards', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      cards: [allowed],
-      projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }],
-    });
+    expect(await response.json()).toEqual({ cards: [allowed, secondBusinessCard, qaCard], projects: allProjects });
     expect(ownerBrowserReadAllowed).toHaveBeenCalledOnce();
     expect(nativeProjectAccessContextFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('keeps ordinary human reads within their existing project even when another project is present', async () => {
+    const secondBusinessCard = { ...allowed, id: 'second-business-project-card', project: 'ForEnergo тендеры' };
+    authenticated.current = { username: 'qa_exmanager_a', scope: 'work' };
+    getAllCards.mockReturnValue([allowed, secondBusinessCard, qaCard]);
+    listProjects.mockReturnValue([
+      { id: 'qa-project', externalKey: 'qa', name: 'ExManager QA' },
+      { id: 'forenergo-project', externalKey: 'forenergo', name: 'ForEnergo тендеры' },
+    ]);
+    const response = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cards: [qaCard], projects: [{ id: 'qa-project', externalKey: 'qa', name: 'ExManager QA' }] });
+    expect(ownerBrowserReadAllowed).toHaveBeenCalledOnce();
   });
 
   it('keeps a native-only request on the existing fail-closed project resolver', async () => {

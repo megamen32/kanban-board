@@ -49,8 +49,9 @@ function qaTestLoginCardReadAllowed(req: NextRequest, identity: { username: stri
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let nativeContext: NativeProjectAccessContext | null;
+  let ownerBrowserRead = false;
   try {
-    const ownerBrowserRead = await ownerBrowserReadAllowed(req);
+    ownerBrowserRead = await ownerBrowserReadAllowed(req);
     nativeContext = ownerBrowserRead ? null : await nativeProjectAccessContextFromRequest(req);
   } catch (error) {
     const reason = error instanceof Error ? error.message : '';
@@ -63,6 +64,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const managerAuthorized = hasManagerCapability && managerRequestAuthorized(req);
   if (hasManagerCapability && !managerAuthorized) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 403 });
+  }
+  if (ownerBrowserRead) {
+    const { id } = await params;
+    const card = findCardById(id, tasksDirForScope('work'));
+    return card ? NextResponse.json({ card }) : NextResponse.json({ error: 'not found' }, { status: 404 });
   }
   if (nativeContext) {
     const { id } = await params;

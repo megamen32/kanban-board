@@ -27,7 +27,7 @@ const card: KanbanCard = {
   fileName: 'markdown-qa.md', version: 1, project: 'UX QA', assignees: [], owner: 'qa', shared: false,
 };
 
-describe('integrator task description rendering', () => {
+describe('integrator task dashboard card brief', () => {
   it('keeps generic failures unknown and only authorizes retry for a typed not-attempted response', () => {
     const operationId = '3a22d578-7b78-4834-b718-097685c5f0ae';
     const generic = classifyTaskStartFailure(400, {
@@ -88,15 +88,16 @@ describe('integrator task description rendering', () => {
     await expect(recoverableNoTurnOperationId(cardId, 7, receipt, JSON.stringify({ operationId: 'another-operation-id', status: 'unknown' }))).resolves.toBeNull();
   });
 
-  it('formats Markdown headings and lists without exposing raw markers', () => {
+  it('keeps the full description out of the dashboard summary and shows the compact brief', () => {
     const html = renderToStaticMarkup(React.createElement(IntegratorTaskDashboard, {
       cards: [card], onOpen: () => undefined, onRefresh: () => undefined,
       canAssignReviewer: false, onAssignReviewer: async () => null,
     }));
 
-    expect(html).toContain('<h2 class="text-base font-semibold leading-snug">Blocker</h2>');
-    expect(html).toContain('<ul');
-    expect(html).toMatch(/<li[^>]*>First item<\/li>/);
+    expect(html).toContain('Действие:');
+    expect(html).toContain('Markdown QA');
+    expect(html).not.toContain('Blocker');
+    expect(html).not.toContain('First item');
     expect(html).not.toContain('## Blocker');
   });
 

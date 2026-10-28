@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import { MarkdownText } from './markdown-text';
+import { CardBriefPanel } from './card-brief-panel';
 import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
 import { matchesTaskExecutionOperation } from './notice-question-model';
 import {
@@ -681,9 +682,8 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                     </div>
                   </dl>
 
-                    {card.description.trim() && <div className="mt-3 rounded-md bg-muted/40 p-3">
-                    <p className="text-xs font-medium text-muted-foreground">Описание и ожидаемый результат</p>
-                    <MarkdownText text={card.description} className="mt-1 text-sm" />
+                  {(card.description.trim() || card.nextAction?.trim()) && <div className="mt-3 rounded-md bg-muted/40 p-3">
+                    <CardBriefPanel card={card} compact />
                   </div>}
                   {card.column === 'blocked' && card.blockerReason && <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm"><span className="font-medium">Что мешает продолжить:</span> {card.blockerReason}</div>}
 

@@ -12,14 +12,14 @@ const card = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('card brief projection', () => {
-  test('builds concise facts only from current structured fields and makes missing values explicit', () => {
+  test('builds concise facts from current fields without inventing a missing next step', () => {
     expect(getCardBriefFacts(card)).toEqual({
       action: 'Подготовить расчёт',
       executor: 'Анна',
       deadline: 'Не указан',
-      nextStep: 'Не указан',
     });
     expect(getCardBriefFacts({ ...card, assignees: [], assignee: 'Иван', nextAction: 'Сверить исходные данные' }).executor).toBe('Иван');
+    expect(getCardBriefFacts({ ...card, nextAction: '  Сверить исходные данные  ' }).nextStep).toBe('Сверить исходные данные');
   });
 
   test('accepts only a non-empty projection for the exact card and source hash', () => {

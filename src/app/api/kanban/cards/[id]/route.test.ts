@@ -555,8 +555,7 @@ describe('GET /api/kanban/cards/[id]', () => {
   it('uses the existing owner browser read grant before the unavailable native resolver', async () => {
     authenticated.current = { username: 'nikita', scope: 'work' };
     ownerBrowserReadAllowed.mockResolvedValueOnce(true);
-    nativeProjectAccessContextFromRequest.mockRejectedValueOnce(new Error('native_identity_unconfigured'));
-    const card = { ...existingCard, project: 'Олег и Никита' };
+    const card = { ...existingCard, project: 'ForEnergo тендеры' };
     findCardById.mockReturnValue(card);
     const response = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards/card-1', {
       headers: {
@@ -569,6 +568,16 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(await response.json()).toEqual({ card });
     expect(ownerBrowserReadAllowed).toHaveBeenCalledOnce();
     expect(nativeProjectAccessContextFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('does not expose another work project to a normal Board human read', async () => {
+    authenticated.current = { username: 'nikita', scope: 'work' };
+    findCardById.mockReturnValue({ ...existingCard, project: 'ForEnergo тендеры' });
+    const response = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards/card-1'), {
+      params: Promise.resolve({ id: 'card-1' }),
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'not found' });
   });
 
   it('keeps a native-only card read on the existing fail-closed project resolver', async () => {
