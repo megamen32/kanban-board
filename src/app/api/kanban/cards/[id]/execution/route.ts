@@ -845,6 +845,13 @@ function recoverableAcceptedOpenCodeDispatch(receipt: TaskExecutionReceipt): boo
     && receipt.projectBinding.hostId === receipt.hostId;
 }
 
+function exactAcceptedOpenCodeAdmission(receipt: TaskExecutionReceipt): boolean {
+  return recoverableAcceptedOpenCodeDispatch(receipt)
+    && receipt.nativeDispatchJobId === userMessageJobId('opencode', receipt.nativeSessionId!, receipt.messageInputId)
+    && typeof receipt.nativeInputMessageId === 'string'
+    && /^msg_[A-Za-z0-9_-]{8,256}$/.test(receipt.nativeInputMessageId);
+}
+
 function openCodeTaskMessageIndex(messages: RecordValue[], card: KanbanCard): number | undefined {
   const prompt = taskPrompt(card);
   const matches = messages.flatMap((message, index) => message.role === 'user'
@@ -856,6 +863,12 @@ function openCodeBoundInputMessageIndex(messages: RecordValue[], nativeInputMess
   const matches = messages.flatMap((message, index) => message.role === 'user' && message.id === nativeInputMessageId
     && (message.inputId === undefined || message.inputId === inputId) ? [index] : []);
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+function openCodeDirectResultInputIndex(messages: RecordValue[], nativeInputMessageId: string, inputId: string): number | undefined {
+  const index = openCodeBoundInputMessageIndex(messages, nativeInputMessageId, inputId);
+  if (index === undefined || messages.slice(index + 1).some(message => message.role === 'user')) return undefined;
+  return index;
 }
 
 /** A verified first-user record may anchor a result only if the recent tail has no later user message. */
@@ -1691,14 +1704,26 @@ function stopControlEpoch(receipt: TaskExecutionReceipt): string {
   return receipt.sessionControls?.direct?.at(-1)?.requestHash ?? receipt.messageInputId;
 }
 
+function latestAcceptedOpenCodeDirect(receipt: TaskExecutionReceipt): TaskExecutionSessionControl | undefined {
+  if (receipt.harness !== 'opencode' || !receipt.nativeSessionId) return undefined;
+  const control = receipt.sessionControls?.direct?.at(-1);
+  if (!control || control.phase !== 'accepted' || !/^[a-f0-9]{64}$/.test(control.requestHash)
+      || control.nativeDispatchJobId !== userMessageJobId('opencode', receipt.nativeSessionId, control.requestHash)
+      || typeof control.nativeInputMessageId !== 'string'
+      || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(control.nativeInputMessageId)) return undefined;
+  return control;
+}
+
 function exactActiveOpenCodeReceipt(card: KanbanCard): TaskExecutionReceipt | undefined {
   const candidates = (card.taskExecutionHistory ?? []).filter(receipt => {
     const stoppedByUser = receipt.phase === 'stopped' && latestStopControl(receipt.sessionControls)?.phase === 'accepted';
-    if (!['running', 'waiting'].includes(receipt.phase) && !stoppedByUser) return false;
+    const reconciledIdleAdmission = exactAcceptedOpenCodeAdmission(receipt);
+    if (!['running', 'waiting'].includes(receipt.phase) && !stoppedByUser && !reconciledIdleAdmission) return false;
     const hasNativeTurn = !!receipt.nativeTurnId;
     const hasTypedOpenCodeInput = receipt.harness === 'opencode' && !!receipt.nativeInputMessageId
       && /^msg_[A-Za-z0-9_-]{8,256}$/.test(receipt.nativeInputMessageId)
       && !!receipt.nativeDispatchJobId && /^job_[a-f0-9]{64}$/.test(receipt.nativeDispatchJobId)
+      && receipt.nativeDispatchJobId === userMessageJobId('opencode', receipt.nativeSessionId ?? '', receipt.messageInputId)
       && !!receipt.projectBinding && receipt.projectBinding.harness === 'opencode'
       && receipt.projectBinding.hostId === receipt.hostId;
     return hasNativeTurn || hasTypedOpenCodeInput;
@@ -1732,8 +1757,10 @@ function updateSessionControl(
     const activePhase = ['running', 'waiting'].includes(receipt?.phase ?? '');
     const continuingStoppedSession = action === 'direct' && receipt?.phase === 'stopped'
       && latestStopControl(receipt.sessionControls)?.phase === 'accepted';
+    const idleAdmittedSession = action === 'direct' && !!receipt && exactAcceptedOpenCodeAdmission(receipt)
+      && !(receipt.sessionControls?.direct?.length);
     if (!receipt || receipt.harness !== 'opencode'
-        || phase === 'intent' && !activePhase && !continuingStoppedSession) return undefined;
+        || phase === 'intent' && !activePhase && !continuingStoppedSession && !idleAdmittedSession) return undefined;
     const controls = receipt.sessionControls ?? {};
     const old = action === 'direct'
       ? controls.direct?.find(control => control.requestHash === requestHash)
@@ -1804,6 +1831,8 @@ async function controlTaskSession(context: AuthorizedTaskCard, body: RecordValue
     return NextResponse.json({ error: 'saved project route is no longer ready; session control is denied' }, { status: 503 });
   }
   const message = action === 'direct' ? (body.message as string).trim() : '';
+  const idleAdmittedSession = exactAcceptedOpenCodeAdmission(receipt)
+    && !(receipt.sessionControls?.direct?.length);
   const controlEpoch = action === 'stop' ? stopControlEpoch(receipt) : undefined;
   const requestHash = sha256(JSON.stringify({ cardId: context.card.id, operationId: receipt.operationId, action, message,
     ...(controlEpoch ? { controlEpoch } : {}) }));
@@ -1836,7 +1865,8 @@ async function controlTaskSession(context: AuthorizedTaskCard, body: RecordValue
       || action === 'stop' && !['running', 'needs_input'].includes(String(nativeSession.status))
       || action === 'direct' && (continuingStoppedSession
         ? !['stopped', 'idle'].includes(String(nativeSession.status))
-        : !['running', 'needs_input'].includes(String(nativeSession.status)))) {
+        : idleAdmittedSession ? nativeSession.status !== 'idle'
+          : !['running', 'needs_input'].includes(String(nativeSession.status)))) {
     return NextResponse.json({ error: 'the exact OpenCode session state does not allow this control; no action was sent' }, { status: 409 });
   }
   if (!process.env.AGENT_HERDER_HTTP_TOKEN?.trim()) return NextResponse.json({ error: 'protected session control channel is not configured' }, { status: 503 });
@@ -2068,6 +2098,20 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           status: 202, headers: { 'Cache-Control': 'no-store' },
         });
       }
+      if (acceptedDispatchPendingReadback && session.status === 'idle'
+          && (attempt.nativeDispatchJobId !== queuedAdmissionProof.jobId
+            || attempt.nativeInputMessageId !== queuedAdmissionProof.nativeInputMessageId
+            || !attempt.lastProgress?.includes('простаивает'))) {
+        const reconciled = saveReceiptProgress(id, context.tasksDir, operationId, attempt.requestHash, {
+          phase: 'dispatch-unknown', nativeSessionId: attempt.nativeSessionId,
+          nativeDispatchJobId: queuedAdmissionProof.jobId,
+          nativeInputMessageId: queuedAdmissionProof.nativeInputMessageId,
+          lastProgress: 'Исходная доставка подтверждена; нативная сессия простаивает. Результат не принят.',
+          lastProgressAt: now(),
+        });
+        if (!reconciled) return NextResponse.json({ error: 'accepted OpenCode admission could not be persisted safely' }, { status: 409 });
+        context.card = reconciled;
+      }
       openCodeMessagesForAttempt = await readOpenCodeMessages(attempt.nativeSessionId);
     }
     const nativeLastTurn = isRecord(session.meta) && isRecord(session.meta.nativeLastTurn)
@@ -2127,8 +2171,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     // Agent history can contain commentary or a previous idle turn. Only the
     // exact turn admitted by this Board operation can become a review result.
+    const acceptedDirect = attempt.harness === 'opencode' ? latestAcceptedOpenCodeDirect(attempt) : undefined;
     const expectedOpenCodeTurnId = attempt.harness === 'opencode'
-      ? attempt.nativeTurnId ?? (typeof nativeLastTurn?.turnId === 'string' ? nativeLastTurn.turnId : undefined)
+      ? acceptedDirect && typeof nativeLastTurn?.turnId === 'string'
+        ? nativeLastTurn.turnId
+        : attempt.nativeTurnId ?? (typeof nativeLastTurn?.turnId === 'string' ? nativeLastTurn.turnId : undefined)
       : attempt.nativeTurnId;
     const nativeTurnCompleted = nativeLastTurn !== undefined
       && !!expectedOpenCodeTurnId && nativeLastTurn.turnId === expectedOpenCodeTurnId && nativeLastTurn.status === 'completed'
@@ -2155,11 +2202,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const messagesUri = `herder://sessions/opencode/${encodeURIComponent(attempt.nativeSessionId)}/messages`;
       const messages = openCodeMessagesForAttempt ?? await readOpenCodeMessages(attempt.nativeSessionId);
       if (!messages) return NextResponse.json({ ...taskExecutionSnapshot(context.card), waitReason: 'Нативная история пока недоступна' }, { status: 202 });
-      const directInput = attempt.sessionControls?.direct?.filter(control => control.phase === 'accepted'
-        && !!control.nativeDispatchJobId && !!control.nativeInputMessageId).at(-1);
+      const directInput = latestAcceptedOpenCodeDirect(attempt);
       const directInputId = directInput?.requestHash;
-      const directBindingIsExact = !!directInput && !!directInputId
-        && directInput.nativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, directInputId);
+      const directDelivery = directInput && directInputId
+        ? await verifiedOpenCodeDeliveryJob(attempt, directInputId) : undefined;
+      const directBindingIsExact = !!directInput && !!directInputId && !!directDelivery
+        && directDelivery.jobId === directInput.nativeDispatchJobId
+        && directDelivery.nativeInputMessageId === directInput.nativeInputMessageId;
       const mainNativeInputMessageId = queuedAdmissionProof?.nativeInputMessageId ?? attempt.nativeInputMessageId;
       const mainNativeDispatchJobId = queuedAdmissionProof?.jobId ?? attempt.nativeDispatchJobId;
       const mainBindingIsExact = !!mainNativeInputMessageId && !!mainNativeDispatchJobId
@@ -2171,7 +2220,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         verifiedInitialInputProof = await verifiedOpenCodeFirstUserInput(attempt, attempt.messageInputId, taskPrompt(context.card));
       }
       const userIndex = directInput
-        ? directBindingIsExact ? openCodeBoundInputMessageIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined
+        ? directBindingIsExact ? openCodeDirectResultInputIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined
         : mainNativeInputMessageId || mainNativeDispatchJobId
           ? mainBindingIsExact && mainNativeInputMessageId
             ? openCodeResultInputIndex(messages, mainNativeInputMessageId, attempt.messageInputId, verifiedInitialInputProof)
@@ -2181,7 +2230,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         waitReason: directBindingIsExact
           ? 'Явное продолжение принято, но его точное сообщение пока не найдено в связанной сессии'
           : 'Точное поручение этой карточки пока не найдено в связанной сессии' }, { status: 202 });
-      const assistant = completedOpenCodeAssistant(messages, userIndex, expectedOpenCodeTurnId);
+      const assistant = completedOpenCodeAssistant(messages, userIndex, expectedOpenCodeTurnId,
+        directInput ? directInput.nativeInputMessageId : undefined);
       resultTurnId = typeof assistant?.turnId === 'string' ? assistant.turnId : expectedOpenCodeTurnId;
       assistantText = assistant && typeof assistant.text === 'string' ? assistant.text : undefined;
       assistantMessageId = typeof assistant?.id === 'string' ? assistant.id : undefined;
@@ -2235,11 +2285,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
     if (attempt.harness === 'opencode') {
       const messages = await readOpenCodeMessages(attempt.nativeSessionId);
-      const directInput = attempt.sessionControls?.direct?.filter(control => control.phase === 'accepted'
-        && !!control.nativeDispatchJobId && !!control.nativeInputMessageId).at(-1);
+      const directInput = latestAcceptedOpenCodeDirect(attempt);
       const directInputId = directInput?.requestHash;
-      const directBindingIsExact = !!directInput && !!directInputId
-        && directInput.nativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, directInputId);
+      const directDelivery = directInput && directInputId
+        ? await verifiedOpenCodeDeliveryJob(attempt, directInputId) : undefined;
+      const directBindingIsExact = !!directInput && !!directInputId && !!directDelivery
+        && directDelivery.jobId === directInput.nativeDispatchJobId
+        && directDelivery.nativeInputMessageId === directInput.nativeInputMessageId;
       const mainNativeInputMessageId = queuedAdmissionProof?.nativeInputMessageId ?? attempt.nativeInputMessageId;
       const mainNativeDispatchJobId = queuedAdmissionProof?.jobId ?? attempt.nativeDispatchJobId;
       const mainBindingIsExact = !!mainNativeInputMessageId && !!mainNativeDispatchJobId
@@ -2251,7 +2303,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         verifiedInitialInputProof = await verifiedOpenCodeFirstUserInput(attempt, attempt.messageInputId, taskPrompt(context.card));
       }
       const userIndex = messages ? directInput
-        ? directBindingIsExact ? openCodeBoundInputMessageIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined
+        ? directBindingIsExact ? openCodeDirectResultInputIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined
         : mainNativeInputMessageId || mainNativeDispatchJobId
           ? mainBindingIsExact && mainNativeInputMessageId
             ? openCodeResultInputIndex(messages, mainNativeInputMessageId, attempt.messageInputId, verifiedInitialInputProof)
@@ -2259,7 +2311,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           : openCodeTaskMessageIndex(messages, context.card) : undefined;
       const assistant = messages && userIndex !== undefined
         ? completedOpenCodeAssistant(messages, userIndex, resultTurnId ?? attempt.nativeTurnId,
-          userIndex === -1 ? mainNativeInputMessageId : undefined) : undefined;
+          directInput ? directInput.nativeInputMessageId : userIndex === -1 ? mainNativeInputMessageId : undefined) : undefined;
       if (!assistant || assistant.text !== assistantText
           || (assistantMessageId !== undefined && assistant.id !== assistantMessageId)
           || (resultTurnId !== undefined && assistant.turnId !== resultTurnId)) {

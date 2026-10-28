@@ -1309,6 +1309,7 @@ describe('task execution API', () => {
 
     nativeMessages = [...nativeMessages, {
       id: 'msg_17f446789001PIjyje1dWmeMyw', role: 'assistant', phase: 'stop',
+      nativeParentMessageId: finalDirectNativeInputId,
       parts: [
         { type: 'thinking', text: 'Скрытая мысль не должна попасть в карточку.' },
         { type: 'text', text: '| Заявка | Сумма | Состояние |\n| A | 1200 | ожидается файл |\n| B | 800 | ожидает проверки |\n| C | 500 | сверка таблицы |\n\nИтого: 2500.' },
@@ -1494,14 +1495,19 @@ describe('task execution API', () => {
 
     const request = () => new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
       method: 'PATCH', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ action: 'sync-result', operationId: exactOperationId, expectedVersion: 5 }),
+      body: JSON.stringify({ action: 'sync-result', operationId: exactOperationId, expectedVersion: mocks.currentCard.value?.version ?? 5 }),
     });
     const writesBefore = mocks.updateCard.mock.calls.length;
     const hiddenLaterUser = await PATCH(request(), { params: Promise.resolve({ id: baseCard.id }) });
     if (!hiddenLaterUser) throw new Error('OpenCode hidden later-user result response missing');
     expect(hiddenLaterUser.status, JSON.stringify(await hiddenLaterUser.clone().json())).toBe(202);
-    expect(mocks.updateCard).toHaveBeenCalledTimes(writesBefore);
-    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.phase).toBe('dispatch-unknown');
+    expect(mocks.updateCard).toHaveBeenCalledTimes(writesBefore + 1);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'dispatch-unknown', nativeSessionId: sessionId,
+      nativeDispatchJobId: userMessageJobId(sessionId, exactInputId),
+      nativeInputMessageId: originalUserMessage.id,
+      lastProgress: expect.stringMatching(/простаивает.*результат.*не принят/i),
+    });
     expect(mocks.currentCard.value?.resultHistory).toBeUndefined();
 
     recentMessages = [{
@@ -2189,6 +2195,149 @@ describe('task execution API', () => {
     expect(postedMandates).toHaveLength(2);
     expect(postedMandates[0]).toEqual(postedMandates[1]);
     expect(postedMandates[0]?.version).toBe(String(currentVersion));
+  });
+
+  it('reconciles an idle admitted OpenCode session from its exact first-user proof without claiming a result', async () => {
+    mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
+    const projectBinding = openCodeProjectBinding();
+    const exactOperationId = 'e'.repeat(64);
+    const inputId = createHash('sha256').update(`${exactOperationId}\0dispatch`).digest('hex');
+    const nativeInputMessageId = 'msg_idle_admitted_123456';
+    const initialMessage = { id: nativeInputMessageId, role: 'user', inputId,
+      parts: [{ type: 'text', text: [
+        `Выполни задачу канбан карточки ${controlCardId} из проекта «${baseCard.project}».`,
+        `Название: ${baseCard.title}`,
+        `Описание задачи:\n${baseCard.description}`,
+        'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
+        'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
+      ].join('\n\n') }] };
+    const requestHash = createHash('sha256').update(JSON.stringify({
+      id: controlCardId, title: baseCard.title, description: baseCard.description, project: baseCard.project,
+      owner: baseCard.owner ?? 'nikita', assignee: baseCard.assignee ?? null, assignees: baseCard.assignees,
+      actor: 'nikita', hostId: 'roomhacker-server-100', harness: 'opencode', cwd: projectBinding.cwd,
+      model: projectBinding.model, projectBinding,
+    })).digest('hex');
+    mocks.currentCard.value = { ...baseCard, id: controlCardId, version: 5, column: 'todo', taskExecutionHistory: [{
+      operationId: exactOperationId, requestHash, lastBoardVersion: 5, createInputId: '1'.repeat(64),
+      messageInputId: inputId, phase: 'dispatch-unknown', hostId: 'roomhacker-server-100', harness: 'opencode',
+      nativeSessionId: controlSessionId, projectBinding, startedBy: 'nikita', createdAt: baseCard.created, updatedAt: baseCard.updated,
+    }] };
+    mocks.sessionInfo.value = { id: controlSessionId, harness: 'opencode', hostId: 'roomhacker-server-100',
+      cwd: projectBinding.cwd, model: projectBinding.model, status: 'idle', needsPermission: false,
+      meta: { nativeLastTurn: { turnId: 'foreign-turn', status: 'completed' } } };
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'job_get') {
+        const jobId = userMessageJobId(controlSessionId, inputId);
+        return { structuredContent: { job: { id: jobId, state: 'completed', ownerSessionId: controlSessionId,
+          onceKey: ['user-message', 'opencode', controlSessionId, inputId].join('\0'),
+          result: { ok: true, admitted: true, inputId, nativeInputMessageId }, } }, content: [] };
+      }
+      return toolResult(tool, args);
+    });
+    const firstUserUri = `herder://sessions/opencode/${controlSessionId}/first-user-message`;
+    const messagesUri = `herder://sessions/opencode/${controlSessionId}/messages`;
+    const initialJobId = userMessageJobId(controlSessionId, inputId);
+    let nativeMessages: Array<Record<string, unknown>> = [{ id: 'msg_foreign_user_123456', role: 'user',
+      parts: [{ type: 'text', text: 'Позднее чужое поручение' }] }];
+    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({ contents: [{ uri, mimeType: 'application/json',
+      text: JSON.stringify(uri === firstUserUri ? initialMessage : nativeMessages) }] }));
+
+    const response = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        action: 'sync-result', operationId: exactOperationId, expectedVersion: 5,
+      }),
+    }), { params: Promise.resolve({ id: controlCardId }) });
+    if (!response) throw new Error('idle admission reconciliation response missing');
+
+    expect(response.status).toBe(202);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'dispatch-unknown', nativeSessionId: controlSessionId, messageInputId: inputId,
+      nativeDispatchJobId: userMessageJobId(controlSessionId, inputId), nativeInputMessageId,
+      lastProgress: expect.stringMatching(/простаивает.*результат.*не принят/i),
+    });
+    expect(mocks.currentCard.value?.resultHistory).toBeUndefined();
+    expect(mocks.currentCard.value?.column).toBe('todo');
+    expect(mocks.readOwnerHerderResource).toHaveBeenCalledWith(messagesUri);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([name]) => name === 'send_message')).toHaveLength(0);
+
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'job_get' && args.jobId === initialJobId) return { structuredContent: { job: {
+        id: initialJobId, state: 'completed', ownerSessionId: controlSessionId,
+        onceKey: ['user-message', 'opencode', controlSessionId, inputId].join('\0'),
+        result: { ok: true, admitted: true, inputId, nativeInputMessageId },
+      } }, content: [] };
+      if (tool === 'send_message') {
+        nativeMessages.push({ id: opencodeInputMessageId(String(args.inputId)), role: 'user', inputId: args.inputId,
+          parts: [{ type: 'text', text: args.message }] });
+        return toolResult(tool, args);
+      }
+      if (tool === 'job_get') return opencodeJobGetResult(String(args.jobId));
+      return toolResult(tool, args);
+    });
+    const directText = 'Выполни один безопасный следующий шаг в той же задаче.';
+    const direct = await PATCH(sessionControlRequest({ action: 'session-direct', expectedVersion: mocks.currentCard.value!.version, message: directText }), {
+      params: Promise.resolve({ id: controlCardId }),
+    });
+    if (!direct) throw new Error('explicit idle direct response missing');
+    expect(direct.status, JSON.stringify(await direct.clone().json())).toBe(200);
+    expect(await direct.json()).toMatchObject({ boardOperationId: exactOperationId, action: 'direct', state: 'accepted' });
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      operationId: exactOperationId, phase: 'dispatch-unknown', sessionControls: { direct: [{ phase: 'accepted', nativeInputMessageId: opencodeInputMessageId(createHash('sha256').update(JSON.stringify({
+        cardId: controlCardId, operationId: exactOperationId, action: 'direct', message: directText,
+      })).digest('hex')) }] },
+    });
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([name]) => name === 'send_message')).toHaveLength(1);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([name]) => name === 'fleet_create_session')).toHaveLength(0);
+  });
+
+  it('uses the accepted direct input and its exact parent turn instead of a stale main turn, and rejects a later user', async () => {
+    const card = controllableOpenCodeCard();
+    const receipt = card.taskExecutionHistory![0]!;
+    const directText = 'Продолжи текущую задачу';
+    const directInputId = createHash('sha256').update(JSON.stringify({
+      cardId: controlCardId, operationId: controlOperationId, action: 'direct', message: directText,
+    })).digest('hex');
+    const directNativeInputMessageId = 'msg_direct_input_123456';
+    const directControl = { requestHash: directInputId, phase: 'accepted' as const,
+      nativeDispatchJobId: userMessageJobId(controlSessionId, directInputId),
+      nativeInputMessageId: directNativeInputMessageId, updatedAt: baseCard.updated };
+    mocks.currentCard.value = { ...card, taskExecutionHistory: [{ ...receipt, phase: 'running', nativeTurnId: 'main-turn-t1',
+      sessionControls: { direct: [directControl] } }] };
+    mocks.sessionInfo.value = { id: controlSessionId, harness: 'opencode', hostId: 'roomhacker-server-100',
+      cwd: receipt.projectBinding!.cwd, model: receipt.projectBinding!.model, status: 'idle', needsPermission: false,
+      meta: { nativeLastTurn: { turnId: 'direct-turn-t2', status: 'completed' } } };
+    let nativeMessages: Array<Record<string, unknown>> = [
+      { id: directNativeInputMessageId, role: 'user', inputId: directInputId, parts: [{ type: 'text', text: directText }] },
+      { id: 'msg_direct_answer_123456', role: 'assistant', turnId: 'direct-turn-t2', phase: 'completed',
+        nativeParentMessageId: directNativeInputMessageId, parts: [{ type: 'text', text: 'Same-card continuation result for direct T2.' }] },
+      { id: 'msg_later_user_123456', role: 'user', parts: [{ type: 'text', text: 'Unrelated later manual input U3.' }] },
+    ];
+    const messagesUri = `herder://sessions/opencode/${controlSessionId}/messages`;
+    mocks.readOwnerHerderResource.mockImplementation(async (uri: string) => ({ contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(nativeMessages) }] }));
+    mocks.validateTransition.mockImplementation((_card: KanbanCard, updates: { executorResult?: { summary?: string } }) => ({
+      kind: 'redirected', patch: { column: 'review', needsReview: true, resultHistory: [{
+        summary: updates.executorResult?.summary ?? '', evidenceRefs: [], submittedBy: 'nikita', submittedAt: '2026-10-28T00:00:00.000Z',
+      }] },
+    }));
+    const request = () => PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        action: 'sync-result', operationId: controlOperationId, expectedVersion: mocks.currentCard.value!.version,
+      }),
+    }), { params: Promise.resolve({ id: controlCardId }) });
+
+    const withLaterUser = await request();
+    if (!withLaterUser) throw new Error('direct result with newer user response missing');
+    expect(withLaterUser.status).toBe(202);
+    expect(mocks.readOwnerHerderResource).toHaveBeenCalledWith(messagesUri);
+    expect(mocks.currentCard.value?.resultHistory).toBeUndefined();
+
+    nativeMessages = nativeMessages.slice(0, 2);
+    const exactDirectResult = await request();
+    if (!exactDirectResult) throw new Error('exact direct T2 result response missing');
+    expect(exactDirectResult.status).toBe(200);
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({ phase: 'result', nativeTurnId: 'direct-turn-t2' });
+    expect(mocks.currentCard.value?.resultHistory?.at(-1)?.summary).toBe('Same-card continuation result for direct T2.');
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([name]) => name === 'send_message' || name === 'fleet_create_session')).toHaveLength(0);
   });
 
   it('allows distinct direct messages once, stops the exact receipt, and never replays either action', async () => {
