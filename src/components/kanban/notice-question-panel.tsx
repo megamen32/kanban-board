@@ -7,10 +7,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { executionOperationStorageKey, parseStoredStartOperation, type StoredStartOperation } from './integrator-dashboard-model';
-import { QuestionDetails } from './notice-question-display';
+import { ExecutorQuestionDetails, answerQuestionRequest, executorQuestionFeedback, QuestionDetails } from './notice-question-display';
 import {
   isTaskQuestionOwner,
   canCreateTaskQuestion,
+  canAnswerTaskQuestion,
   matchesTaskExecutionOperation,
   parseTaskQuestion,
   taskQuestionCreateRequest,
@@ -55,6 +56,7 @@ function safeErrorText(state: PanelState): string {
 export function NoticeQuestionPanel({ card, open, username, onRefresh }: Props) {
   const owner = isTaskQuestionOwner(card, username);
   const latest = card.taskExecutionHistory?.at(-1);
+  const executorQuestion = latest?.executorQuestion;
   const [panelState, setPanelState] = useState<PanelState>('loading');
   const [view, setView] = useState<TaskQuestionView | null>(null);
   const [storedOperation, setStoredOperation] = useState<StoredStartOperation | null | 'invalid'>(null);
@@ -65,6 +67,9 @@ export function NoticeQuestionPanel({ card, open, username, onRefresh }: Props) 
   const [secondChoice, setSecondChoice] = useState('Вариант 2');
   const [timeoutValue, setTimeoutValue] = useState('');
   const [busy, setBusy] = useState(false);
+  const [answerBusy, setAnswerBusy] = useState(false);
+  const [answerAttemptedOperationId, setAnswerAttemptedOperationId] = useState<string | null>(null);
+  const [answerFeedbackFallback, setAnswerFeedbackFallback] = useState<'accepted' | 'unknown' | 'declined' | 'pending' | 'timeout' | null>(null);
   const [readBusy, setReadBusy] = useState(false);
   const [creationHeld, setCreationHeld] = useState(false);
   const creationHeldRef = useRef(false);
@@ -140,6 +145,61 @@ export function NoticeQuestionPanel({ card, open, username, onRefresh }: Props) 
   ], [firstChoice, secondChoice]);
   const canSubmit = eligible && panelState === 'none' && Boolean(purpose.trim()) && Boolean(message.trim())
     && choices.every(choice => Boolean(choice.label)) && Boolean(timeoutValue) && !busy;
+  const readbackMatchesExecutorQuestion = Boolean(view && executorQuestion && latest?.taskDecisionRequest
+    && view.requestId === latest.taskDecisionRequest.requestId
+    && view.question.text === executorQuestion.text
+    && view.question.choices.length === executorQuestion.choices.length
+    && view.question.choices.every((choice, index) => choice.value === executorQuestion.choices[index]?.value
+      && choice.label === executorQuestion.choices[index]?.label));
+  const answerFeedback = executorQuestionFeedback(view, answerFeedbackFallback ?? undefined);
+  const canAnswer = panelState === 'ready' && readbackMatchesExecutorQuestion
+    && canAnswerTaskQuestion(card, username, view) && latest !== undefined
+    && answerAttemptedOperationId !== latest.operationId && !answerBusy;
+
+  async function readCurrentQuestion() {
+    await readLatest();
+    await Promise.resolve(onRefresh?.()).catch(() => undefined);
+  }
+
+  async function answerExecutorQuestion(value: string) {
+    if (!canAnswer || !latest) return;
+    const body = answerQuestionRequest({ expectedVersion: card.version, operationId: latest.operationId, value });
+    if (!body) return;
+    setAnswerAttemptedOperationId(latest.operationId);
+    setAnswerFeedbackFallback(null);
+    setAnswerBusy(true);
+    try {
+      const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const result: unknown = await response.json().catch(() => null);
+      const record = result && typeof result === 'object' && !Array.isArray(result)
+        ? result as Record<string, unknown> : undefined;
+      const parsed = record ? questionReadState({ taskQuestion: record.taskQuestion }) : { kind: 'invalid' as const };
+      const nextView = parsed.kind === 'ready' ? parsed.view : null;
+      if (nextView && nextView.requestId === latest.taskDecisionRequest?.requestId) setView(nextView);
+      const wireStatus = typeof record?.answerStatus === 'string' ? record.answerStatus : undefined;
+      const feedback = executorQuestionFeedback(nextView, wireStatus);
+      if (response.status === 200 || response.status === 202) {
+        setAnswerFeedbackFallback(feedback ?? (response.status === 202 ? 'unknown' : 'pending'));
+        setPanelState(nextView ? 'ready' : 'unknown');
+      } else {
+        setAnswerFeedbackFallback('declined');
+        setPanelState(response.status === 409 ? 'stale' : safeErrorState(response.status));
+      }
+      await Promise.resolve(onRefresh?.()).catch(() => undefined);
+      // Any ambiguous or declined response is followed only by a read. This path never retries the answer.
+      if (response.status !== 200 || feedback !== 'accepted') await readLatest();
+    } catch {
+      setAnswerFeedbackFallback('unknown');
+      setPanelState('unknown');
+      await readLatest();
+    } finally {
+      setAnswerBusy(false);
+    }
+  }
 
   async function createQuestion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -198,20 +258,37 @@ export function NoticeQuestionPanel({ card, open, username, onRefresh }: Props) 
     <section className="space-y-3 rounded-md border p-3" aria-label="Вопрос по задаче">
       <div>
         <h3 className="text-sm font-medium">Вопрос исполнителю</h3>
-        <p className="text-xs text-muted-foreground">Вопрос создаётся только после явного подтверждения. Открытие и обновление карточки ничего не отправляют.</p>
+        <p className="text-xs text-muted-foreground">{executorQuestion
+          ? 'Показывается сохранённый вопрос текущего запуска. Открытие и обновление карточки ничего не отправляют.'
+          : 'Вопрос создаётся только после явного подтверждения. Открытие и обновление карточки ничего не отправляют.'}</p>
       </div>
 
       {panelState === 'loading' && <p role="status" className="text-sm text-muted-foreground">Читаю сохранённый статус вопроса…</p>}
-      {panelState === 'ready' && view && <>
+      {executorQuestion && <ExecutorQuestionDetails
+        text={executorQuestion.text}
+        choices={executorQuestion.choices}
+        waitingReason={latest?.phase === 'waiting' ? latest.lastProgress || 'Исполнитель ожидает выбранный вариант ответа.' : null}
+        feedback={answerFeedback}
+        busy={answerBusy}
+        canAnswer={canAnswer}
+        readBusy={readBusy}
+        executionPhase={latest?.phase ?? 'unknown'}
+        executionReceiptPresent={Boolean(latest?.createReceiptText || latest?.dispatchReceiptText)}
+        continuations={latest?.continuations ?? []}
+        continuation={view?.continuation}
+        onAnswer={value => void answerExecutorQuestion(value)}
+        onRefreshRead={() => void readCurrentQuestion()}
+      />}
+      {panelState === 'ready' && view && !executorQuestion && <>
         <QuestionDetails view={view} />
-        <Button type="button" size="sm" variant="outline" disabled={readBusy} onClick={() => void readLatest()}>{readBusy ? 'Проверяю…' : 'Обновить статус вопроса (только чтение)'}</Button>
+        <Button type="button" size="sm" variant="outline" disabled={readBusy} onClick={() => void readCurrentQuestion()}>{readBusy ? 'Проверяю…' : 'Обновить статус вопроса (только чтение)'}</Button>
       </>}
       {panelState === 'none' && !eligible && <p className="text-sm text-muted-foreground">{card.column === 'blocked'
         ? 'Сначала укажи, что блокирует задачу, и верни её в работу. Сейчас активной сессии нет.'
         : card.needsReview || card.column === 'review'
           ? 'Задача ждёт приёмки. Вопрос можно задать после следующего запуска; сейчас активной сессии нет.'
           : 'Сначала запусти задачу. Сейчас нет подтверждённой активной сессии, куда можно отправить вопрос.'}</p>}
-      {panelState === 'none' && eligible && <form className="space-y-3" onSubmit={event => void createQuestion(event)}>
+      {panelState === 'none' && eligible && !executorQuestion && <form className="space-y-3" onSubmit={event => void createQuestion(event)}>
         <Input aria-label="Назначение вопроса" value={purpose} onChange={event => setPurpose(event.target.value)} maxLength={128} required />
         <Textarea aria-label="Текст вопроса" value={message} onChange={event => setMessage(event.target.value)} maxLength={4000} rows={3} required placeholder="Что нужно уточнить у исполнителя?" />
         <div className="grid gap-2 sm:grid-cols-2">
@@ -232,11 +309,11 @@ export function NoticeQuestionPanel({ card, open, username, onRefresh }: Props) 
         <p className="text-sm text-muted-foreground">{panelState === 'not-found'
           ? 'Сохранённая ссылка на вопрос есть, но Notice сейчас его не находит. Повторное создание отключено.'
           : 'Результат вопроса не подтверждён. Повторная отправка отключена; можно выполнить только чтение статуса.'}</p>
-        <Button type="button" size="sm" variant="outline" disabled={readBusy} onClick={() => void readLatest()}>{readBusy ? 'Проверяю…' : 'Проверить статус (только чтение)'}</Button>
+        <Button type="button" size="sm" variant="outline" disabled={readBusy} onClick={() => void readCurrentQuestion()}>{readBusy ? 'Проверяю…' : 'Проверить статус (только чтение)'}</Button>
       </div>}
       {['unavailable', 'stale', 'denied', 'error'].includes(panelState) && <div className="space-y-2">
         <p role="alert" className="text-sm text-destructive">{safeErrorText(panelState)}</p>
-        <Button type="button" size="sm" variant="outline" disabled={readBusy} onClick={() => void readLatest()}>{readBusy ? 'Проверяю…' : 'Повторить только чтение'}</Button>
+        <Button type="button" size="sm" variant="outline" disabled={readBusy} onClick={() => void readCurrentQuestion()}>{readBusy ? 'Проверяю…' : 'Повторить только чтение'}</Button>
       </div>}
       <p className="text-xs text-muted-foreground">Подтверждение ответа, таймаут и отправка уведомления показываются отдельно. Команды остановки/паузы и их подтверждения через эту панель недоступны.</p>
     </section>
