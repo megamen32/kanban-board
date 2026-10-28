@@ -15,6 +15,14 @@ const VERIFIED_BOARD_PROJECT = 'Олег и Никита';
 const QA_BOARD_PROJECT = 'ExManager QA';
 const QA_UX_PROJECT = 'UX QA 2026-10-26';
 const QA_UX_CARD_ID = '43687640-5245-4ec4-b29c-2b8970cb9d30';
+const QA_CARD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function qaUxFixtureIds(): ReadonlySet<string> {
+  const configured = (process.env.KANBAN_QA_ALLOWED_FIXTURE_IDS ?? '').split(',')
+    .map(id => id.trim().toLowerCase())
+    .filter(id => QA_CARD_ID_PATTERN.test(id));
+  return new Set([QA_UX_CARD_ID, ...configured]);
+}
 
 function boardReadProject(identity: { username: string; scope: 'work' | 'personal' }): string | null {
   if (identity.scope !== 'work') return null;
@@ -98,7 +106,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const canReadCard = qaRead
     ? card.project.trim() === QA_UX_PROJECT
     : qaTestLoginRead
-      ? id === QA_UX_CARD_ID && card.id === QA_UX_CARD_ID && card.project.trim() === QA_UX_PROJECT
+      ? qaUxFixtureIds().has(id.toLowerCase()) && card.id.toLowerCase() === id.toLowerCase() && card.project.trim() === QA_UX_PROJECT
     : identity !== null && mayReadBoardProject(identity, card.project);
   if (!managerAuthorized && !canReadCard) {
     return NextResponse.json({ error: 'not found' }, { status: 404 });

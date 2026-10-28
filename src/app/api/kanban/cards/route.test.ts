@@ -425,9 +425,11 @@ describe('GET /api/kanban/cards', () => {
   it('returns only the exact synthetic card to testlogin on the isolated QA board', async () => {
     authenticated.current = { username: 'testlogin', scope: 'work' };
     vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
+    vi.stubEnv('KANBAN_QA_ALLOWED_FIXTURE_IDS', 'f1b6dc21-ddde-4ddf-bd49-2c2a6b867fba');
     const anotherCard = { ...testLoginQaCard, id: 'another-qa-card' };
+    const l06Fixture = { ...testLoginQaCard, id: 'f1b6dc21-ddde-4ddf-bd49-2c2a6b867fba' };
     const sameIdOtherProject = { ...testLoginQaCard, project: 'Alpha' };
-    getAllCards.mockReturnValue([testLoginQaCard, anotherCard, sameIdOtherProject, alpha]);
+    getAllCards.mockReturnValue([testLoginQaCard, l06Fixture, anotherCard, sameIdOtherProject, alpha]);
     listProjects.mockReturnValue([
       { id: 'ux-qa-project', externalKey: 'ux-qa', name: 'UX QA 2026-10-26' },
       { id: 'other-project', externalKey: 'other', name: 'Alpha' },
@@ -437,7 +439,7 @@ describe('GET /api/kanban/cards', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      cards: [testLoginQaCard],
+      cards: [testLoginQaCard, l06Fixture],
       projects: [{ id: 'ux-qa-project', externalKey: 'ux-qa', name: 'UX QA 2026-10-26' }],
     });
     expect(tasksDirForScope).toHaveBeenCalledWith('work');

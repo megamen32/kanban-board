@@ -1,12 +1,13 @@
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'node:crypto';
 import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
 import { DEFAULT_COLUMNS, parseCatalogTaskLink, PLANNING_VERSION } from './types';
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
 import { approvalListForProject } from './project-reviewers';
 import { validateCardParentRelations, validateParentRelation } from './parent-relations';
-import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskExecutionContinuation, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls, TaskResult, TaskReviewRecord } from './types';
+import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskDecisionAnswerProposal, TaskExecutionContinuation, TaskExecutionQuestionProof, TaskExecutionQuestionContinuation, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls, TaskExecutionQuestionChoice, TaskResult, TaskReviewRecord } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
@@ -723,6 +724,106 @@ function stringArrayField(data: Record<string, unknown>, field: string): string[
   return [...value];
 }
 
+function taskExecutionQuestionField(value: unknown, field: string): TaskExecutionQuestionProof {
+  const keys = ['choices', 'contextRef', 'humanRequestId', 'questionHash', 'registrationCallId', 'registrationMessageId',
+    'registrationTarget', 'sourceInputMessageId', 'sourceJobId', 'sourceMessageHash', 'sourceMessageId', 'text', 'timeoutValue'];
+  if (!isRecord(value) || Object.keys(value).sort().join('\0') !== keys.join('\0')
+      || typeof value.humanRequestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.humanRequestId)
+      || typeof value.contextRef !== 'string' || !/^exmanager-task:[^:]+:[a-f0-9]{64}$/.test(value.contextRef)
+      || typeof value.registrationMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(value.registrationMessageId)
+      || typeof value.registrationCallId !== 'string' || !/^[A-Za-z0-9_-]{8,256}$/.test(value.registrationCallId)
+      || !isRecord(value.registrationTarget) || Object.keys(value.registrationTarget).sort().join('\0') !== 'cwd\0harness\0sessionId'
+      || value.registrationTarget.harness !== 'opencode'
+      || typeof value.registrationTarget.sessionId !== 'string' || !value.registrationTarget.sessionId.trim() || value.registrationTarget.sessionId.length > 512
+      || typeof value.registrationTarget.cwd !== 'string' || !path.isAbsolute(value.registrationTarget.cwd)
+      || typeof value.sourceMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(value.sourceMessageId)
+      || typeof value.sourceMessageHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.sourceMessageHash)
+      || typeof value.sourceInputMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(value.sourceInputMessageId)
+      || typeof value.sourceJobId !== 'string' || !/^job_[a-f0-9]{64}$/.test(value.sourceJobId)
+      || typeof value.text !== 'string' || !value.text.trim() || value.text.length > 4_000 || /[\x00-\x08\x0b-\x1f\x7f]/.test(value.text)
+      || !Array.isArray(value.choices) || value.choices.length < 2 || value.choices.length > 4
+      || typeof value.timeoutValue !== 'string' || typeof value.questionHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.questionHash)) {
+    throw invalidPlanningField(field, 'invalid immutable OpenCode executor question proof');
+  }
+  const choices: TaskExecutionQuestionChoice[] = [];
+  for (const item of value.choices) {
+    if (!isRecord(item) || Object.keys(item).sort().join('\0') !== 'label\0value'
+        || typeof item.value !== 'string' || !item.value.trim() || item.value.length > 128 || /[\x00-\x1f\x7f]/.test(item.value)
+        || typeof item.label !== 'string' || !item.label.trim() || item.label.length > 256 || /[\x00-\x1f\x7f]/.test(item.label)) {
+      throw invalidPlanningField(`${field}.choices`, 'invalid executor question choice');
+    }
+    choices.push({ value: item.value, label: item.label });
+  }
+  if (new Set(choices.map(choice => choice.value)).size !== choices.length
+      || !choices.some(choice => choice.value === value.timeoutValue)
+      || choices.some(choice => choice.value === 'stop' || choice.value === 'hold')) {
+    throw invalidPlanningField(`${field}.choices`, 'duplicate, control-reserved or invalid timeout choice');
+  }
+  return {
+    humanRequestId: value.humanRequestId, contextRef: value.contextRef,
+    registrationMessageId: value.registrationMessageId, registrationCallId: value.registrationCallId,
+    registrationTarget: { harness: 'opencode', sessionId: value.registrationTarget.sessionId, cwd: value.registrationTarget.cwd },
+    sourceMessageId: value.sourceMessageId, sourceMessageHash: value.sourceMessageHash,
+    sourceInputMessageId: value.sourceInputMessageId, sourceJobId: value.sourceJobId,
+    text: value.text, choices, timeoutValue: value.timeoutValue, questionHash: value.questionHash,
+  };
+}
+
+function taskDecisionAnswerProposalField(value: unknown, field: string, entry: Record<string, unknown>): TaskDecisionAnswerProposal {
+  const keys = ['authenticatedActor', 'cardVersion', 'humanRequestId', 'proposalRef', 'purpose', 'requestHash', 'requestId',
+    'sourceJobId', 'sourceMessageId', 'stopEpoch', 'value', 'version'];
+  const reference = isRecord(entry.taskDecisionRequest) ? entry.taskDecisionRequest : undefined;
+  if (!isRecord(value) || Object.keys(value).sort().join('\0') !== keys.join('\0')
+      || !reference || !Number.isSafeInteger(reference.version)
+      || typeof value.proposalRef !== 'string' || !/^board-[a-f0-9]{40}$/.test(value.proposalRef)
+      || typeof value.requestId !== 'string' || !/^td-[a-f0-9]{40}$/.test(value.requestId)
+      || typeof value.humanRequestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.humanRequestId)
+      || typeof value.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.requestHash)
+      || typeof value.purpose !== 'string' || !value.purpose.trim() || value.purpose.length > 128
+      || !Number.isSafeInteger(value.version) || (value.version as number) < 1
+      || typeof value.value !== 'string' || !value.value.trim() || value.value.length > 128 || /[\x00-\x1f\x7f]/.test(value.value)
+      || typeof value.authenticatedActor !== 'string' || !value.authenticatedActor.trim() || value.authenticatedActor.length > 256
+      || !Number.isSafeInteger(value.cardVersion) || (value.cardVersion as number) < (reference.version as number)
+      || (value.cardVersion as number) > (entry.lastBoardVersion as number)
+      || typeof value.stopEpoch !== 'string' || !/^[a-f0-9]{64}$/.test(value.stopEpoch)
+      || typeof value.sourceMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(value.sourceMessageId)
+      || typeof value.sourceJobId !== 'string' || !/^job_[a-f0-9]{64}$/.test(value.sourceJobId)
+      || value.requestId !== reference.requestId || value.requestHash !== reference.requestHash
+      || value.purpose !== reference.purpose || value.version !== reference.version) {
+    throw invalidPlanningField(field, 'invalid immutable task decision answer proposal');
+  }
+  return {
+    proposalRef: value.proposalRef, requestId: value.requestId, humanRequestId: value.humanRequestId,
+    requestHash: value.requestHash, purpose: value.purpose, version: value.version as number,
+    value: value.value, authenticatedActor: value.authenticatedActor, cardVersion: value.cardVersion as number,
+    stopEpoch: value.stopEpoch, sourceMessageId: value.sourceMessageId, sourceJobId: value.sourceJobId,
+  };
+}
+
+function taskDecisionQuestionContinuationField(value: unknown, field: string, entry: Record<string, unknown>,
+  question: TaskExecutionQuestionProof | undefined): TaskExecutionQuestionContinuation {
+  const keys = ['assistantMessageId', 'idempotencyKey', 'inputId', 'nativeInputMessageId', 'nativeTurnId',
+    'receipt', 'requestId', 'resultRef', 'updatedAt'];
+  if (!isRecord(value) || Object.keys(value).sort().join('\0') !== keys.join('\0') || !question
+      || value.requestId !== question.humanRequestId
+      || typeof value.resultRef !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.resultRef)
+      || typeof value.idempotencyKey !== 'string' || !/^[A-Za-z0-9:_-]{1,512}$/.test(value.idempotencyKey)
+      || typeof value.receipt !== 'string' || value.receipt !== `agent-herder://opencode/${question.registrationTarget.sessionId}/${value.idempotencyKey}`
+      || typeof value.inputId !== 'string' || value.inputId !== `herder-resume-${createHash('sha256').update(value.idempotencyKey).digest('hex').slice(0, 32)}`
+      || typeof value.nativeInputMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(value.nativeInputMessageId)
+      || typeof value.nativeTurnId !== 'string' || !value.nativeTurnId.trim() || value.nativeTurnId.length > 512
+      || typeof value.assistantMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(value.assistantMessageId)
+      || typeof value.updatedAt !== 'string' || Number.isNaN(Date.parse(value.updatedAt))
+      || entry.phase !== 'result' || !entry.taskDecisionProposal) {
+    throw invalidPlanningField(field, 'invalid source-bound task-answer continuation proof');
+  }
+  return {
+    requestId: value.requestId as string, resultRef: value.resultRef, idempotencyKey: value.idempotencyKey,
+    receipt: value.receipt, inputId: value.inputId, nativeInputMessageId: value.nativeInputMessageId, nativeTurnId: value.nativeTurnId,
+    assistantMessageId: value.assistantMessageId, updatedAt: value.updatedAt,
+  };
+}
+
 function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
   if (!Array.isArray(value) || value.length > 32) throw invalidPlanningField('task_execution_history', 'expected at most 32 execution receipts');
   const seen = new Set<string>();
@@ -766,6 +867,19 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
         || (entry.taskDecisionRequest.version as number) > (entry.lastBoardVersion as number))) {
       throw invalidPlanningField(field, 'invalid immutable operation identity or receipt state');
     }
+    const executorQuestion = entry.executorQuestion === undefined ? undefined
+      : taskExecutionQuestionField(entry.executorQuestion, `${field}.executorQuestion`);
+    const taskDecisionProposal = entry.taskDecisionProposal === undefined ? undefined
+      : taskDecisionAnswerProposalField(entry.taskDecisionProposal, `${field}.taskDecisionProposal`, entry);
+    const taskDecisionContinuation = entry.taskDecisionContinuation === undefined ? undefined
+      : taskDecisionQuestionContinuationField(entry.taskDecisionContinuation, `${field}.taskDecisionContinuation`, entry, executorQuestion);
+    if (taskDecisionProposal && (!executorQuestion
+        || taskDecisionProposal.humanRequestId !== executorQuestion.humanRequestId
+        || taskDecisionProposal.sourceMessageId !== executorQuestion.sourceMessageId
+        || taskDecisionProposal.sourceJobId !== executorQuestion.sourceJobId
+        || !executorQuestion.choices.some(choice => choice.value === taskDecisionProposal.value))) {
+      throw invalidPlanningField(`${field}.taskDecisionProposal`, 'proposal is not bound to the saved executor question');
+    }
     if (['created', 'dispatch-unknown', 'running', 'waiting', 'stopped', 'result'].includes(String(entry.phase)) && !entry.nativeSessionId) {
       throw invalidPlanningField(`${field}.nativeSessionId`, 'required after session creation');
     }
@@ -797,6 +911,9 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
         purpose: entry.taskDecisionRequest.purpose as string,
         version: entry.taskDecisionRequest.version as number,
       } } : {}),
+      ...(executorQuestion ? { executorQuestion } : {}),
+      ...(taskDecisionProposal ? { taskDecisionProposal } : {}),
+      ...(taskDecisionContinuation ? { taskDecisionContinuation } : {}),
       ...(typeof entry.createReceiptText === 'string' ? { createReceiptText: entry.createReceiptText } : {}),
       ...(typeof entry.dispatchReceiptText === 'string' ? { dispatchReceiptText: entry.dispatchReceiptText } : {}),
       ...(typeof entry.lastProgress === 'string' ? { lastProgress: entry.lastProgress } : {}),

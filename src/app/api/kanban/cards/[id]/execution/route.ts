@@ -10,7 +10,8 @@ import { callOwnerHerderTool, readOwnerHerderResource, type HerderResourceResult
 import { validateTransition } from '@/lib/kanban/transition-policy';
 import { markSourceIntentConsumed } from '../../../../../../lib/kanban/source-operation';
 import { currentNativeProjectContext } from '../../../../../../lib/kanban/native-request-context';
-import type { KanbanCard, KanbanCardUpdates, TaskDecisionRequestReference, TaskExecutionContinuation, TaskExecutionProjectBinding, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls } from '@/lib/kanban/types';
+import { parseExecutorQuestionPayload } from '../../../../../../components/kanban/notice-question-model';
+import type { KanbanCard, KanbanCardUpdates, TaskDecisionRequestReference, TaskExecutionContinuation, TaskExecutionProjectBinding, TaskExecutionQuestionProof, TaskExecutionQuestionContinuation, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls } from '@/lib/kanban/types';
 import type { NativeProjectAccessContext } from '@/lib/kanban/native-project-access';
 
 export const runtime = 'nodejs';
@@ -377,14 +378,30 @@ function saveReceiptProgress(
   return undefined;
 }
 
-function taskPrompt(card: KanbanCard): string {
-  return [
+function taskPrompt(card: KanbanCard, execution?: { operationId: string; harness: RouteHarness; sessionId: string; cwd: string }): string {
+  const parts = [
     `Выполни задачу канбан карточки ${card.id} из проекта «${card.project}».`,
     `Название: ${card.title}`,
     `Описание задачи:\n${card.description}`,
     'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
     'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
-  ].join('\n\n').slice(0, MAX_TASK_TEXT);
+  ];
+  if (execution?.harness === 'opencode') {
+    const contextRef = `exmanager-task:${card.id}:${execution.operationId}`;
+    parts.push(
+      `Если для продолжения нужна ясность от ответственного, используй только metadata-only вызов agent-herder_human_request_create с kind="user", harness="opencode", sessionId=${JSON.stringify(execution.sessionId)}, cwd=${JSON.stringify(execution.cwd)}, contextRef=${JSON.stringify(contextRef)}. Не передавай message, choices или notify: вызов только закрепляет эту задачу и сессию.`,
+      'После успешного binding верни только один обычный JSON-объект без Markdown и текста вокруг: {"kind":"question","human_request_id":"<binding.request_id>","question":"<твой точный вопрос>","choices":[{"value":"<value>","label":"<вариант>"},{"value":"<value>","label":"<вариант>"}],"timeoutValue":"<один из value>"}. Не подменяй вопрос ответом или результатом задачи.',
+    );
+  }
+  return parts.join('\n\n').slice(0, MAX_TASK_TEXT);
+}
+
+function taskPromptForReceipt(card: KanbanCard, receipt: TaskExecutionReceipt): string {
+  const cwd = executionReceiptCwd(receipt);
+  return receipt.harness === 'opencode' && receipt.nativeSessionId && cwd
+    ? taskPrompt(card, { operationId: receipt.operationId, harness: receipt.harness,
+      sessionId: receipt.nativeSessionId, cwd })
+    : taskPrompt(card);
 }
 
 function taskFollowUpPrompt(card: KanbanCard, instruction: string): string {
@@ -895,6 +912,121 @@ function openCodeVisibleText(message: RecordValue): string | undefined {
   return text || undefined;
 }
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (isRecord(value)) return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new TypeError('unsupported canonical JSON value');
+  return serialized;
+}
+
+function jsonRecord(value: unknown): RecordValue | undefined {
+  if (isRecord(value)) return value;
+  if (typeof value !== 'string') return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function humanRequestBindingFromPart(
+  part: RecordValue,
+  expected: { cardId: string; operationId: string; sessionId: string; cwd: string },
+): { requestId: string; contextRef: string; callId: string; messageId: string; target: { harness: 'opencode'; sessionId: string; cwd: string } } | undefined {
+  if (part.type !== 'tool' || part.tool !== 'agent-herder_human_request_create' || typeof part.callID !== 'string' || !part.callID.trim()
+      || !isRecord(part.state) || part.state.status !== 'completed' || typeof part.state.output !== 'string'
+      || !isRecord(part.state.input)) return undefined;
+  const input = part.state.input;
+  const expectedContextRef = `exmanager-task:${expected.cardId}:${expected.operationId}`;
+  const inputKeys = ['contextRef', 'cwd', 'harness', 'kind', 'sessionId'];
+  if (Object.keys(input).sort().join('\0') !== inputKeys.join('\0')
+      || input.kind !== 'user' || input.harness !== 'opencode' || input.sessionId !== expected.sessionId
+      || input.cwd !== expected.cwd || input.contextRef !== expectedContextRef) return undefined;
+  const output = jsonRecord(part.state.output);
+  const binding = output && isRecord(output.binding) ? output.binding : undefined;
+  const target = binding && isRecord(binding.native_target) ? binding.native_target : undefined;
+  if (!binding || typeof binding.request_id !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(binding.request_id)
+      || binding.kind !== 'user' || binding.context_ref !== expectedContextRef || binding.question !== undefined
+      || !target || target.harness !== 'opencode' || target.session_id !== expected.sessionId || target.cwd !== expected.cwd) return undefined;
+  return {
+    requestId: binding.request_id,
+    contextRef: expectedContextRef,
+    callId: part.callID,
+    messageId: typeof part.messageID === 'string' ? part.messageID : '',
+    target: { harness: 'opencode', sessionId: expected.sessionId, cwd: expected.cwd },
+  };
+}
+
+function executorQuestionFromOpenCodeMessages(
+  messages: RecordValue[],
+  userIndex: number,
+  expected: {
+    cardId: string;
+    operationId: string;
+    sessionId: string;
+    cwd: string;
+    inputId: string;
+    sourceInputMessageId: string;
+    sourceJobId: string;
+    turnId?: string;
+  },
+): TaskExecutionQuestionProof | undefined {
+  const userMessage = messages[userIndex];
+  if (!userMessage || userMessage.role !== 'user' || userMessage.id !== expected.sourceInputMessageId
+      || userMessage.inputId !== undefined && userMessage.inputId !== expected.inputId
+      || messages.slice(userIndex + 1).some(message => message.role === 'user')) return undefined;
+  const registrations: Array<{ messageIndex: number; binding: NonNullable<ReturnType<typeof humanRequestBindingFromPart>> }> = [];
+  for (let index = userIndex + 1; index < messages.length; index++) {
+    const message = messages[index]!;
+    if (message.role !== 'assistant' || expected.turnId && typeof message.turnId === 'string' && message.turnId !== expected.turnId || !Array.isArray(message.parts)) continue;
+    for (const part of message.parts.filter(isRecord)) {
+      const binding = humanRequestBindingFromPart(part, expected);
+      if (binding) registrations.push({ messageIndex: index, binding: { ...binding, messageId: String(message.id ?? '') } });
+    }
+  }
+  if (registrations.length !== 1) return undefined;
+  const registration = registrations[0]!;
+  if (!/^msg_[A-Za-z0-9_-]{8,256}$/.test(registration.binding.messageId)
+      || !/^[A-Za-z0-9_-]{8,256}$/.test(registration.binding.callId)) return undefined;
+  const questions: Array<{ messageId: string; rawText: string; payload: NonNullable<ReturnType<typeof parseExecutorQuestionPayload>> }> = [];
+  for (let index = registration.messageIndex + 1; index < messages.length; index++) {
+    const message = messages[index]!;
+    if (message.role !== 'assistant' || expected.turnId && typeof message.turnId === 'string' && message.turnId !== expected.turnId
+        || !['stop', 'completed'].includes(String(message.phase)) || !Array.isArray(message.parts)) continue;
+    const textParts = message.parts.filter(isRecord).filter(part => part.type === 'text' && part.ignored !== true && typeof part.text === 'string');
+    if (textParts.length !== 1 || typeof message.id !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(message.id)) continue;
+    const rawText = textParts[0]!.text as string;
+    let rawQuestion: unknown;
+    try { rawQuestion = JSON.parse(rawText); } catch { continue; }
+    const payload = parseExecutorQuestionPayload(rawQuestion, registration.binding.requestId);
+    if (payload) questions.push({ messageId: message.id, rawText, payload });
+  }
+  if (questions.length !== 1) return undefined;
+  const question = questions[0]!;
+  const sourceMessageHash = sha256(question.rawText);
+  const fields = {
+    humanRequestId: question.payload.humanRequestId,
+    sourceMessageId: question.messageId,
+    sourceMessageHash,
+    sourceInputMessageId: expected.sourceInputMessageId,
+    sourceJobId: expected.sourceJobId,
+    text: question.payload.text,
+    choices: question.payload.choices,
+    timeoutValue: question.payload.timeoutValue,
+  };
+  return {
+    ...fields,
+    contextRef: registration.binding.contextRef,
+    registrationMessageId: registration.binding.messageId,
+    registrationCallId: registration.binding.callId,
+    registrationTarget: registration.binding.target,
+    questionHash: sha256(canonicalJson(fields)),
+  };
+}
+
 function userMessageJobId(harness: RouteHarness, sessionId: string, inputId: string): string {
   return `job_${sha256(['user-message', harness, sessionId, inputId].join('\0'))}`;
 }
@@ -919,7 +1051,7 @@ interface VerifiedOpenCodeFirstUserInput extends VerifiedOpenCodeDeliveryJob {
 async function verifiedOpenCodeDeliveryJob(receipt: TaskExecutionReceipt, inputId: string): Promise<VerifiedOpenCodeDeliveryJob | undefined> {
   if (receipt.harness !== 'opencode' || !receipt.nativeSessionId || !receipt.projectBinding
       || receipt.projectBinding.harness !== 'opencode' || receipt.projectBinding.hostId !== receipt.hostId
-      || !/^[a-f0-9]{64}$/.test(inputId)) return undefined;
+      || !/^(?:[a-f0-9]{64}|herder-resume-[a-f0-9]{32})$/.test(inputId)) return undefined;
   const jobId = userMessageJobId(receipt.harness, receipt.nativeSessionId, inputId);
   let jobTool: HerderToolResult;
   try { jobTool = await callOwnerHerderTool('job_get', { jobId }); }
@@ -1067,6 +1199,7 @@ async function dispatchCreatedTask(input: {
   requestHash: string;
   nativeSessionId: string;
   messageInputId: string;
+  cwd: string;
   admittedStatus: number;
   harness: RouteHarness;
 }): Promise<NextResponse> {
@@ -1074,7 +1207,8 @@ async function dispatchCreatedTask(input: {
   try {
     dispatchTool = await callOwnerHerderTool('send_message', {
       sessionId: input.nativeSessionId, harness: input.harness, inputId: input.messageInputId,
-      message: taskPrompt(input.card), mode: 'queue', humanRequested: true,
+      message: taskPrompt(input.card, { operationId: input.operationId, harness: input.harness,
+        sessionId: input.nativeSessionId, cwd: input.cwd }), mode: 'queue', humanRequested: true,
     });
   } catch {
     const saved = saveReceiptProgress(input.card.id, input.tasksDir, input.operationId, input.requestHash, {
@@ -1145,13 +1279,31 @@ interface TaskQuestionView {
   decision: { source: 'human' | 'timeout'; value: string; decidedAt: number | null } | null;
   deliveryStatus?: string;
   idempotent?: boolean;
+  answerStatus?: 'accepted' | 'duplicate' | 'unknown' | 'conflict' | 'pending' | 'timeout' | 'control_requested' | 'no_accept';
+  continuation?: RecordValue;
 }
 
-function noticeConfig(requireRecipient: boolean): { token: string; recipient?: string } | undefined {
+function noticeTaskDecisionUrl(): string | undefined {
+  const configured = process.env.EXMANAGER_NOTICE_API_BASE_URL?.trim();
+  if (!configured) return NOTICE_TASK_DECISION_URL;
+  try {
+    const url = new URL(configured);
+    const localHttp = url.origin === 'http://192.168.192.1:19450'
+      && process.env.KANBAN_QA_ANONYMOUS_READS === '1';
+    if ((!localHttp && url.protocol !== 'https:') || url.username || url.password || url.search || url.hash
+        || !['', '/'].includes(url.pathname)) return undefined;
+    return `${url.origin}/v1/task-decisions`;
+  } catch {
+    return undefined;
+  }
+}
+
+function noticeConfig(requireRecipient: boolean): { token: string; recipient?: string; apiBaseUrl: string } | undefined {
   const token = process.env.EXMANAGER_NOTICE_PROJECT_TOKEN?.trim();
   const recipient = process.env.NOTIFY_CENTER_RECIPIENT?.trim();
-  if (!token || requireRecipient && !recipient) return undefined;
-  return { token, ...(recipient ? { recipient } : {}) };
+  const apiBaseUrl = noticeTaskDecisionUrl();
+  if (!token || !apiBaseUrl || requireRecipient && !recipient) return undefined;
+  return { token, apiBaseUrl, ...(recipient ? { recipient } : {}) };
 }
 
 function noticeRequestId(taskId: string, purpose: string, version: number): string {
@@ -1187,13 +1339,14 @@ function validTaskQuestionInput(value: unknown): TaskQuestionInput | undefined {
 async function noticeFetch(
   token: string,
   method: 'GET' | 'POST',
+  apiBaseUrl: string,
   requestId?: string,
   mandate?: RecordValue,
 ): Promise<{ status: number; payload?: RecordValue } | undefined> {
   try {
     const response = await fetch(requestId
-      ? `${NOTICE_TASK_DECISION_URL}/${encodeURIComponent(requestId)}`
-      : NOTICE_TASK_DECISION_URL, {
+      ? `${apiBaseUrl}/${encodeURIComponent(requestId)}`
+      : apiBaseUrl, {
       method,
       redirect: 'error',
       cache: 'no-store',
@@ -1203,6 +1356,36 @@ async function noticeFetch(
         ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
       },
       ...(method === 'POST' ? { body: JSON.stringify({ mandate }) } : {}),
+      signal: AbortSignal.timeout(4_000),
+    });
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > MAX_NOTICE_RESPONSE_BYTES) return { status: 502 };
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch { return { status: 502 }; }
+    return { status: response.status, ...(isRecord(payload) ? { payload } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
+async function noticeResolveFetch(
+  token: string,
+  apiBaseUrl: string,
+  requestId: string,
+  proposalRef: string,
+): Promise<{ status: number; payload?: RecordValue } | undefined> {
+  try {
+    const response = await fetch(`${apiBaseUrl}/${encodeURIComponent(requestId)}/resolve`, {
+      method: 'POST',
+      redirect: 'error',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': proposalRef,
+      },
+      body: JSON.stringify({ proposal_ref: proposalRef }),
       signal: AbortSignal.timeout(4_000),
     });
     const text = await response.text();
@@ -1256,6 +1439,11 @@ function taskQuestionView(
   const rawDeadline = payload.notification.deadline_at;
   if (rawDeadline !== null && rawDeadline !== undefined
       && (typeof rawDeadline !== 'number' || !Number.isFinite(rawDeadline) || !delivered)) return undefined;
+  const answerStatus = typeof payload.answer_status === 'string'
+      && ['accepted', 'duplicate', 'unknown', 'conflict', 'pending', 'timeout', 'control_requested', 'no_accept'].includes(payload.answer_status)
+    ? payload.answer_status as TaskQuestionView['answerStatus'] : undefined;
+  if (payload.continuation !== undefined
+      && (!isRecord(payload.continuation) || typeof payload.continuation.state !== 'string')) return undefined;
   return {
     requestId: reference.requestId,
     purpose: reference.purpose,
@@ -1273,9 +1461,205 @@ function taskQuestionView(
       deadlineAt: delivered && typeof rawDeadline === 'number' ? rawDeadline : null,
     },
     decision,
+    ...(answerStatus ? { answerStatus } : {}),
+    ...(isRecord(payload.continuation) ? { continuation: {
+      state: String(payload.continuation.state),
+      ...(typeof payload.continuation.request_id === 'string' ? { request_id: payload.continuation.request_id } : {}),
+      ...(typeof payload.continuation.result_ref === 'string' ? { result_ref: payload.continuation.result_ref } : {}),
+      ...(typeof payload.continuation.idempotency_key === 'string' ? { idempotency_key: payload.continuation.idempotency_key } : {}),
+      ...(typeof payload.continuation.receipt === 'string' ? { receipt: payload.continuation.receipt } : {}),
+      ...(typeof payload.continuation.input_id === 'string' ? { input_id: payload.continuation.input_id } : {}),
+    } } : {}),
     ...(typeof payload.delivery_status === 'string' ? { deliveryStatus: payload.delivery_status } : {}),
     ...(typeof payload.idempotent === 'boolean' ? { idempotent: payload.idempotent } : {}),
   };
+}
+
+function verifiedQuestionContinuation(view: TaskQuestionView, attempt: TaskExecutionReceipt):
+  { requestId: string; resultRef: string; idempotencyKey: string; receipt: string; inputId: string } | undefined {
+  const continuation = view.continuation;
+  const question = attempt.executorQuestion;
+  if (!continuation || continuation.state !== 'accepted' || !question
+      || continuation.request_id !== question.humanRequestId
+      || typeof continuation.result_ref !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(continuation.result_ref)
+      || typeof continuation.idempotency_key !== 'string'
+      || !/^[A-Za-z0-9:_-]{1,512}$/.test(continuation.idempotency_key)
+      || continuation.input_id !== `herder-resume-${sha256(continuation.idempotency_key).slice(0, 32)}`
+      || !attempt.nativeSessionId
+      || continuation.receipt !== `agent-herder://opencode/${attempt.nativeSessionId}/${continuation.idempotency_key}`) return undefined;
+  return {
+    requestId: question.humanRequestId,
+    resultRef: continuation.result_ref,
+    idempotencyKey: continuation.idempotency_key,
+    receipt: continuation.receipt,
+    inputId: continuation.input_id,
+  };
+}
+
+/** Accept a question result only from the exact Herder callback input caused by its Notice answer. */
+async function syncExecutorQuestionContinuation(
+  context: AuthorizedTaskCard,
+  attempt: TaskExecutionReceipt,
+): Promise<NextResponse> {
+  const question = attempt.executorQuestion;
+  const reference = attempt.taskDecisionRequest;
+  const proposal = attempt.taskDecisionProposal;
+  if (!question || !reference || !proposal || attempt.phase !== 'waiting' || attempt.harness !== 'opencode'
+      || !attempt.nativeSessionId || !attempt.projectBinding || attempt.projectBinding.harness !== 'opencode'
+      || attempt.projectBinding.hostId !== attempt.hostId || attempt.projectBinding.projectId !== context.card.project
+      || attempt.lastBoardVersion !== context.card.version
+      || question.sourceInputMessageId !== attempt.nativeInputMessageId
+      || question.sourceJobId !== attempt.nativeDispatchJobId
+      || proposal.humanRequestId !== question.humanRequestId || proposal.requestId !== reference.requestId
+      || proposal.sourceMessageId !== question.sourceMessageId || proposal.sourceJobId !== question.sourceJobId) {
+    return NextResponse.json({ ...taskExecutionSnapshot(context.card), waitReason: 'Ожидается актуальная квитанция ответа исполнителя' }, {
+      status: 202, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+  const latestStop = latestStopControl(attempt.sessionControls);
+  if (latestStop) return NextResponse.json({ ...taskExecutionSnapshot(context.card), waitReason: 'Продолжение заблокировано квитанцией остановки' }, {
+    status: 409, headers: { 'Cache-Control': 'no-store' },
+  });
+  const config = noticeConfig(true);
+  if (!config?.recipient) return NextResponse.json({ error: 'Notice task-decision read channel is not configured' }, { status: 503 });
+  const notice = await noticeFetch(config.token, 'GET', config.apiBaseUrl, reference.requestId);
+  if (!notice || notice.status !== 200 || !notice.payload) {
+    return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: { requestId: reference.requestId, state: 'unknown' },
+      waitReason: 'Ожидается readback решения Notice; повтор доставки не выполнялся' }, {
+      status: 202, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+  const view = taskQuestionView(notice.payload, context.card.id, attempt.operationId, reference, context.card.project, config.recipient);
+  if (!view || view.decision?.source !== 'human' || view.decision.value !== proposal.value
+      || !['accepted', 'duplicate'].includes(String(view.answerStatus))) {
+    return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: view ?? { requestId: reference.requestId, state: 'unknown' },
+      waitReason: 'Notice ещё не подтвердил именно сохранённый ответ' }, {
+      status: 202, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+  const continuation = verifiedQuestionContinuation(view, attempt);
+  if (!continuation) return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: view,
+    waitReason: 'Notice пока не вернул квитанцию фактического продолжения Herder' }, {
+    status: 202, headers: { 'Cache-Control': 'no-store' },
+  });
+
+  const messages = await readOpenCodeMessages(attempt.nativeSessionId);
+  if (!messages) return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: view,
+    waitReason: 'Нативная история callback-ввода пока недоступна' }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+  const questionIndices = messages.flatMap((message, index) => message.role === 'assistant' && message.id === question.sourceMessageId ? [index] : []);
+  const callbackIndices = messages.flatMap((message, index) => message.role === 'user' && typeof message.id === 'string'
+    && /^msg_[A-Za-z0-9_-]{8,256}$/.test(message.id) && message.inputId === continuation.inputId ? [index] : []);
+  if (questionIndices.length !== 1 || callbackIndices.length !== 1 || callbackIndices[0]! <= questionIndices[0]!) {
+    return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: view,
+      waitReason: 'Callback не является точным следующим вводом после исходного вопроса' }, {
+      status: 202, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+  const callbackInputMessageId = String(messages[callbackIndices[0]!]!.id);
+  const interveningUser = messages.slice(questionIndices[0]! + 1, callbackIndices[0]!).some(message => message.role === 'user');
+  if (interveningUser) return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: view,
+    waitReason: 'В связанной сессии есть посторонний ввод до callback; результат не принят' }, {
+    status: 202, headers: { 'Cache-Control': 'no-store' },
+  });
+
+  const info = await callOwnerHerderTool('agent_info', { harness: 'opencode', sessionId: attempt.nativeSessionId });
+  const infoPayload = isRecord(info.structuredContent) ? info.structuredContent : undefined;
+  const session = isRecord(infoPayload?.session) ? infoPayload.session : undefined;
+  const lastTurn = isRecord(session?.meta) && isRecord(session.meta.nativeLastTurn) ? session.meta.nativeLastTurn : undefined;
+  const cwd = executionReceiptCwd(attempt);
+  const turnId = typeof lastTurn?.turnId === 'string' ? lastTurn.turnId : undefined;
+  if (!session || session.id !== attempt.nativeSessionId || session.harness !== 'opencode' || session.hostId !== attempt.hostId
+      || session.cwd !== cwd || session.model !== expectedModel(attempt) || session.status !== 'idle'
+      || !turnId || lastTurn?.status !== 'completed' || lastTurn.assistantSucceeded === false
+      || lastTurn.cancelledByUser === true || lastTurn.transportLost === true) {
+    return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: view,
+      waitReason: 'Ожидается завершение точного callback-turn в связанной OpenCode-сессии' }, {
+      status: 202, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+  const assistant = completedOpenCodeAssistant(messages, callbackIndices[0]!, turnId, callbackInputMessageId);
+  if (!assistant || typeof assistant.text !== 'string' || !assistant.text.trim()
+      || typeof assistant.id !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(assistant.id)
+      || turnId.length > 512) {
+    return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: view,
+      waitReason: 'Завершённый callback-turn пока не содержит assistant результата' }, {
+      status: 202, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+  const confirm = await callOwnerHerderTool('agent_info', { harness: 'opencode', sessionId: attempt.nativeSessionId });
+  const confirmed = isRecord(confirm.structuredContent) && isRecord(confirm.structuredContent.session)
+    ? confirm.structuredContent.session : undefined;
+  const confirmedLastTurn = isRecord(confirmed?.meta) && isRecord(confirmed.meta.nativeLastTurn) ? confirmed.meta.nativeLastTurn : undefined;
+  const confirmedMessages = await readOpenCodeMessages(attempt.nativeSessionId);
+  const confirmedQuestionIndices = confirmedMessages?.flatMap((message, index) => message.role === 'assistant'
+    && message.id === question.sourceMessageId ? [index] : []) ?? [];
+  const confirmedCallbackIndices = confirmedMessages?.flatMap((message, index) => message.role === 'user'
+    && message.id === callbackInputMessageId && message.inputId === continuation.inputId ? [index] : []) ?? [];
+  const confirmedCallbackIndex = confirmedCallbackIndices.length === 1 ? confirmedCallbackIndices[0]! : -1;
+  const confirmedAssistant = confirmedMessages && confirmedCallbackIndex >= 0
+    ? completedOpenCodeAssistant(confirmedMessages, confirmedCallbackIndex, turnId, callbackInputMessageId) : undefined;
+  const confirmedNextUserIndex = confirmedMessages && confirmedQuestionIndices.length === 1
+    ? confirmedMessages.findIndex((message, index) => index > confirmedQuestionIndices[0]! && message.role === 'user') : -1;
+  const noticeConfirmation = await noticeFetch(config.token, 'GET', config.apiBaseUrl, reference.requestId);
+  const finalView = noticeConfirmation?.status === 200 && noticeConfirmation.payload
+    ? taskQuestionView(noticeConfirmation.payload, context.card.id, attempt.operationId, reference, context.card.project, config.recipient)
+    : undefined;
+  const finalContinuation = finalView ? verifiedQuestionContinuation(finalView, attempt) : undefined;
+  if (!confirmed || confirmed.id !== attempt.nativeSessionId || confirmed.hostId !== attempt.hostId
+      || confirmed.cwd !== cwd || confirmed.model !== expectedModel(attempt) || confirmed.status !== 'idle'
+      || confirmedLastTurn?.turnId !== turnId || confirmedLastTurn.status !== 'completed'
+      || confirmedLastTurn.assistantSucceeded === false || confirmedLastTurn.cancelledByUser === true
+      || confirmedLastTurn.transportLost === true || !confirmedAssistant || confirmedAssistant.id !== assistant.id
+      || confirmedAssistant.text !== assistant.text || confirmedAssistant.turnId !== turnId
+      || confirmedQuestionIndices.length !== 1 || confirmedNextUserIndex !== confirmedCallbackIndex
+      || confirmedCallbackIndices.length !== 1
+      || confirmedCallbackIndex <= confirmedQuestionIndices[0]!
+      || confirmedMessages!.slice(confirmedQuestionIndices[0]! + 1, confirmedCallbackIndex).some(message => message.role === 'user')
+      || finalView?.decision?.source !== 'human' || finalView.decision.value !== proposal.value
+      || !['accepted', 'duplicate'].includes(String(finalView.answerStatus))
+      || !finalContinuation || finalContinuation.resultRef !== continuation.resultRef
+      || finalContinuation.idempotencyKey !== continuation.idempotencyKey || finalContinuation.receipt !== continuation.receipt) {
+    return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: view,
+      waitReason: 'Callback изменилась при повторной проверке; результат не принят' }, {
+      status: 202, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+  const current = findCardById(context.card.id, context.tasksDir);
+  const currentAttempt = current?.taskExecutionHistory?.find(item => item.operationId === attempt.operationId);
+  if (!current || current.version !== context.card.version || currentAttempt?.phase !== 'waiting'
+      || currentAttempt.lastBoardVersion !== current.version || currentAttempt.taskDecisionProposal?.proposalRef !== proposal.proposalRef
+      || currentAttempt.executorQuestion?.questionHash !== question.questionHash || latestStopControl(currentAttempt.sessionControls)) {
+    return NextResponse.json({ error: 'task or answer changed during callback verification' }, { status: 409 });
+  }
+  const summary = assistant.text.slice(0, 40_000);
+  const evidenceRefs = [...new Set(summary.match(/https?:\/\/[^\s<>"')\]]+/g)?.map(url => url.replace(/[.,;:!?]+$/u, '')) ?? [])].slice(0, 50);
+  const transition = validateTransition(current, {
+    executorResult: { summary, evidenceRefs, nextAction: 'Проверьте результат и источники, затем примите решение.' },
+  }, { origin: 'automation', actor: attempt.startedBy });
+  if (transition.kind !== 'redirected') return NextResponse.json({ error: 'executor result did not enter human review' }, { status: 409 });
+  const history = [...(current.taskExecutionHistory ?? [])];
+  const index = history.findIndex(item => item.operationId === attempt.operationId);
+  if (index < 0) return NextResponse.json({ error: 'execution receipt disappeared' }, { status: 409 });
+  const proof: TaskExecutionQuestionContinuation = {
+    requestId: continuation.requestId,
+    resultRef: continuation.resultRef,
+    idempotencyKey: continuation.idempotencyKey,
+    receipt: continuation.receipt,
+    inputId: continuation.inputId,
+    nativeInputMessageId: callbackInputMessageId,
+    nativeTurnId: turnId,
+    assistantMessageId: String(assistant.id),
+    updatedAt: now(),
+  };
+  history[index] = { ...history[index]!, phase: 'result', nativeTurnId: turnId,
+    taskDecisionContinuation: proof, lastBoardVersion: current.version + 1,
+    lastProgress: 'Результат продолжения после ответа сохранён и ожидает проверки человека.',
+    lastProgressAt: now(), updatedAt: now() };
+  const saved = updateCard(context.card.id, { ...transition.patch, taskExecutionHistory: history }, current.version, context.tasksDir);
+  if ('conflict' in saved) return NextResponse.json({ conflict: true, serverCard: saved.serverCard }, { status: 409 });
+  return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved, taskQuestion: view,
+    taskDecisionContinuation: proof }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
 function latestTaskQuestion(card: KanbanCard): { attempt: TaskExecutionReceipt; reference: TaskDecisionRequestReference } | undefined {
@@ -1290,7 +1674,7 @@ async function readTaskQuestion(context: AuthorizedTaskCard): Promise<NextRespon
   if (!linked) return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: null }, { headers: { 'Cache-Control': 'no-store' } });
   const config = noticeConfig(true);
   if (!config?.recipient) return NextResponse.json({ error: 'Notice task-decision read channel is not configured', requestId: linked.reference.requestId }, { status: 503 });
-  const result = await noticeFetch(config.token, 'GET', linked.reference.requestId);
+  const result = await noticeFetch(config.token, 'GET', config.apiBaseUrl, linked.reference.requestId);
   if (!result) return NextResponse.json({ taskQuestion: { requestId: linked.reference.requestId, state: 'unknown' } }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   if (result.status === 404) return NextResponse.json({ taskQuestion: { requestId: linked.reference.requestId, state: 'not_found' } }, { headers: { 'Cache-Control': 'no-store' } });
   const view = result.payload && taskQuestionView(result.payload, context.card.id, linked.attempt.operationId,
@@ -1299,29 +1683,179 @@ async function readTaskQuestion(context: AuthorizedTaskCard): Promise<NextRespon
   return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: view }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
+function answerProposalReference(input: {
+  requestId: string; questionHash: string; operationId: string; actor: string; value: string; stopEpoch: string;
+}): string {
+  return `board-${sha256(canonicalJson(input)).slice(0, 40)}`;
+}
+
+async function resolveTaskQuestion(context: AuthorizedTaskCard, body: RecordValue): Promise<NextResponse> {
+  const allowedKeys = ['action', 'expectedVersion', 'operationId', 'value'];
+  if (Object.keys(body).length !== allowedKeys.length || Object.keys(body).some(key => !allowedKeys.includes(key))
+      || body.action !== 'answer-question' || !Number.isSafeInteger(body.expectedVersion)
+      || typeof body.operationId !== 'string' || !/^[a-f0-9]{64}$/.test(body.operationId)
+      || typeof body.value !== 'string' || !body.value.trim() || body.value.length > 128
+      || /[\x00-\x1f\x7f]/.test(body.value)) {
+    return NextResponse.json({ error: 'invalid task answer request' }, { status: 400 });
+  }
+  if (body.expectedVersion !== context.card.version) return NextResponse.json({ conflict: true, serverCard: context.card }, { status: 409 });
+  const history = context.card.taskExecutionHistory ?? [];
+  const attempt = history.at(-1);
+  const reference = attempt?.taskDecisionRequest;
+  const question = attempt?.executorQuestion;
+  const answer = body.value.trim();
+  if (!attempt || attempt.operationId !== body.operationId || !reference || !question || attempt.phase !== 'waiting'
+      || attempt.lastBoardVersion !== context.card.version || attempt.harness !== 'opencode'
+      || !attempt.nativeSessionId || !attempt.projectBinding || attempt.projectBinding.harness !== 'opencode'
+      || attempt.projectBinding.projectId !== context.card.project || attempt.projectBinding.hostId !== attempt.hostId
+      || question.contextRef !== `exmanager-task:${context.card.id}:${attempt.operationId}`
+      || question.sourceInputMessageId !== attempt.nativeInputMessageId || question.sourceJobId !== attempt.nativeDispatchJobId
+      || question.registrationTarget.harness !== 'opencode' || question.registrationTarget.sessionId !== attempt.nativeSessionId
+      || question.registrationTarget.cwd !== attempt.projectBinding.cwd
+      || !question.choices.some(choice => choice.value === answer)) {
+    return NextResponse.json({ error: 'current executor question or task scope changed' }, { status: 409 });
+  }
+  const latestStop = latestStopControl(attempt.sessionControls);
+  if (latestStop && latestStop.phase !== 'accepted') {
+    return NextResponse.json({ error: 'task stop is pending; answer is fenced' }, { status: 409 });
+  }
+  if (latestStop?.phase === 'accepted') {
+    return NextResponse.json({ error: 'stopped task cannot be answered' }, { status: 409 });
+  }
+  const config = noticeConfig(true);
+  if (!config?.recipient) return NextResponse.json({ error: 'Notice task-decision channel is not configured' }, { status: 503 });
+
+  let proposal = attempt.taskDecisionProposal;
+  if (proposal) {
+    if (proposal.requestId !== reference.requestId || proposal.requestHash !== reference.requestHash
+        || proposal.purpose !== reference.purpose || proposal.version !== reference.version
+        || proposal.value !== answer || proposal.authenticatedActor !== context.actor
+        || proposal.humanRequestId !== question.humanRequestId || proposal.sourceMessageId !== question.sourceMessageId
+        || proposal.sourceJobId !== question.sourceJobId || proposal.stopEpoch !== stopControlEpoch(attempt)) {
+      return NextResponse.json({ error: 'a different answer proposal is already bound to this task decision' }, { status: 409 });
+    }
+    // A saved proposal may already have won. Recovery is query-only; it never replays a possibly accepted POST.
+    const queried = await noticeFetch(config.token, 'GET', config.apiBaseUrl, reference.requestId);
+    if (!queried || queried.status !== 200 || !queried.payload) {
+      return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: { requestId: reference.requestId, state: 'unknown' }, answerStatus: 'unknown' }, {
+        status: 202, headers: { 'Cache-Control': 'no-store' },
+      });
+    }
+    const view = taskQuestionView(queried.payload, context.card.id, attempt.operationId, reference,
+      context.card.project, config.recipient);
+    if (!view) return NextResponse.json({ error: 'Notice returned a mismatched task answer receipt' }, { status: 502 });
+    return NextResponse.json({ ...taskExecutionSnapshot(context.card), taskQuestion: view,
+      answerStatus: view.answerStatus ?? (view.decision?.source === 'human' ? 'accepted' : 'pending') }, {
+      status: view.decision?.source === 'human' ? 200 : 202, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+
+  const proposalRef = answerProposalReference({ requestId: reference.requestId, questionHash: question.questionHash,
+    operationId: attempt.operationId, actor: context.actor, value: answer, stopEpoch: stopControlEpoch(attempt) });
+  proposal = {
+    proposalRef,
+    requestId: reference.requestId,
+    humanRequestId: question.humanRequestId,
+    requestHash: reference.requestHash,
+    purpose: reference.purpose,
+    version: reference.version,
+    value: answer,
+    authenticatedActor: context.actor,
+    cardVersion: context.card.version + 1,
+    stopEpoch: stopControlEpoch(attempt),
+    sourceMessageId: question.sourceMessageId,
+    sourceJobId: question.sourceJobId,
+  };
+  const nextHistory = [...history];
+  nextHistory[nextHistory.length - 1] = { ...attempt, taskDecisionProposal: proposal,
+    lastBoardVersion: context.card.version + 1, updatedAt: now() };
+  const saved = updateCard(context.card.id, { taskExecutionHistory: nextHistory }, context.card.version, context.tasksDir);
+  if ('conflict' in saved) return NextResponse.json({ conflict: true, serverCard: saved.serverCard }, { status: 409 });
+
+  const resolved = await noticeResolveFetch(config.token, config.apiBaseUrl, reference.requestId, proposalRef);
+  if (!resolved || !resolved.payload) {
+    return NextResponse.json({ ...taskExecutionSnapshot(saved), taskQuestion: { requestId: reference.requestId, state: 'unknown' }, answerStatus: 'unknown' }, {
+      status: 202, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+  const view = taskQuestionView(resolved.payload, saved.id, attempt.operationId, reference,
+    saved.project, config.recipient);
+  const answerStatus = resolved.payload.answer_status;
+  if (!view || !['accepted', 'duplicate', 'unknown', 'conflict', 'control_requested'].includes(String(answerStatus))) {
+    return NextResponse.json({ ...taskExecutionSnapshot(saved), taskQuestion: { requestId: reference.requestId, state: 'unknown' }, answerStatus: 'unknown' }, {
+      status: 202, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+  if (answerStatus === 'conflict' || answerStatus === 'control_requested') {
+    return NextResponse.json({ error: answerStatus === 'control_requested' ? 'task control is pending' : 'answer proposal conflicted' }, { status: 409 });
+  }
+  return NextResponse.json({ ...taskExecutionSnapshot(saved), taskQuestion: view, answerStatus }, {
+    status: answerStatus === 'accepted' || answerStatus === 'duplicate' ? 200 : 202,
+    headers: { 'Cache-Control': 'no-store' },
+  });
+}
+
 async function createTaskQuestion(
   context: AuthorizedTaskCard,
   body: RecordValue,
+  executorQuestion?: TaskExecutionQuestionProof,
 ): Promise<NextResponse> {
-  const allowedKeys = ['action', 'expectedVersion', 'operationId', 'purpose', 'message', 'choices', 'timeoutValue'];
+  const allowedKeys = executorQuestion ? ['action', 'expectedVersion']
+    : ['action', 'expectedVersion', 'operationId', 'purpose', 'message', 'choices', 'timeoutValue'];
   if (Object.keys(body).length !== allowedKeys.length || Object.keys(body).some(key => !allowedKeys.includes(key))
-      || body.action !== 'create-question' || !Number.isSafeInteger(body.expectedVersion)
-      || typeof body.operationId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(body.operationId)) {
+      || body.action !== (executorQuestion ? 'sync-executor-question' : 'create-question')
+      || !Number.isSafeInteger(body.expectedVersion)
+      || !executorQuestion && (typeof body.operationId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(body.operationId))) {
     return NextResponse.json({ error: 'invalid task question request' }, { status: 400 });
   }
-  const input = validTaskQuestionInput(body);
+  const input = executorQuestion
+    ? { purpose: 'clarification', message: executorQuestion.text, choices: executorQuestion.choices, timeoutValue: executorQuestion.timeoutValue }
+    : validTaskQuestionInput(body);
   if (!input) return NextResponse.json({ error: 'invalid task question content' }, { status: 400 });
   if (body.expectedVersion !== context.card.version) return NextResponse.json({ conflict: true, serverCard: context.card }, { status: 409 });
-  const operationId = operationIdFor(context.card.id, body.operationId);
   const history = context.card.taskExecutionHistory ?? [];
   const attempt = history.at(-1);
-  if (!attempt || attempt.operationId !== operationId || !['running', 'waiting'].includes(attempt.phase)
-      || !attempt.nativeTurnId || !(ROUTE_HARNESSES as readonly string[]).includes(attempt.harness)) {
+  const operationId = executorQuestion ? attempt?.operationId : operationIdFor(context.card.id, String(body.operationId));
+  const openCodeSourceMatches = !!executorQuestion && !!attempt && attempt.harness === 'opencode'
+    && !!attempt.nativeSessionId && !!attempt.projectBinding && attempt.projectBinding.harness === 'opencode'
+    && attempt.projectBinding.hostId === attempt.hostId
+    && executorQuestion.contextRef === `exmanager-task:${context.card.id}:${attempt.operationId}`
+    && executorQuestion.sourceInputMessageId === attempt.nativeInputMessageId
+    && executorQuestion.sourceJobId === attempt.nativeDispatchJobId
+    && executorQuestion.registrationTarget.harness === 'opencode'
+    && executorQuestion.registrationTarget.sessionId === attempt.nativeSessionId
+    && executorQuestion.registrationTarget.cwd === attempt.projectBinding.cwd;
+  if (!attempt || !operationId || attempt.operationId !== operationId || !['running', 'waiting'].includes(attempt.phase)
+      || (executorQuestion ? !openCodeSourceMatches
+        : !attempt.nativeTurnId || !(ROUTE_HARNESSES as readonly string[]).includes(attempt.harness))) {
     return NextResponse.json({ error: 'current task execution cannot receive a question' }, { status: 409 });
+  }
+  if (latestStopControl(attempt.sessionControls)?.phase === 'accepted') {
+    return NextResponse.json({ error: 'stopped task execution cannot receive a question' }, { status: 409 });
   }
   const config = noticeConfig(true);
   if (!config?.recipient) return NextResponse.json({ error: 'Notice task-decision channel is not configured' }, { status: 503 });
   const existing = attempt.taskDecisionRequest;
+  if (executorQuestion && attempt.executorQuestion && attempt.executorQuestion.questionHash !== executorQuestion.questionHash) {
+    return NextResponse.json({ error: 'executor question conflicts with its durable source proof' }, { status: 409 });
+  }
+  if (executorQuestion) {
+    const proofFields = {
+      humanRequestId: executorQuestion.humanRequestId,
+      sourceMessageId: executorQuestion.sourceMessageId,
+      sourceMessageHash: executorQuestion.sourceMessageHash,
+      sourceInputMessageId: executorQuestion.sourceInputMessageId,
+      sourceJobId: executorQuestion.sourceJobId,
+      text: executorQuestion.text,
+      choices: executorQuestion.choices,
+      timeoutValue: executorQuestion.timeoutValue,
+    };
+    if (existing && !attempt.executorQuestion
+        || !/^[a-f0-9]{64}$/.test(executorQuestion.sourceMessageHash)
+        || sha256(canonicalJson(proofFields)) !== executorQuestion.questionHash) {
+      return NextResponse.json({ error: 'executor question source proof is incomplete or mismatched' }, { status: 409 });
+    }
+  }
   if (!existing && attempt.lastBoardVersion !== context.card.version) {
     return NextResponse.json({ error: 'task execution changed before question creation' }, { status: 409 });
   }
@@ -1329,17 +1863,16 @@ async function createTaskQuestion(
     return NextResponse.json({ error: 'this execution already has a different Notice question reference' }, { status: 409 });
   }
   const questionVersion = existing?.version ?? context.card.version + 1;
+  const requestHash = sha256(JSON.stringify({ taskRef: context.card.id, operationId, project: context.card.project,
+    recipient: config.recipient, purpose: input.purpose, version: questionVersion, message: input.message,
+    choices: input.choices, timeoutValue: input.timeoutValue,
+    ...(executorQuestion ? { executorQuestion } : {}) }));
   const reference: TaskDecisionRequestReference = existing ?? {
     requestId: noticeRequestId(context.card.id, input.purpose, questionVersion),
     purpose: input.purpose,
     version: questionVersion,
-    requestHash: sha256(JSON.stringify({ taskRef: context.card.id, operationId, project: context.card.project,
-      recipient: config.recipient, purpose: input.purpose, version: questionVersion, message: input.message,
-      choices: input.choices, timeoutValue: input.timeoutValue })),
+    requestHash,
   };
-  const requestHash = sha256(JSON.stringify({ taskRef: context.card.id, operationId, project: context.card.project,
-    recipient: config.recipient, purpose: input.purpose, version: reference.version, message: input.message,
-    choices: input.choices, timeoutValue: input.timeoutValue }));
   if (existing && existing.requestHash !== requestHash) {
     return NextResponse.json({ error: 'Notice question content conflicts with its durable request reference' }, { status: 409 });
   }
@@ -1347,8 +1880,11 @@ async function createTaskQuestion(
   if (!existing) {
     const updatedAttempt: TaskExecutionReceipt = {
       ...attempt,
+      phase: executorQuestion ? 'waiting' : attempt.phase,
       lastBoardVersion: reference.version,
       taskDecisionRequest: reference,
+      ...(executorQuestion ? { executorQuestion } : {}),
+      ...(executorQuestion ? { lastProgress: 'Исполнитель задал вопрос; жду единственный ответ из карточки.', lastProgressAt: now() } : {}),
       updatedAt: now(),
     };
     const nextHistory = [...history];
@@ -1362,7 +1898,7 @@ async function createTaskQuestion(
   // GET is query-only; only an authoritative 404 permits the same deterministic
   // create/reuse request to continue. UNKNOWN never triggers a blind POST.
   if (existing) {
-    const queried = await noticeFetch(config.token, 'GET', reference.requestId);
+    const queried = await noticeFetch(config.token, 'GET', config.apiBaseUrl, reference.requestId);
     if (!queried) return NextResponse.json({ ...taskExecutionSnapshot(saved), taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     if (queried.status === 200) {
       const view = queried.payload && taskQuestionView(queried.payload, saved.id, operationId, reference,
@@ -1386,8 +1922,9 @@ async function createTaskQuestion(
     message: input.message,
     choices: input.choices,
     timeout_value: input.timeoutValue,
+    ...(executorQuestion ? { executor_question: executorQuestion } : {}),
   };
-  const created = await noticeFetch(config.token, 'POST', undefined, mandate);
+  const created = await noticeFetch(config.token, 'POST', config.apiBaseUrl, undefined, mandate);
   if (!created) return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved,
     taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   if (![200, 201].includes(created.status)) {
@@ -1540,6 +2077,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           card: current, tasksDir: context.tasksDir, actor: prior.startedBy,
           operationId: prior.operationId, requestHash: prior.requestHash,
           nativeSessionId: priorNativeSessionId, messageInputId: retryMessageInputId,
+          cwd,
           admittedStatus: 200, harness: expectedHarness(prior),
         });
       }
@@ -1693,7 +2231,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return dispatchCreatedTask({
       card: launchReceiptCard, tasksDir: context.tasksDir, actor: context.actor,
       operationId, requestHash, nativeSessionId: createdSessionId,
-      messageInputId, admittedStatus: 201, harness: projectRoute.harness,
+      messageInputId, cwd, admittedStatus: 201, harness: projectRoute.harness,
     });
   } catch {
     return NextResponse.json({ error: 'task execution request could not be processed safely' }, { status: 400 });
@@ -1990,6 +2528,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (isRecord(body) && (body.action === 'session-direct' || body.action === 'session-stop')) {
       return await controlTaskSession(context, body);
     }
+    if (isRecord(body) && body.action === 'answer-question') return await resolveTaskQuestion(context, body);
     if (isRecord(body) && body.action === 'create-question') return await createTaskQuestion(context, body);
     if (isRecord(body) && body.action === 'continue-task') return await startTaskFollowUp(context, body);
     if (isRecord(body) && body.action === 'sync-task-continuation') return await syncTaskFollowUp(context, body);
@@ -2009,6 +2548,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: 'saved execution receipt owner does not match native identity; do not replay or remap this receipt' }, { status: 409 });
     }
     if (attempt.phase === 'result') return NextResponse.json(taskExecutionSnapshot(context.card), { headers: { 'Cache-Control': 'no-store' } });
+    if (attempt.executorQuestion) return await syncExecutorQuestionContinuation(context, attempt);
     if (attempt.phase === 'created' && attempt.nativeSessionId) {
       const intentUpdate = consumeLaunchIntent(context.card, context.tasksDir, operationId, attempt.requestHash);
       if (intentUpdate) {
@@ -2061,6 +2601,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         card: current, tasksDir: context.tasksDir, actor: attempt.startedBy,
         operationId, requestHash: attempt.requestHash,
         nativeSessionId: attempt.nativeSessionId, messageInputId: attempt.messageInputId,
+        cwd,
         admittedStatus: 202, harness: expectedHarness(attempt),
       });
     }
@@ -2097,7 +2638,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         return NextResponse.json({ error: 'saved project route is no longer ready; readback is denied' }, { status: 503 });
       }
       failureStage = 'read-bound-session-messages';
-      queuedAdmissionProof = await verifiedOpenCodeFirstUserInput(attempt, attempt.messageInputId, taskPrompt(context.card));
+      queuedAdmissionProof = await verifiedOpenCodeFirstUserInput(attempt, attempt.messageInputId, taskPromptForReceipt(context.card, attempt));
       if (!queuedAdmissionProof) {
         return NextResponse.json({ ...taskExecutionSnapshot(context.card),
           waitReason: 'Ожидаю подтверждённую квитанцию доставки и совпадающее сообщение этой карточки. Повтор не выполнялся.' }, {
@@ -2224,7 +2765,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           && openCodeBoundInputMessageIndex(messages, mainNativeInputMessageId, attempt.messageInputId) === undefined
           && !verifiedInitialInputProof) {
         failureStage = 'read-first-user-message';
-        verifiedInitialInputProof = await verifiedOpenCodeFirstUserInput(attempt, attempt.messageInputId, taskPrompt(context.card));
+        verifiedInitialInputProof = await verifiedOpenCodeFirstUserInput(attempt, attempt.messageInputId, taskPromptForReceipt(context.card, attempt));
       }
       const userIndex = directInput
         ? directBindingIsExact ? openCodeDirectResultInputIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined
@@ -2237,6 +2778,27 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         waitReason: directBindingIsExact
           ? 'Явное продолжение принято, но его точное сообщение пока не найдено в связанной сессии'
           : 'Точное поручение этой карточки пока не найдено в связанной сессии' }, { status: 202 });
+      const questionInputId = directInputId ?? attempt.messageInputId;
+      const questionInputMessageId = directInput?.nativeInputMessageId ?? mainNativeInputMessageId;
+      const questionJobId = directInput?.nativeDispatchJobId ?? mainNativeDispatchJobId;
+      if (attempt.projectBinding && questionInputMessageId && questionJobId
+          && questionJobId === userMessageJobId('opencode', attempt.nativeSessionId, questionInputId)) {
+        const executorQuestion = executorQuestionFromOpenCodeMessages(messages, userIndex, {
+          cardId: context.card.id,
+          operationId: attempt.operationId,
+          sessionId: attempt.nativeSessionId,
+          cwd: attempt.projectBinding.cwd,
+          inputId: questionInputId,
+          sourceInputMessageId: questionInputMessageId,
+          sourceJobId: questionJobId,
+          ...(expectedOpenCodeTurnId ? { turnId: expectedOpenCodeTurnId } : {}),
+        });
+        if (executorQuestion) {
+          return await createTaskQuestion(context, {
+            action: 'sync-executor-question', expectedVersion: context.card.version,
+          }, executorQuestion);
+        }
+      }
       const assistant = completedOpenCodeAssistant(messages, userIndex, expectedOpenCodeTurnId,
         directInput ? directInput.nativeInputMessageId : undefined, Boolean(directInput));
       resultTurnId = typeof assistant?.turnId === 'string' ? assistant.turnId : expectedOpenCodeTurnId;
@@ -2307,7 +2869,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           && messages && openCodeBoundInputMessageIndex(messages, mainNativeInputMessageId, attempt.messageInputId) === undefined
           && !verifiedInitialInputProof) {
         failureStage = 'reconfirm-first-user-message';
-        verifiedInitialInputProof = await verifiedOpenCodeFirstUserInput(attempt, attempt.messageInputId, taskPrompt(context.card));
+        verifiedInitialInputProof = await verifiedOpenCodeFirstUserInput(attempt, attempt.messageInputId, taskPromptForReceipt(context.card, attempt));
       }
       const userIndex = messages ? directInput
         ? directBindingIsExact ? openCodeDirectResultInputIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined

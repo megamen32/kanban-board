@@ -256,7 +256,6 @@ export interface TaskExecutionQuestionContinuation {
   readonly idempotencyKey: string;
   readonly receipt: string;
   readonly inputId: string;
-  readonly nativeDispatchJobId: string;
   readonly nativeInputMessageId: string;
   readonly nativeTurnId: string;
   readonly assistantMessageId: string;

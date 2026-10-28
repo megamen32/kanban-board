@@ -63,6 +63,19 @@ function postRequest(body: Record<string, unknown> = { operationId, expectedVers
   });
 }
 
+function expectedOpenCodeTaskPrompt(card: KanbanCard, operationId: string, targetSessionId: string, targetCwd: string): string {
+  const contextRef = `exmanager-task:${card.id}:${operationId}`;
+  return [
+    `Выполни задачу канбан карточки ${card.id} из проекта «${card.project}».`,
+    `Название: ${card.title}`,
+    `Описание задачи:\n${card.description}`,
+    'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
+    'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
+    `Если для продолжения нужна ясность от ответственного, используй только metadata-only вызов agent-herder_human_request_create с kind="user", harness="opencode", sessionId=${JSON.stringify(targetSessionId)}, cwd=${JSON.stringify(targetCwd)}, contextRef=${JSON.stringify(contextRef)}. Не передавай message, choices или notify: вызов только закрепляет эту задачу и сессию.`,
+    'После успешного binding верни только один обычный JSON-объект без Markdown и текста вокруг: {"kind":"question","human_request_id":"<binding.request_id>","question":"<твой точный вопрос>","choices":[{"value":"<value>","label":"<вариант>"},{"value":"<value>","label":"<вариант>"}],"timeoutValue":"<один из value>"}. Не подменяй вопрос ответом или результатом задачи.',
+  ].join('\n\n');
+}
+
 function scopedReadiness(project = 'Demo', overrides: Record<string, unknown> = {}) {
   const pathResolution = {
     requestedCwd: scopedProjectRoot, canonicalCwd: scopedProjectRoot, rootPath: scopedProjectRoot,
@@ -1504,13 +1517,7 @@ describe('task execution API', () => {
     const exactInputId = createHash('sha256').update(`${exactOperationId}\0dispatch`).digest('hex');
     const firstUserUri = `herder://sessions/opencode/${sessionId}/first-user-message`;
     const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
-    const exactTaskPrompt = [
-      `Выполни задачу канбан карточки ${baseCard.id} из проекта «${baseCard.project}».`,
-      `Название: ${baseCard.title}`,
-      `Описание задачи:\n${baseCard.description}`,
-      'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
-      'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
-    ].join('\n\n');
+    const exactTaskPrompt = expectedOpenCodeTaskPrompt(baseCard, exactOperationId, sessionId, projectBinding.cwd);
     const originalUserMessage = {
       id: 'msg_first_user_message_123456', role: 'user', inputId: exactInputId,
       parts: [{ type: 'text', text: `Поручение пользователя, переданное агентом\n\n${exactTaskPrompt}` }],
@@ -1598,6 +1605,114 @@ describe('task execution API', () => {
     expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'send_message' || tool === 'fleet_create_session')).toHaveLength(0);
   });
 
+  it('creates the question only from a completed metadata binding and typed question in the same exact OpenCode input', async () => {
+    const humanRequestId = '67ce04db-d775-4f81-a86d-31af4bbe1091';
+    const project = 'UX QA 2026-10-26';
+    const model = 'omniroute/minimax-combo-m3.1';
+    mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model };
+    mocks.identity.value = { username: 'testlogin', scope: 'work' };
+    const readiness = scopedReadiness(project).projectReadiness;
+    const projectBinding: TaskExecutionProjectBinding = {
+      contract: 'integrator-host-readiness-v1', projectId: project, projectRoot: readiness.projectRoot,
+      rootIdentity: readiness.rootIdentity, policyRevision: readiness.policyRevision, observedAtMs: readiness.observedAtMs,
+      runtimeInstanceId: readiness.runtimeInstanceId, hostId: readiness.hostId, harness: 'opencode',
+      harnessVersion: readiness.harnessVersion, model: readiness.model,
+      requiredTools: readiness.requiredTools as string[], availableTools: readiness.availableTools as string[],
+      availableModels: readiness.availableModels as string[], resourceReady: true, cwd: readiness.cwd,
+      pathResolution: { ...readiness.pathResolution, contained: true, identityMatches: true },
+    };
+    const inputId = '4'.repeat(64);
+    const nativeInputMessageId = opencodeInputMessageId(inputId);
+    const nativeDispatchJobId = userMessageJobId(sessionId, inputId);
+    const card: KanbanCard = {
+      ...baseCard, id: 'f1b6dc21-ddde-4ddf-bd49-2c2a6b867fba', title: 'QA L06: вопрос о варианте тестовой сводки',
+      description: 'Синтетическая QA-задача.', project, owner: 'testlogin', column: 'todo', version: 7,
+    };
+    const attemptIdentity = {
+      id: card.id, title: card.title, description: card.description, project: card.project, owner: card.owner,
+      assignee: null, assignees: card.assignees, actor: 'testlogin', hostId: 'roomhacker-server-100',
+      harness: 'opencode', cwd: projectBinding.cwd, model, projectBinding,
+    };
+    const operationId = 'a'.repeat(64);
+    const requestHash = createHash('sha256').update(JSON.stringify(attemptIdentity)).digest('hex');
+    mocks.currentCard.value = { ...card, taskExecutionHistory: [{
+      operationId, requestHash, lastBoardVersion: card.version, createInputId: '3'.repeat(64), messageInputId: inputId,
+      phase: 'running', hostId: 'roomhacker-server-100', harness: 'opencode', projectBinding, nativeSessionId: sessionId,
+      nativeInputMessageId, nativeDispatchJobId, startedBy: 'testlogin', createdAt: card.created, updatedAt: card.updated,
+    }] };
+    mocks.sessionInfo.value = {
+      id: sessionId, harness: 'opencode', hostId: 'roomhacker-server-100', cwd: projectBinding.cwd,
+      model, status: 'idle', lastActivity: '2026-10-28T18:00:00.000Z',
+      meta: { nativeLastTurn: { turnId: 'turn-question', status: 'completed' } },
+    };
+    const contextRef = `exmanager-task:${card.id}:${operationId}`;
+    const questionPayload = {
+      kind: 'question', human_request_id: humanRequestId, question: 'Какой формат сводки выбрать?',
+      choices: [{ value: 'brief', label: 'Краткая таблица' }, { value: 'total', label: 'Таблица с итоговой строкой' }],
+      timeoutValue: 'brief',
+    };
+    const rawQuestion = JSON.stringify(questionPayload);
+    const messagesUri = `herder://sessions/opencode/${encodeURIComponent(sessionId)}/messages`;
+    const exactInput = { id: nativeInputMessageId, inputId, role: 'user', turnId: 'turn-question',
+      parts: [{ type: 'text', text: expectedOpenCodeTaskPrompt(card, operationId, sessionId, projectBinding.cwd) }] };
+    const registrationMessage = { id: 'msg_registration_123456789', role: 'assistant', turnId: 'turn-question', phase: 'completed', parts: [{
+      type: 'tool', callID: 'call_registration_123456789', tool: 'agent-herder_human_request_create',
+      state: { status: 'completed', input: { kind: 'user', harness: 'opencode', sessionId, cwd: projectBinding.cwd, contextRef },
+        output: JSON.stringify({ binding: { kind: 'user', request_id: humanRequestId, context_ref: contextRef,
+          native_target: { harness: 'opencode', session_id: sessionId, cwd: projectBinding.cwd } } }) },
+    }] };
+    const questionMessage = { id: 'msg_question_1234567890', role: 'assistant', turnId: 'turn-question', phase: 'completed',
+      parts: [{ type: 'text', text: rawQuestion }] };
+    mocks.readOwnerHerderResource.mockResolvedValue({ contents: [{ uri: messagesUri, mimeType: 'application/json',
+      text: JSON.stringify([exactInput, registrationMessage, questionMessage]) }] });
+    mocks.callOwnerHerderTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
+      if (tool === 'fleet_node_info') return { structuredContent: scopedReadiness(project), content: [] };
+      if (tool === 'agent_info') return { structuredContent: { session: mocks.sessionInfo.value }, content: [] };
+      if (tool === 'job_get') return { structuredContent: { job: {
+        id: nativeDispatchJobId, kind: 'Доставка сообщения', state: 'completed', ownerSessionId: sessionId,
+        onceKey: ['user-message', 'opencode', sessionId, inputId].join('\0'),
+        result: { ok: true, admitted: true, inputId, nativeInputMessageId },
+      } }, content: [] };
+      throw new Error(`unexpected tool ${tool}`);
+    });
+    vi.stubEnv('EXMANAGER_NOTICE_PROJECT_TOKEN', 'qa-only');
+    vi.stubEnv('NOTIFY_CENTER_RECIPIENT', 'qa-board-only');
+    vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
+    vi.stubEnv('EXMANAGER_NOTICE_API_BASE_URL', 'http://192.168.192.1:19450');
+    const noticeRequest = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const mandate = JSON.parse(String(init?.body)).mandate as Record<string, unknown>;
+      const requestId = `td-${createHash('sha256').update(JSON.stringify([card.id, 'clarification', String(mandate.version)])).digest('hex').slice(0, 40)}`;
+      return new Response(JSON.stringify({ schema: 'noticeplace.task_decision_view.v1', request_id: requestId,
+        project, recipient: 'qa-board-only', status: 'pending', question: { text: mandate.message, mode: 'choice',
+          choices: mandate.choices, expires_at: null, reference: { task_ref: card.id, purpose: 'clarification',
+            version: String(mandate.version), mandate_ref: operationId } },
+        notification: { attempt_state: 'sent', receipt: { kind: 'successful_sender_response', confirmed_at: 100 }, deadline_at: 1900 },
+        winner: null, control: { state: 'clear' },
+        delivery_status: 'sent', idempotent: false }), { status: 201, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', noticeRequest);
+
+    const response = await PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${card.id}/execution`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: card.version }),
+    }), { params: Promise.resolve({ id: card.id }) });
+
+    if (!response) throw new Error('executor question sync response missing');
+    expect(response.status).toBe(201);
+    expect(noticeRequest).toHaveBeenCalledTimes(1);
+    expect(String(noticeRequest.mock.calls[0]?.[0])).toBe('http://192.168.192.1:19450/v1/task-decisions');
+    const persisted = mocks.currentCard.value!.taskExecutionHistory![0]!;
+    expect(persisted).toMatchObject({ phase: 'waiting', executorQuestion: {
+      humanRequestId, contextRef, registrationMessageId: registrationMessage.id,
+      registrationCallId: 'call_registration_123456789', sourceMessageId: questionMessage.id,
+      sourceInputMessageId: nativeInputMessageId, sourceJobId: nativeDispatchJobId,
+      sourceMessageHash: createHash('sha256').update(rawQuestion).digest('hex'),
+      text: questionPayload.question, choices: questionPayload.choices, timeoutValue: 'brief',
+      questionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    }, taskDecisionRequest: { requestId: expect.stringMatching(/^td-[a-f0-9]{40}$/) } });
+    expect(JSON.parse(String(noticeRequest.mock.calls[0]?.[1]?.body)).mandate.executor_question).toEqual(persisted.executorQuestion);
+  });
+
   it('synchronizes an exact completed OpenCode turn from its bound messages resource', async () => {
     mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
     const response = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
@@ -1610,13 +1725,9 @@ describe('task execution API', () => {
       meta: {},
     };
     const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
-    const exactTaskPrompt = [
-      `Выполни задачу канбан карточки ${baseCard.id} из проекта «${baseCard.project}».`,
-      `Название: ${baseCard.title}`,
-      `Описание задачи:\n${baseCard.description}`,
-      'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
-      'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
-    ].join('\n\n');
+    const initialAttempt = mocks.currentCard.value?.taskExecutionHistory?.[0];
+    if (!initialAttempt?.projectBinding) throw new Error('OpenCode project binding missing');
+    const exactTaskPrompt = expectedOpenCodeTaskPrompt(baseCard, initialAttempt.operationId, sessionId, initialAttempt.projectBinding.cwd);
     mocks.readOwnerHerderResource.mockResolvedValue({ contents: [{
       uri: messagesUri, mimeType: 'application/json', text: JSON.stringify([
         { id: opencodeInputMessageId(mocks.currentCard.value?.taskExecutionHistory?.[0]?.messageInputId ?? ''), role: 'user',
@@ -2272,13 +2383,7 @@ describe('task execution API', () => {
     const inputId = createHash('sha256').update(`${exactOperationId}\0dispatch`).digest('hex');
     const nativeInputMessageId = 'msg_idle_admitted_123456';
     const initialMessage = { id: nativeInputMessageId, role: 'user', inputId,
-      parts: [{ type: 'text', text: [
-        `Выполни задачу канбан карточки ${controlCardId} из проекта «${baseCard.project}».`,
-        `Название: ${baseCard.title}`,
-        `Описание задачи:\n${baseCard.description}`,
-        'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
-        'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
-      ].join('\n\n') }] };
+      parts: [{ type: 'text', text: expectedOpenCodeTaskPrompt({ ...baseCard, id: controlCardId }, exactOperationId, controlSessionId, projectBinding.cwd) }] };
     const requestHash = createHash('sha256').update(JSON.stringify({
       id: controlCardId, title: baseCard.title, description: baseCard.description, project: baseCard.project,
       owner: baseCard.owner ?? 'nikita', assignee: baseCard.assignee ?? null, assignees: baseCard.assignees,

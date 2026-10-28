@@ -407,6 +407,7 @@ describe('GET /api/kanban/cards/[id]', () => {
 
   it('allows SSO testlogin to read only the exact synthetic QA card on the QA host', async () => {
     vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
+    vi.stubEnv('KANBAN_QA_ALLOWED_FIXTURE_IDS', 'f1b6dc21-ddde-4ddf-bd49-2c2a6b867fba');
     authenticated.current = { username: 'testlogin', scope: 'work' };
     identity.current = { username: 'testlogin', scope: 'work' };
     const qaCard = {
@@ -422,6 +423,15 @@ describe('GET /api/kanban/cards/[id]', () => {
     });
     expect(allowed.status).toBe(200);
     expect(await allowed.json()).toEqual({ card: qaCard });
+
+    const l06Card = { ...qaCard, id: 'f1b6dc21-ddde-4ddf-bd49-2c2a6b867fba' };
+    findCardById.mockReturnValue(l06Card);
+    const l06Fixture = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards/f1b6dc21-ddde-4ddf-bd49-2c2a6b867fba'), {
+      params: Promise.resolve({ id: 'f1b6dc21-ddde-4ddf-bd49-2c2a6b867fba' }),
+    });
+    expect(l06Fixture.status).toBe(200);
+    expect(await l06Fixture.json()).toEqual({ card: l06Card });
+    findCardById.mockReturnValue(qaCard);
 
     const wrongHost = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards/43687640-5245-4ec4-b29c-2b8970cb9d30'), {
       params: Promise.resolve({ id: '43687640-5245-4ec4-b29c-2b8970cb9d30' }),
