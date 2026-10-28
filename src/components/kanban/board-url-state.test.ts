@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBoardUrlState, serializeBoardUrlState, type BoardUrlState } from './board-url-state';
+import { parseBoardUrlState, serializeBoardUrlState, resolveBoardLayout, type BoardUrlState } from './board-url-state';
 
 describe('board URL state', () => {
   it('round-trips the first-screen dashboard tab', () => {
@@ -34,3 +34,13 @@ describe('board URL state', () => {
       .toBe('tab=execution&view=all&layout=list&project=Forenergo&person=nikita');
   });
 });
+
+ it('keeps a shared graph URL on mobile, including project and search filters', () => {
+   const parsed = parseBoardUrlState(new URLSearchParams('tab=execution&layout=graph&project=Synthetic&view=shared&search=needle'));
+   expect(parsed).toMatchObject({ tab: 'execution', layout: 'graph', project: 'Synthetic', workspaceView: 'shared', search: 'needle' });
+   expect(resolveBoardLayout(parsed.layout!, true)).toBe('graph');
+   expect(resolveBoardLayout('kanban', true)).toBe('list');
+   expect(resolveBoardLayout('graph', false)).toBe('graph');
+   const state: BoardUrlState = { project: 'Synthetic', workspaceView: 'shared', layout: 'graph', tab: 'execution', assignee: 'all', person: 'synthetic', search: 'needle', attention: 'all', closedKind: 'all', inboxOnly: false };
+   expect(parseBoardUrlState(serializeBoardUrlState(state))).toMatchObject(parsed);
+ });

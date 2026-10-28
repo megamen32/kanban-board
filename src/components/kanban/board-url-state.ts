@@ -1,6 +1,6 @@
 import type { AttentionFilter, PlanningTab, WorkspaceView } from './view-model';
 
-export type BoardLayout = 'kanban' | 'list';
+export type BoardLayout = 'kanban' | 'list' | 'graph';
 export type ClosedKind = 'all' | 'done' | 'archived';
 
 export type BoardUrlState = Readonly<{
@@ -18,7 +18,7 @@ export type BoardUrlState = Readonly<{
 
 const TABS = new Set<PlanningTab>(['dashboard', 'execution', 'inbox', 'week', 'today', 'balance', 'closed']);
 const WORKSPACE_VIEWS = new Set<WorkspaceView>(['mine', 'shared', 'all']);
-const LAYOUTS = new Set<BoardLayout>(['kanban', 'list']);
+const LAYOUTS = new Set<BoardLayout>(['kanban', 'list', 'graph']);
 const ATTENTION_FILTERS = new Set<AttentionFilter>(['all', 'blocked', 'unassigned']);
 const CLOSED_KINDS = new Set<ClosedKind>(['all', 'done', 'archived']);
 
@@ -81,4 +81,9 @@ export function serializeBoardUrlState(state: BoardUrlState): URLSearchParams {
   if (state.closedKind !== 'all') params.set('closed', state.closedKind);
   if (state.inboxOnly) params.set('inbox', '1');
   return params;
+}
+
+/** Preserve the graph on narrow screens; only the desktop kanban falls back to a list. */
+export function resolveBoardLayout(layout: BoardLayout, isMobile: boolean): BoardLayout {
+  return isMobile && layout === 'kanban' ? 'list' : layout;
 }

@@ -17,6 +17,7 @@ import {
   CircleAlert,
   Columns3,
   FolderSync,
+  GitFork,
   Inbox,
   LayoutDashboard,
   ListTodo,
@@ -32,6 +33,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import type { KanbanCard, KanbanCardUpdates, RoleDefinition } from '@/lib/kanban/types';
 import { NIKITA_ACTOR, type HumanReviewAction } from '@/lib/kanban/transition-policy';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { CardGraphView } from './card-graph-view';
 import { TaskListView } from './task-list-view';
 import { filterCards, filterWorkspaceCards, getAssigneeOptions, getProjectOptions, getPrimaryBoardLaneCards, searchCards, isClosedCard, getBoardCounts, filterAttentionCards, resolveInitialWorkspaceView, type AttentionFilter, type WorkspaceView } from './view-model';
 import { CardEditDialog } from './card-edit-dialog';
@@ -42,7 +44,7 @@ import { PlanningCardList, RoleBalanceView, WeeklyPlanView } from './planning-vi
 import { RolesDialog } from './roles-dialog';
 import { InboxCapture } from './inbox-capture';
 import { IntegratorTaskDashboard } from './integrator-task-dashboard';
-import { parseBoardUrlState, serializeBoardUrlState, type BoardLayout, type ClosedKind } from './board-url-state';
+import { parseBoardUrlState, serializeBoardUrlState, resolveBoardLayout, type BoardLayout, type ClosedKind } from './board-url-state';
 import { describePlacement, automaticRevealScope, placeCreatedCard, type BoardScope } from './create-receipt';
 import { mutationErrorMessage, readMutationResponse } from '../../lib/kanban/mutation-response';
 
@@ -80,7 +82,7 @@ export function KanbanBoard() {
   const isMobile = useIsMobile();
 
   useEffect(() => {
-    if (isMobile) setView('list');
+    if (isMobile) setView(current => resolveBoardLayout(current, true));
   }, [isMobile]);
 
   useEffect(() => {
@@ -113,7 +115,7 @@ export function KanbanBoard() {
     if (initial.assignee) setAssignee(initial.assignee);
     if (initial.search) setSearch(initial.search);
     setWorkspaceView(resolveInitialWorkspaceView(window.location.hostname, username, initial.workspaceView));
-    if (initial.layout) setView(isMobile ? 'list' : initial.layout);
+    if (initial.layout) setView(resolveBoardLayout(initial.layout, isMobile));
     if (initial.tab && (initial.tab !== 'balance' || username === NIKITA_ACTOR)) setPlanningTab(initial.tab);
     if (initial.attention) setAttention(initial.attention);
     if (initial.closedKind) setClosedKind(initial.closedKind);
@@ -275,9 +277,10 @@ export function KanbanBoard() {
             </label>
             <div className="ml-auto flex shrink-0 items-center gap-0.5">
               <div className="hidden items-center gap-0.5 md:flex">{renderAttentionFilters()}</div>
-              {planningTab === 'execution' && !isMobile && <div className="flex items-center gap-0.5 rounded-md border p-0.5">
-                <Button aria-label="Канбан" title="Канбан" aria-pressed={view === 'kanban'} variant={view === 'kanban' ? 'secondary' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setView('kanban')}><Columns3 aria-hidden className="h-4 w-4" /></Button>
+              {planningTab === 'execution' && <div className="flex items-center gap-0.5 rounded-md border p-0.5">
+                {!isMobile && <Button aria-label="Канбан" title="Канбан" aria-pressed={view === 'kanban'} variant={view === 'kanban' ? 'secondary' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setView('kanban')}><Columns3 aria-hidden className="h-4 w-4" /></Button>}
                 <Button aria-label="Список" title="Список" aria-pressed={view === 'list'} variant={view === 'list' ? 'secondary' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setView('list')}><ListTodo aria-hidden className="h-4 w-4" /></Button>
+                <Button aria-label="Граф" title="Граф" aria-pressed={view === 'graph'} variant={view === 'graph' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setView('graph')}><GitFork aria-hidden className="h-4 w-4" />Граф</Button>
               </div>}
               <Button aria-label="Обновить" title="Обновить" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={refresh}><RotateCw aria-hidden className="h-3.5 w-3.5" /></Button>
             </div>
@@ -335,7 +338,9 @@ export function KanbanBoard() {
             <IntegratorTaskDashboard cards={derivedCards} onOpen={setSelectedCard} onRefresh={refresh} canAssignReviewer={isSuperAdmin} onAssignReviewer={handleAssignReviewer} />
           </TabsContent>
           <TabsContent value="execution" className="order-1 min-h-0 min-w-0 overflow-y-auto md:order-2">
-            {view === 'list' ? (
+            {view === 'graph' ? (
+              <CardGraphView cards={visibleCards} onOpen={setSelectedCard} />
+            ) : view === 'list' ? (
               <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} authoritativeCards={cards} breadcrumbCards={scopedCards} highlightCardId={highlightCardId} username={username} onRefresh={refresh} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
             ) : (
           <div className="flex gap-3 sm:gap-4 p-3 sm:p-6 overflow-x-auto overscroll-x-contain flex-1">
