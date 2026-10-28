@@ -76,9 +76,10 @@ export function requestPathAndQuery(request: Request): string {
   return `${url.pathname}${url.search}`;
 }
 
-/** Only the already-agreed card execution routes may carry an empty project hint. */
+/** Native identity is limited to exact Board routes; the login callback carries no project grant. */
 export function isSupportedNativeProjectRoute(method: string, pathname: string): boolean {
   const verb = method.toUpperCase();
+  if (verb === 'GET' && pathname === '/api/auth/airlock/callback') return true;
   if (verb === 'GET' && pathname === '/api/kanban/cards') return true;
   if (verb === 'POST' && pathname === '/api/kanban/source-intent/execution') return true;
   if (verb === 'GET' && /^\/api\/kanban\/cards\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(pathname)) return true;

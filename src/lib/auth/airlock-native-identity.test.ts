@@ -35,6 +35,19 @@ describe('Airlock Todo native identity assertion', () => {
     });
   });
 
+  it('allows only the exact signed GET relay callback in addition to existing native routes', async () => {
+    const callbackPath = '/api/auth/airlock/callback?relay=fixture';
+    const callback = signedRequest({ path: callbackPath, project: '' });
+    await expect(verifyAirlockTodoNativeIdentity(callback.request, pair.publicKey)).resolves.toMatchObject({
+      userId: 'member-a', method: 'GET', path: callbackPath, project: '',
+    });
+
+    const postCallback = signedRequest({ method: 'POST', path: '/api/auth/airlock/callback', project: '' });
+    await expect(verifyAirlockTodoNativeIdentity(postCallback.request, pair.publicKey)).rejects.toThrow('native_identity_invalid');
+    const otherPath = signedRequest({ path: '/api/auth/airlock/callback/other', project: '' });
+    await expect(verifyAirlockTodoNativeIdentity(otherPath.request, pair.publicKey)).rejects.toThrow('native_identity_invalid');
+  });
+
   it('rejects a fake key, tampered signature, and method/path/body mismatch', async () => {
     const { request, token } = signedRequest({ method: 'POST', body: '{"project":"Alpha"}', path: cardPath, project: 'Alpha' });
     const other = generateKeyPairSync('ed25519');

@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  AIRLOCK_TODO_NATIVE_IDENTITY_HEADER,
+  type AirlockTodoNativeIdentity,
+  verifyAirlockTodoNativeIdentity,
+} from '../../../../../lib/auth/airlock-native-identity';
+import {
   AIRLOCK_RELAY_COOKIE,
   airlockRelayConfig,
   boardAccountForCaller,
@@ -14,15 +19,17 @@ export const dynamic = 'force-dynamic';
 /**
  * Land after the official Airlock relay: the platform has consumed the
  * one-time relay code against its own nonce cookie, issued the agent-bound
- * `__air_session`, and redirected here with the platform-set
- * `X-Airlock-Caller` header. This route re-checks every link itself:
+ * `__air_session`, and redirected here with either the platform-set
+ * `X-Airlock-Caller` header or the official SDK's signed native identity. This
+ * route re-checks every link itself:
  *
  * - runs only on the configured agent origin (the Airlock subdomain proxy
  *   is the only writer of that header; any other host is a forged path),
  * - requires the app's own one-time handshake cookie minted by the login
  *   route in this browser (state-bound, single-use, short-lived),
- * - accepts identity only from a platform-attributed `user` caller with
- *   platform membership; client usernames and headers are never identity,
+ * - accepts identity only from the verified platform caller or from the
+ *   request-bound native signature; client usernames and caller headers are
+ *   never substitutes for a present invalid signature,
  * - maps through an explicit allow-list to an existing board account and
  *   mints an ordinary work-board session. Nothing is created, no owner
  *   role is inherited, and no card or task is touched.
@@ -43,19 +50,40 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'airlock login handshake is missing or expired' }, { status: 403 });
   }
 
-  const identity = relayCallerIdentity(request.headers.get('x-airlock-caller'));
-  if (!identity) {
-    return NextResponse.json({ error: 'airlock caller identity could not be verified' }, { status: 403 });
-  }
-
-  const account = boardAccountForCaller(identity);
-  if (!account) {
-    return NextResponse.json({ error: 'this airlock account is not enrolled on the board' }, { status: 403 });
+  let username: string;
+  if (request.headers.has(AIRLOCK_TODO_NATIVE_IDENTITY_HEADER)) {
+    const publicKey = process.env.AIRLOCK_TODO_NATIVE_IDENTITY_PUBLIC_KEY?.trim();
+    if (!publicKey) {
+      return NextResponse.json({ error: 'airlock relay identity verifier is not configured' }, { status: 503 });
+    }
+    let nativeIdentity: AirlockTodoNativeIdentity | null;
+    try {
+      nativeIdentity = await verifyAirlockTodoNativeIdentity(request, publicKey);
+    } catch {
+      return NextResponse.json({ error: 'airlock caller identity could not be verified' }, { status: 403 });
+    }
+    if (!nativeIdentity || nativeIdentity.project !== '') {
+      return NextResponse.json({ error: 'airlock caller identity could not be verified' }, { status: 403 });
+    }
+    username = config.accountMap[nativeIdentity.userId.toLowerCase()];
+    if (!username) {
+      return NextResponse.json({ error: 'this airlock account is not enrolled on the board' }, { status: 403 });
+    }
+  } else {
+    const identity = relayCallerIdentity(request.headers.get('x-airlock-caller'));
+    if (!identity) {
+      return NextResponse.json({ error: 'airlock caller identity could not be verified' }, { status: 403 });
+    }
+    const account = boardAccountForCaller(identity);
+    if (!account) {
+      return NextResponse.json({ error: 'this airlock account is not enrolled on the board' }, { status: 403 });
+    }
+    username = account.username;
   }
 
   let session: string;
   try {
-    session = authStore().createRelaySession(account.username);
+    session = authStore().createRelaySession(username);
   } catch {
     return NextResponse.json({ error: 'board session could not be created' }, { status: 503 });
   }
