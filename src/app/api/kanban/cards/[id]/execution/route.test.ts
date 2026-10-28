@@ -956,6 +956,145 @@ describe('task execution API', () => {
     expect(sendCount).toBe(2);
   });
 
+  it('reconciles an initial accepted OpenCode dispatch from its exact job and message without resending', async () => {
+    mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
+    const nativeInputMessageId = 'msg_17f4466d6001AtmOc1CmXoVyJf';
+    let sendCount = 0;
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'send_message') {
+        sendCount += 1;
+        return { content: [{ type: 'text', text: `Message accepted by [opencode] ${sessionId}; native turn start is still being verified.` }] };
+      }
+      if (tool === 'job_get') {
+        const inputId = mocks.currentCard.value?.taskExecutionHistory?.[0]?.messageInputId;
+        if (typeof inputId !== 'string') throw new Error('saved OpenCode input id missing');
+        const jobId = userMessageJobId(sessionId, inputId);
+        expect(args).toEqual({ jobId });
+        return { structuredContent: { job: {
+          id: jobId, kind: 'Доставка сообщения', state: 'completed', ownerSessionId: sessionId,
+          onceKey: ['user-message', 'opencode', sessionId, inputId].join('\0'),
+          result: { ok: true, admitted: true, inputId, nativeInputMessageId },
+        } }, content: [] };
+      }
+      return toolResult(tool, args);
+    });
+
+    const started = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!started) throw new Error('OpenCode execution response missing');
+    expect(started.status).toBe(202);
+    const initial = mocks.currentCard.value!.taskExecutionHistory![0]!;
+    expect(initial.phase).toBe('dispatch-unknown');
+    expect(initial.messageInputId).toBe(createHash('sha256').update(`${initial.operationId}\0dispatch`).digest('hex'));
+
+    const model = 'omniroute/minimax-combo-m3.1';
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'running', harness: 'opencode', model };
+    const messagesUri = `herder://sessions/opencode/${sessionId}/messages`;
+    const taskMessage = String(mocks.callOwnerHerderTool.mock.calls.find(([tool]) => tool === 'send_message')?.[1]?.message);
+    mocks.readOwnerHerderResource.mockResolvedValue({ contents: [{ uri: messagesUri, mimeType: 'application/json', text: JSON.stringify([
+      { id: nativeInputMessageId, inputId: initial.messageInputId, role: 'user', parts: [{ type: 'text', text: `Поручение пользователя, переданное агентом\n\n${taskMessage}` }] },
+    ]) }] });
+
+    const response = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: mocks.currentCard.value!.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('OpenCode dispatch reconciliation response missing');
+
+    expect(response.status).toBe(202);
+    expect(mocks.currentCard.value?.column).toBe('in-progress');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'running', harness: 'opencode', nativeSessionId: sessionId,
+      nativeDispatchJobId: userMessageJobId(sessionId, initial.messageInputId), nativeInputMessageId,
+    });
+    expect(sendCount).toBe(1);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(1);
+  });
+
+  it('keeps an OpenCode dispatch unknown when the accepted job is bound to another input', async () => {
+    mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
+    const nativeInputMessageId = 'msg_17f4466d6001AtmOc1CmXoVyJf';
+    let sendCount = 0;
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'send_message') {
+        sendCount += 1;
+        return { content: [{ type: 'text', text: `Message accepted by [opencode] ${sessionId}; native turn start is still being verified.` }] };
+      }
+      if (tool === 'job_get') {
+        const wrongInputId = 'f'.repeat(64);
+        return { structuredContent: { job: {
+          id: args.jobId, kind: 'Доставка сообщения', state: 'completed', ownerSessionId: sessionId,
+          onceKey: ['user-message', 'opencode', sessionId, wrongInputId].join('\0'),
+          result: { ok: true, admitted: true, inputId: wrongInputId, nativeInputMessageId },
+        } }, content: [] };
+      }
+      return toolResult(tool, args);
+    });
+
+    const started = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!started) throw new Error('OpenCode execution response missing');
+    expect(started.status).toBe(202);
+    const initial = mocks.currentCard.value!.taskExecutionHistory![0]!;
+    mocks.sessionInfo.value = { ...mocks.sessionInfo.value, status: 'running', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
+
+    const response = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: mocks.currentCard.value!.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('OpenCode dispatch readback response missing');
+
+    expect(response.status).toBe(202);
+    expect(mocks.currentCard.value?.column).toBe('todo');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'dispatch-unknown', operationId: initial.operationId, messageInputId: initial.messageInputId,
+    });
+    expect(mocks.readOwnerHerderResource).not.toHaveBeenCalled();
+    expect(sendCount).toBe(1);
+    expect(mocks.callOwnerHerderTool.mock.calls.filter(([tool]) => tool === 'fleet_create_session')).toHaveLength(1);
+  });
+
+  it('does not promote an accepted OpenCode input whose ID was not derived from this board operation', async () => {
+    mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model: 'omniroute/minimax-combo-m3.1' };
+    const nativeInputMessageId = 'msg_17f4466d6001AtmOc1CmXoVyJf';
+    const alternateInputId = 'f'.repeat(64);
+    mocks.callOwnerHerderTool.mockImplementation((tool: string, args: Record<string, unknown>) => {
+      if (tool === 'send_message') {
+        return { content: [{ type: 'text', text: `Message accepted by [opencode] ${sessionId}; native turn start is still being verified.` }] };
+      }
+      if (tool === 'job_get') {
+        const jobId = userMessageJobId(sessionId, alternateInputId);
+        expect(args).toEqual({ jobId });
+        return { structuredContent: { job: {
+          id: jobId, kind: 'Доставка сообщения', state: 'completed', ownerSessionId: sessionId,
+          onceKey: ['user-message', 'opencode', sessionId, alternateInputId].join('\0'),
+          result: { ok: true, admitted: true, inputId: alternateInputId, nativeInputMessageId },
+        } }, content: [] };
+      }
+      return toolResult(tool, args);
+    });
+
+    const started = await POST(postRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!started) throw new Error('OpenCode execution response missing');
+    expect(started.status).toBe(202);
+    const initialCard = mocks.currentCard.value!;
+    const initial = initialCard.taskExecutionHistory![0]!;
+    mocks.currentCard.value = { ...initialCard, taskExecutionHistory: [{ ...initial, messageInputId: alternateInputId }] };
+    mocks.callOwnerHerderTool.mockClear();
+
+    const response = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId, expectedVersion: mocks.currentCard.value!.version }),
+    }), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!response) throw new Error('OpenCode dispatch readback response missing');
+
+    expect(response.status).toBe(409);
+    expect(mocks.currentCard.value?.column).toBe('todo');
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).toMatchObject({
+      phase: 'dispatch-unknown', operationId: initial.operationId, messageInputId: alternateInputId,
+    });
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+    expect(mocks.readOwnerHerderResource).not.toHaveBeenCalled();
+  });
+
   it('stops and explicitly continues the same typed OpenCode session through the card control route', async () => {
     const model = 'omniroute/minimax-combo-m3.1';
     mocks.projectRouteOverride.value = { state: 'ready', harness: 'opencode', model };

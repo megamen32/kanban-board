@@ -352,6 +352,13 @@ function saveReceiptProgress(
     const exactQueueAttemptRecovery = recoverableQueuedDispatch(old)
       && old.nativeSessionId === patch.nativeSessionId
       && (patch.phase === 'running' || patch.phase === 'waiting' || patch.phase === 'dispatch-unknown');
+    const exactAcceptedOpenCodeDispatchRecovery = recoverableAcceptedOpenCodeDispatch(old)
+      && old.nativeSessionId === patch.nativeSessionId
+      && (patch.messageInputId === undefined || patch.messageInputId === old.messageInputId)
+      && patch.nativeDispatchJobId === userMessageJobId('opencode', old.nativeSessionId!, old.messageInputId)
+      && typeof patch.nativeInputMessageId === 'string'
+      && /^msg_[A-Za-z0-9_-]{8,256}$/.test(patch.nativeInputMessageId)
+      && ['running', 'waiting', 'stopped'].includes(String(patch.phase));
     const exactStoppedContinuationRecovery = old.phase === 'stopped' && old.harness === 'opencode'
       && latestStopControl(old.sessionControls)?.phase === 'accepted'
       && old.sessionControls?.direct?.some(control => control.phase === 'accepted'
@@ -359,7 +366,8 @@ function saveReceiptProgress(
       && old.nativeSessionId === patch.nativeSessionId
       && ['running', 'waiting', 'result'].includes(String(patch.phase));
     if (terminal && old.phase !== patch.phase && !exactUnsentSessionRecovery
-        && !exactNotAttemptedQueueRecovery && !exactQueueAttemptRecovery && !exactStoppedContinuationRecovery) return current;
+        && !exactNotAttemptedQueueRecovery && !exactQueueAttemptRecovery
+        && !exactAcceptedOpenCodeDispatchRecovery && !exactStoppedContinuationRecovery) return current;
     const updated: TaskExecutionReceipt = { ...old, ...patch, lastBoardVersion: current.version + 1, updatedAt: now() };
     const nextHistory = [...history];
     nextHistory[index] = updated;
@@ -826,6 +834,15 @@ function recoverableQueuedDispatch(receipt: TaskExecutionReceipt): boolean {
     && !!receipt.hostId && !!receipt.nativeSessionId && !receipt.nativeTurnId
     && receipt.messageInputId === sha256(`${receipt.operationId}\0dispatch-after-not-attempted`)
     && !!receipt.projectBinding;
+}
+
+/** An unknown initial dispatch can be promoted only after its exact accepted job and native message are reread. */
+function recoverableAcceptedOpenCodeDispatch(receipt: TaskExecutionReceipt): boolean {
+  return receipt.phase === 'dispatch-unknown' && receipt.harness === 'opencode'
+    && !!receipt.hostId && !!receipt.nativeSessionId && !receipt.nativeTurnId
+    && receipt.messageInputId === sha256(`${receipt.operationId}\0dispatch`)
+    && !!receipt.projectBinding && receipt.projectBinding.harness === 'opencode'
+    && receipt.projectBinding.hostId === receipt.hostId;
 }
 
 function openCodeTaskMessageIndex(messages: RecordValue[], card: KanbanCard): number | undefined {
@@ -1975,8 +1992,18 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       });
     }
     const queuedDispatchPendingReadback = recoverableQueuedDispatch(attempt);
-    if ((!['running', 'waiting'].includes(attempt.phase) && !queuedDispatchPendingReadback) || !attempt.nativeSessionId) {
+    const acceptedDispatchPendingReadback = recoverableAcceptedOpenCodeDispatch(attempt);
+    const pendingOpenCodeDispatchReadback = queuedDispatchPendingReadback || acceptedDispatchPendingReadback;
+    if ((!['running', 'waiting'].includes(attempt.phase) && !pendingOpenCodeDispatchReadback) || !attempt.nativeSessionId) {
       return NextResponse.json({ ...taskExecutionSnapshot(context.card), retryable: false }, { status: 409 });
+    }
+
+    if (acceptedDispatchPendingReadback) {
+      const cwd = executionReceiptCwd(attempt);
+      if (!cwd || attempt.lastBoardVersion !== context.card.version
+          || taskFingerprint(context.card, attempt.startedBy, attempt.hostId, cwd, attempt.projectBinding) !== attempt.requestHash) {
+        return NextResponse.json({ error: 'task changed after accepted OpenCode dispatch; receipt reconciliation is denied' }, { status: 409 });
+      }
     }
 
     failureStage = 'read-native-session';
@@ -1991,7 +2018,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
     let openCodeMessagesForAttempt: RecordValue[] | undefined;
     let queuedAdmissionProof: VerifiedOpenCodeInput | undefined;
-    if (queuedDispatchPendingReadback) {
+    if (pendingOpenCodeDispatchReadback) {
       failureStage = 'verify-project-binding';
       if (!attempt.projectBinding || !await currentScopedBinding(attempt.projectBinding, context.card.project)) {
         return NextResponse.json({ error: 'saved project route is no longer ready; readback is denied' }, { status: 503 });
@@ -2029,7 +2056,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
             ? 'Подтверждённая доставка и точный нативный ход этой карточки видны; исполнитель работает.'
             : 'Подтверждённая доставка связана с точным сообщением этой карточки; исполнитель работает.'
           : 'Нативная сессия выполняет задачу.', lastProgressAt: lastActivity,
-      }, queuedDispatchPendingReadback ? current => {
+      }, pendingOpenCodeDispatchReadback ? current => {
         if (current.column === 'in-progress') return {};
         const transition = validateTransition(current, { column: 'in-progress' }, { origin: 'automation', actor: attempt.startedBy });
         return transition.kind === 'accepted' ? transition.patch : {};
@@ -2097,12 +2124,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const directInputId = directInput?.requestHash;
       const directBindingIsExact = !!directInput && !!directInputId
         && directInput.nativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, directInputId);
-      const mainBindingIsExact = !!attempt.nativeInputMessageId && !!attempt.nativeDispatchJobId
-        && attempt.nativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, attempt.messageInputId);
+      const mainNativeInputMessageId = queuedAdmissionProof?.nativeInputMessageId ?? attempt.nativeInputMessageId;
+      const mainNativeDispatchJobId = queuedAdmissionProof?.jobId ?? attempt.nativeDispatchJobId;
+      const mainBindingIsExact = !!mainNativeInputMessageId && !!mainNativeDispatchJobId
+        && mainNativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, attempt.messageInputId);
       const userIndex = directInput
         ? directBindingIsExact ? openCodeBoundInputMessageIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined
-        : attempt.nativeInputMessageId || attempt.nativeDispatchJobId
-          ? mainBindingIsExact ? openCodeBoundInputMessageIndex(messages, attempt.nativeInputMessageId!, attempt.messageInputId) : undefined
+        : mainNativeInputMessageId || mainNativeDispatchJobId
+          ? mainBindingIsExact ? openCodeBoundInputMessageIndex(messages, mainNativeInputMessageId!, attempt.messageInputId) : undefined
           : openCodeTaskMessageIndex(messages, context.card);
       if (userIndex === undefined) return NextResponse.json({ ...taskExecutionSnapshot(context.card),
         waitReason: directBindingIsExact
@@ -2167,12 +2196,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const directInputId = directInput?.requestHash;
       const directBindingIsExact = !!directInput && !!directInputId
         && directInput.nativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, directInputId);
-      const mainBindingIsExact = !!attempt.nativeInputMessageId && !!attempt.nativeDispatchJobId
-        && attempt.nativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, attempt.messageInputId);
+      const mainNativeInputMessageId = queuedAdmissionProof?.nativeInputMessageId ?? attempt.nativeInputMessageId;
+      const mainNativeDispatchJobId = queuedAdmissionProof?.jobId ?? attempt.nativeDispatchJobId;
+      const mainBindingIsExact = !!mainNativeInputMessageId && !!mainNativeDispatchJobId
+        && mainNativeDispatchJobId === userMessageJobId('opencode', attempt.nativeSessionId, attempt.messageInputId);
       const userIndex = messages ? directInput
         ? directBindingIsExact ? openCodeBoundInputMessageIndex(messages, directInput.nativeInputMessageId!, directInputId!) : undefined
-        : attempt.nativeInputMessageId || attempt.nativeDispatchJobId
-          ? mainBindingIsExact ? openCodeBoundInputMessageIndex(messages, attempt.nativeInputMessageId!, attempt.messageInputId) : undefined
+        : mainNativeInputMessageId || mainNativeDispatchJobId
+          ? mainBindingIsExact ? openCodeBoundInputMessageIndex(messages, mainNativeInputMessageId!, attempt.messageInputId) : undefined
           : openCodeTaskMessageIndex(messages, context.card) : undefined;
       const assistant = messages && userIndex !== undefined
         ? completedOpenCodeAssistant(messages, userIndex, resultTurnId ?? attempt.nativeTurnId) : undefined;
@@ -2195,6 +2226,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (index < 0) return NextResponse.json({ error: 'execution receipt disappeared' }, { status: 409 });
     nextHistory[index] = { ...nextHistory[index]!, phase: 'result',
       ...(resultTurnId ? { nativeTurnId: resultTurnId } : {}),
+      ...(queuedAdmissionProof ? {
+        nativeDispatchJobId: queuedAdmissionProof.jobId,
+        nativeInputMessageId: queuedAdmissionProof.nativeInputMessageId,
+      } : {}),
       lastBoardVersion: context.card.version + 1, lastProgress: 'Результат сохранён и ожидает проверки человека.', lastProgressAt: now(), updatedAt: now() };
     const saved = updateCard(id, { ...transition.patch, taskExecutionHistory: nextHistory }, context.card.version, context.tasksDir);
     if ('conflict' in saved) return NextResponse.json({ conflict: true, serverCard: saved.serverCard }, { status: 409 });
