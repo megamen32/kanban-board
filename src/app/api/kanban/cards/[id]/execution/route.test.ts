@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { AIRLOCK_TODO_NATIVE_IDENTITY_HEADER, requestPathAndQuery } from '../../../../../../lib/auth/airlock-native-identity';
-import { nativeProjectAccessForRequest } from '../../../../../../lib/kanban/native-project-access';
+import { nativeProjectAccessForRequest, type NativeProjectAccessContext } from '../../../../../../lib/kanban/native-project-access';
 import type { KanbanCard, TaskExecutionProjectBinding } from '@/lib/kanban/types';
 
 const mocks = vi.hoisted(() => ({
@@ -13,8 +13,8 @@ const mocks = vi.hoisted(() => ({
   identity: { value: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' } | null },
   humanIdentity: { value: undefined as { username: string; scope: 'work' } | null | undefined },
   boardHumanIdentityFromRequest: vi.fn(),
-  nativeProjectAccess: { value: null as null | { userId: string; forProject: ReturnType<typeof vi.fn> } },
-  nativeProjectAccessContextFromRequest: vi.fn(async () => null as null | { userId: string; forProject: ReturnType<typeof vi.fn> }),
+  nativeProjectAccess: { value: null as NativeProjectAccessContext | null },
+  nativeProjectAccessContextFromRequest: vi.fn(async (_request: Request) => null as NativeProjectAccessContext | null),
   callOwnerHerderTool: vi.fn(),
   readOwnerHerderResource: vi.fn(),
   validateTransition: vi.fn(),
