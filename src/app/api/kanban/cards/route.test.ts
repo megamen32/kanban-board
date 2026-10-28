@@ -94,6 +94,22 @@ describe('POST /api/kanban/cards', () => {
     );
   });
 
+  it('passes an authorized initial parent and owner to the atomic store create', async () => {
+    validateTransition.mockReturnValue({ kind: 'accepted', patch: { parent: 'existing-parent', owner: 'oleg' } });
+    const response = await POST(new NextRequest('http://localhost/api/kanban/cards', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'Tender pilot', project: 'Work', parent: 'existing-parent' }),
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    expect(response.status).toBe(201);
+    expect(createCard).toHaveBeenCalledWith(
+      'Tender pilot', undefined, undefined, undefined, undefined, 'Work', undefined, '/scoped/work', undefined,
+      { parent: 'existing-parent', owner: 'oleg' },
+    );
+    expect(updateCard).not.toHaveBeenCalled();
+  });
+
   it('validates and persists the explicit blocker reason when creating a blocked card', async () => {
     validateTransition.mockReturnValue({
       kind: 'accepted',

@@ -6,6 +6,7 @@ import { CalendarClock, GripVertical, Flag } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { CardEditDialog } from './card-edit-dialog';
 import { MarkdownCardPreview } from './markdown-card-preview';
+import { getCardAncestorChain } from './card-hierarchy';
 import { ReviewRecoveryControl } from './review-recovery-control';
 import { shouldOpenCardAfterPointer, type PointerCoordinates } from './card-interaction';
 import { PRIORITY_COLORS } from '@/lib/kanban/types';
@@ -19,6 +20,9 @@ interface CardActionsCtx {
   username: string | null;
   refresh: () => Promise<void>;
   highlightCardId?: string | null;
+  relatedCards: CardType[];
+  breadcrumbCards: CardType[];
+  onSelectCard: (card: CardType) => void;
   onUpdate: (id: string, updates: KanbanCardUpdates, version?: number) => Promise<CardType | null>;
   onDelete: (id: string) => Promise<unknown>;
 }
@@ -34,12 +38,13 @@ export function KanbanCard({ card, columnId }: Props) {
   const [editing, setEditing] = useState(false);
   const pointerStart = useRef<{ x: number; y: number } | null>(null);
   const suppressClick = useRef(false);
-  const { onUpdate, onDelete, roles, username, refresh, highlightCardId } = useCardActions();
+  const { onUpdate, onDelete, roles, username, refresh, highlightCardId, relatedCards, breadcrumbCards, onSelectCard } = useCardActions();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
     data: { card, columnId },
   });
   const highlighted = highlightCardId === card.id;
+  const hierarchyTrail = card.parent ? getCardAncestorChain(card, breadcrumbCards) : [];
   const highlightedRef = useRef<HTMLDivElement | null>(null);
   const attachRefs = useCallback((node: HTMLDivElement | null) => {
     setNodeRef(node);
@@ -102,7 +107,8 @@ export function KanbanCard({ card, columnId }: Props) {
           </span>
           <div className="flex-1 min-w-0">
             <div className="font-medium text-sm leading-tight truncate mb-1">{card.title}</div>
-            <MarkdownCardPreview title={card.title} description={card.description} />
+            {card.parent && <p className="mb-1 truncate text-[10px] text-muted-foreground">Подзадача · {hierarchyTrail.length ? hierarchyTrail.map(item => item.title).join(' › ') : 'родитель скрыт текущей выборкой'}</p>}
+            <MarkdownCardPreview card={card} />
             <ReviewRecoveryControl card={card} username={username} onDone={refresh} />
             {card.column === 'blocked' && card.blockerReason && <p className="mb-2 line-clamp-2 text-xs text-amber-700 dark:text-amber-300">Что мешает: {card.blockerReason}</p>}
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -119,7 +125,7 @@ export function KanbanCard({ card, columnId }: Props) {
           </div>
         </div>
       </div>
-      {editing && <CardEditDialog card={card} roles={roles} username={username} onRefresh={refresh} open={editing} onOpenChange={setEditing} onUpdate={onUpdate} onDelete={() => onDelete(card.id)} />}
+      {editing && <CardEditDialog card={card} relatedCards={relatedCards} breadcrumbCards={breadcrumbCards} onSelectCard={related => { setEditing(false); onSelectCard(related); }} roles={roles} username={username} onRefresh={refresh} open={editing} onOpenChange={setEditing} onUpdate={onUpdate} onDelete={() => onDelete(card.id)} />}
     </>
   );
 }

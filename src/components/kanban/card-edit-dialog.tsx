@@ -22,6 +22,9 @@ import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
 import { ReviewActionGate, reviewActionAccess } from './review-action-gate';
 import { CardResultPreview } from './card-result-preview';
 import { MarkdownText } from './markdown-text';
+import { CardBriefPanel } from './card-brief-panel';
+import { CardHierarchyPanel } from './card-hierarchy-panel';
+import { getEligibleParentCards } from './card-hierarchy';
 
 const MarkdownEditor = dynamic(() => import('./markdown-editor').then(module => module.MarkdownEditor), {
   ssr: false,
@@ -36,10 +39,12 @@ interface Props {
   roles?: RoleDefinition[];
   projectOptions?: string[];
   relatedCards?: KanbanCard[];
+  breadcrumbCards?: KanbanCard[];
   onOpenChange: (open: boolean) => void;
   onDelete?: (id: string) => Promise<unknown>;
   onUpdate?: (id: string, updates: KanbanUpdateRequest, version?: number) => Promise<KanbanCard | null>;
   onReviewDecision?: (id: string, action: HumanReviewAction, note: string, version: number) => Promise<KanbanCard | null>;
+  onSelectCard?: (card: KanbanCard) => void;
 }
 
 export interface PlanningMetadataForm {
@@ -81,7 +86,7 @@ export function buildPlanningMetadataUpdates(card: KanbanCard, form: PlanningMet
   return updates as KanbanUpdateRequest;
 }
 
-export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, onReviewDecision, roles, projectOptions = [], relatedCards = [], username, onRefresh }: Props) {
+export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, onReviewDecision, onSelectCard, roles, projectOptions = [], relatedCards = [], breadcrumbCards = relatedCards, username, onRefresh }: Props) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
   const [nextAction, setNextAction] = useState(card.nextAction ?? '');
@@ -176,6 +181,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   const catalogLink = card.catalogLink;
   const reviewAccess = reviewActionAccess(card, username);
   const latestResult = card.resultHistory?.[card.resultHistory.length - 1] ?? null;
+  const parentChoices = getEligibleParentCards(card, relatedCards);
+  const currentParentIsHidden = !!planning.parent && !parentChoices.some(item => item.id === planning.parent);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -251,11 +258,6 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             <details className="border-t pt-2">
               <summary className="cursor-pointer text-sm font-medium">История и связи</summary>
               <div className="mt-3 space-y-3">
-                {card.parent && <p className="text-sm">Родитель: {relatedCards.find(item => item.id === card.parent)?.title ?? card.parent}</p>}
-                {relatedCards.filter(item => item.parent === card.id).length > 0 && <div className="text-sm">
-                  <span className="font-medium">Подзадачи:</span>
-                  <ul className="list-disc pl-5">{relatedCards.filter(item => item.parent === card.id).map(item => <li key={item.id}>{item.title} · {DEFAULT_COLUMNS.find(columnItem => columnItem.id === item.column)?.title ?? item.column}</li>)}</ul>
-                </div>}
             {(card.resultHistory ?? []).length > 0 && <div className="space-y-2">
               <h3 className="text-sm font-medium">Результаты исполнителя</h3>
               {[...(card.resultHistory ?? [])].reverse().map((result, index) => <article key={`${result.submittedAt}-${index}`} className="rounded border p-2 text-sm">
@@ -275,14 +277,28 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             </details>
           </section>
           <div className="order-1 min-w-0 space-y-4 lg:order-1">
+            <CardHierarchyPanel card={card} relatedCards={relatedCards} breadcrumbCards={breadcrumbCards} onSelectCard={onSelectCard} />
             <div className="min-w-0 space-y-2">
               <label className="text-sm font-medium" htmlFor="kanban-edit-title">Название задачи</label>
               <Input id="kanban-edit-title" value={title} onChange={e => setTitle(e.target.value)} className="w-full min-w-0 text-base" />
             </div>
-            <div className="min-w-0 space-y-2">
-              <label className="text-sm font-medium">Описание и ожидаемый результат</label>
-              <MarkdownEditor value={description} onChange={setDescription} />
-            </div>
+            <CardBriefPanel autoSummarize card={{
+              ...card,
+              title: title === card.title ? card.title : title,
+              description: description === card.description ? card.description : description,
+              assignees: assignees === card.assignees.join(', ') ? card.assignees : splitPeople(assignees),
+              dueAt: dueAt === toDateTimeLocalValue(card.dueAt) ? card.dueAt : dueAt ? new Date(dueAt).toISOString() : undefined,
+              nextAction: nextAction === (card.nextAction ?? '') ? card.nextAction ?? null : nextAction.trim() || null,
+              column: column === card.column ? card.column : column,
+            }} />
+            <details className="min-w-0 rounded-md border p-3">
+              <summary className="cursor-pointer text-sm font-medium">Полное описание</summary>
+              <div className="mt-3"><MarkdownText text={description} /></div>
+            </details>
+            <details className="min-w-0 rounded-md border p-3">
+              <summary className="cursor-pointer text-sm font-medium">Редактировать описание и ожидаемый результат</summary>
+              <div className="mt-3"><MarkdownEditor value={description} onChange={setDescription} /></div>
+            </details>
             <details className="min-w-0 rounded-md border p-3">
               <summary className="cursor-pointer text-sm font-medium">Планирование и дополнительные настройки</summary>
               <div className="mt-3 space-y-3">
@@ -294,7 +310,16 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             <div className="grid grid-cols-2 gap-3"><label className="text-xs text-muted-foreground">Планировать на дату<Input className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
             <Input placeholder="Ждём от (ID через запятую)" value={planning.waitingFor} onChange={e => setPlanning({ ...planning, waitingFor: e.target.value })} />
             <Input placeholder="Требует согласования от (ID через запятую)" value={planning.requiresApprovalFrom} onChange={e => setPlanning({ ...planning, requiresApprovalFrom: e.target.value })} />
-            <div className="grid grid-cols-2 gap-3"><Input placeholder="Предложенный исполнитель" value={planning.suggestedAssignee} onChange={e => setPlanning({ ...planning, suggestedAssignee: e.target.value })} /><Input placeholder="Родительская карточка" value={planning.parent} onChange={e => setPlanning({ ...planning, parent: e.target.value })} /></div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Input placeholder="Предложенный исполнитель" value={planning.suggestedAssignee} onChange={e => setPlanning({ ...planning, suggestedAssignee: e.target.value })} />
+              <label className="text-xs text-muted-foreground">Родительская задача
+                <select aria-label="Родительская задача" value={planning.parent} onChange={e => setPlanning({ ...planning, parent: e.target.value })} className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground">
+                  <option value="">Без родителя</option>
+                  {currentParentIsHidden && <option value={planning.parent} disabled>Текущая связь недоступна в этом списке</option>}
+                  {parentChoices.map(parentCard => <option key={parentCard.id} value={parentCard.id}>{parentCard.title}</option>)}
+                </select>
+              </label>
+            </div>
               </div>
             </details>
             <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />

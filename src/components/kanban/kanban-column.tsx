@@ -5,7 +5,9 @@ import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { KanbanCard } from './kanban-card';
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import type { ReactNode } from 'react';
 import type { KanbanCard as KanbanCardType, KanbanColumn } from '@/lib/kanban/types';
+import { groupVisibleCardHierarchy, type VisibleCardHierarchyGroup } from './card-hierarchy';
 
 interface Props {
   id: KanbanColumn;
@@ -18,6 +20,17 @@ interface Props {
 export function KanbanColumnComponent(props: Props) {
   const { id, title, color, cards, onAddCard } = props;
   const { setNodeRef, isOver } = useDroppable({ id });
+  const groups = groupVisibleCardHierarchy(cards);
+
+  const renderGroup = (group: VisibleCardHierarchyGroup): ReactNode => (
+    <div key={group.card.id}>
+      <KanbanCard card={group.card} columnId={id} />
+      {group.children.length > 0 && <details className="ml-3 mt-1 border-l pl-2">
+        <summary className="cursor-pointer px-1 py-1 text-[11px] text-muted-foreground">Подзадачи · {group.children.length}</summary>
+        <div className="space-y-2">{group.children.map(renderGroup)}</div>
+      </details>}
+    </div>
+  );
 
   return (
     <div className="min-w-[min(300px,calc(100vw-1.5rem))] w-[min(300px,calc(100vw-1.5rem))] shrink-0 flex flex-col">
@@ -33,9 +46,7 @@ export function KanbanColumnComponent(props: Props) {
       >
         <SortableContext items={cards.map(c => c.id)} strategy={verticalListSortingStrategy}>
           <div className="space-y-2">
-            {cards.map(card => (
-              <KanbanCard key={card.id} card={card} columnId={id} />
-            ))}
+            {groups.map(renderGroup)}
           </div>
         </SortableContext>
 

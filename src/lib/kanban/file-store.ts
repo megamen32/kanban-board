@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { DEFAULT_COLUMNS, parseCatalogTaskLink, PLANNING_VERSION } from './types';
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
 import { approvalListForProject } from './project-reviewers';
+import { validateCardParentRelations, validateParentRelation } from './parent-relations';
 import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskExecutionContinuation, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls, TaskResult, TaskReviewRecord } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
@@ -158,15 +159,21 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
   };
 }
 
-export function createCard(title: string, description: string = '', column: KanbanColumn = 'inbox', priority: Priority = 'medium', tags: string[] = [], project?: string, assignees: string[] = [], tasksDir = TASKS_DIR, dueAt?: string): KanbanCard {
-  return withSourceOperationLock(tasksDir, () => createCardRecord(title, description, column, priority, tags, project, assignees, tasksDir, dueAt));
+export interface CreateCardOptions {
+  parent?: string;
+  owner?: string;
 }
 
-function createCardRecord(title: string, description: string, column: KanbanColumn, priority: Priority, tags: string[], project: string | undefined, assignees: string[], tasksDir: string, dueAt?: string, id = uuidv4(), sourceAdmission?: SourceAdmissionBinding, sourceOutcome?: { source: string; needsReview: boolean }, requiresApprovalFrom?: string[]): KanbanCard {
+export function createCard(title: string, description: string = '', column: KanbanColumn = 'inbox', priority: Priority = 'medium', tags: string[] = [], project?: string, assignees: string[] = [], tasksDir = TASKS_DIR, dueAt?: string, options: CreateCardOptions = {}): KanbanCard {
+  return withSourceOperationLock(tasksDir, () => createCardRecord(title, description, column, priority, tags, project, assignees, tasksDir, dueAt, uuidv4(), undefined, undefined, undefined, options));
+}
+
+function createCardRecord(title: string, description: string, column: KanbanColumn, priority: Priority, tags: string[], project: string | undefined, assignees: string[], tasksDir: string, dueAt?: string, id = uuidv4(), sourceAdmission?: SourceAdmissionBinding, sourceOutcome?: { source: string; needsReview: boolean }, requiresApprovalFrom?: string[], options: CreateCardOptions = {}): KanbanCard {
   if (!project?.trim()) throw new Error('project is required for new cards');
   ensureDir(tasksDir);
   const now = new Date().toISOString();
-  const existing = getAllCards(tasksDir).filter(c => c.column === column);
+  const existingCards = getAllCards(tasksDir);
+  const existing = existingCards.filter(c => c.column === column);
   const maxOrder = existing.length > 0 ? Math.max(...existing.map(c => c.order)) + 1 : 0;
 
   const card: KanbanCard = {
@@ -185,13 +192,15 @@ function createCardRecord(title: string, description: string, column: KanbanColu
     project: project.trim(),
     assignees,
     ...(sourceAdmission ? { sourceAdmission } : {}),
-    owner: 'nikita',
+    owner: options.owner ?? 'nikita',
     shared: false,
     ...defaultPlanningMetadata(),
+    ...(options.parent !== undefined ? { parent: options.parent } : {}),
     ...(requiresApprovalFrom?.length ? { requiresApprovalFrom } : {}),
     ...(sourceOutcome ? { source: sourceOutcome.source, needsReview: sourceOutcome.needsReview } : {}),
   };
 
+  validateParentRelation(card.id, card.parent, card.project, card.owner, existingCards);
   writeCard(card, tasksDir);
   return card;
 }
@@ -242,7 +251,17 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
   if (normalizedUpdates.taskExecutionHistory !== undefined) {
     normalizedUpdates.taskExecutionHistory = taskExecutionHistoryField(normalizedUpdates.taskExecutionHistory);
   }
-  if (normalizedUpdates.parent !== undefined) assertAcyclicParent(id, normalizedUpdates.parent, tasksDir);
+  const relationTouched = Object.hasOwn(updates as object, 'parent')
+    || Object.hasOwn(updates as object, 'project') || Object.hasOwn(updates as object, 'owner');
+  if (relationTouched) {
+    const parentId = Object.hasOwn(normalizedUpdates as object, 'parent') ? normalizedUpdates.parent : card.parent;
+    validateCardParentRelations({
+      ...card,
+      parent: parentId,
+      project: Object.hasOwn(normalizedUpdates as object, 'project') ? normalizedUpdates.project! : card.project,
+      owner: Object.hasOwn(normalizedUpdates as object, 'owner') ? normalizedUpdates.owner : card.owner,
+    }, getAllCards(tasksDir));
+  }
   const planningEdit = Object.entries(normalizedUpdates).some(([key, value]) =>
     PLANNING_UPDATE_KEYS.has(key) && isExplicitPlanningUpdate(key, value));
   const rawFrontmatter = card.rawFrontmatter;
@@ -272,20 +291,13 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
   return updated;
 }
 
-function assertAcyclicParent(cardId: string, parentId: string | undefined, tasksDir: string): void {
-  let current = parentId;
-  const visited = new Set([cardId]);
-  while (current) {
-    if (visited.has(current)) throw new Error('parent_relation_cycle');
-    visited.add(current);
-    current = findCardById(current, tasksDir)?.parent;
-  }
-}
-
 export function deleteCard(id: string, tasksDir = TASKS_DIR): boolean {
   return withSourceOperationLock(tasksDir, () => {
     const card = findCardById(id, tasksDir);
     if (!card) return false;
+    if (getAllCards(tasksDir).some(candidate => candidate.parent === id)) {
+      throw new Error('parent_relation_has_children');
+    }
     cancelSourceOperationForCardLocked(card, tasksDir);
     const filePath = path.join(tasksDir, card.fileName);
     if (fs.existsSync(filePath)) fs.unlinkSync(/*turbopackIgnore: true*/ filePath);

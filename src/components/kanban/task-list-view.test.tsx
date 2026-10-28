@@ -44,4 +44,21 @@ describe('task list recovery layout', () => {
     expect(html.indexOf(stuckCard.title)).toBeGreaterThan(-1);
     expect(html.indexOf('Приёмка заблокирована')).toBeGreaterThan(html.indexOf(stuckCard.title));
   });
+
+  it('nests visible children under a collapsible parent and keeps a child with a filtered parent visible without exposing its ID', () => {
+    const parent: KanbanCard = { ...stuckCard, id: 'synthetic-parent', title: 'ForEnergo — Тендер', parent: undefined };
+    const child: KanbanCard = { ...stuckCard, id: 'synthetic-child', title: 'Собрать тестовые документы', parent: parent.id, order: 1 };
+    const render = (cards: KanbanCard[], breadcrumbCards = cards) => renderToStaticMarkup(React.createElement(TaskListView, {
+      cards, breadcrumbCards, onStatusChange: async () => ({}), onOpen: () => {},
+    }));
+
+    const grouped = render([parent, child]);
+    expect(grouped).toContain('Подзадачи · 1');
+    expect(grouped.indexOf(child.title)).toBeGreaterThan(grouped.indexOf(parent.title));
+
+    const filtered = render([child], []);
+    expect(filtered).toContain(child.title);
+    expect(filtered).toContain('родитель вне текущей выборки');
+    expect(filtered).not.toContain(parent.id);
+  });
 });

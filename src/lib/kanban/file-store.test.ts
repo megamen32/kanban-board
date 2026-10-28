@@ -4,14 +4,77 @@ import path from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-store-'));
+const isolatedDirs: string[] = [];
 process.env.TASKS_DIR = root;
 const store = await import('./file-store');
 afterAll(() => {
+  for (const dir of isolatedDirs) fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(root, { recursive: true, force: true });
   delete process.env.TASKS_DIR;
 });
 
 describe('filesystem kanban contract', () => {
+  test('persists nested parents atomically and rejects missing, cross-scope, and cyclic relations without overwriting cards', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-parent-relations-'));
+    isolatedDirs.push(dir);
+    const project = store.createCard('ForEnergo', '', 'todo', 'medium', [], 'ForEnergo', [], dir);
+    const direction = store.createCard('Direction', '', 'todo', 'medium', [], 'ForEnergo', [], dir, undefined,
+      { parent: project.id });
+    const tender = store.createCard('Tender', '', 'todo', 'medium', [], 'ForEnergo', [], dir, undefined,
+      { parent: direction.id });
+    const pilot = store.createCard('Pilot', 'Original details', 'todo', 'medium', [], 'ForEnergo', [], dir, undefined,
+      { parent: tender.id });
+
+    const hierarchy = Object.fromEntries(store.getAllCards(dir).map(card => [card.title, card.parent]));
+    expect(hierarchy).toEqual({ ForEnergo: undefined, Direction: project.id, Tender: direction.id, Pilot: tender.id });
+
+    const initialFiles = store.getAllCards(dir).length;
+    expect(() => store.createCard('Missing parent', '', 'todo', 'medium', [], 'ForEnergo', [], dir, undefined,
+      { parent: 'not-a-card' })).toThrow('parent_relation_missing');
+    expect(store.getAllCards(dir)).toHaveLength(initialFiles);
+
+    const otherProject = store.createCard('Other project', '', 'todo', 'medium', [], 'Other', [], dir);
+    const otherOwner = store.createCard('Other owner', '', 'todo', 'medium', [], 'ForEnergo', [], dir, undefined,
+      { owner: 'oleg' });
+    expect(() => store.updateCard(pilot.id, { parent: otherProject.id, description: 'must not persist' }, pilot.version, dir))
+      .toThrow('parent_relation_scope_mismatch');
+    expect(() => store.updateCard(pilot.id, { parent: otherOwner.id }, pilot.version, dir))
+      .toThrow('parent_relation_scope_mismatch');
+    expect(() => store.updateCard(pilot.id, { parent: pilot.id }, pilot.version, dir))
+      .toThrow('parent_relation_self');
+    expect(() => store.updateCard(project.id, { parent: pilot.id }, project.version, dir))
+      .toThrow('parent_relation_cycle');
+    expect(() => store.updateCard(project.id, { project: 'Moved project' }, project.version, dir))
+      .toThrow('parent_relation_scope_mismatch');
+    expect(() => store.deleteCard(tender.id, dir)).toThrow('parent_relation_has_children');
+
+    const unchanged = store.findCardById(pilot.id, dir);
+    expect(unchanged).toMatchObject({ parent: tender.id, description: 'Original details', version: pilot.version });
+    expect(store.updateCard(pilot.id, { parent: otherProject.id }, pilot.version - 1, dir)).toMatchObject({ conflict: true });
+    const cleared = store.updateCard(pilot.id, { parent: null as unknown as string }, pilot.version, dir);
+    if (!cleared || 'conflict' in cleared) throw new Error('parent clear failed');
+    expect(store.findCardById(pilot.id, dir)?.parent).toBeUndefined();
+  });
+
+  test('serializes concurrent parent changes so the accepted graph cannot become cyclic', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-parent-concurrency-'));
+    isolatedDirs.push(dir);
+    const left = store.createCard('Left', '', 'todo', 'medium', [], 'Concurrent project', [], dir);
+    const right = store.createCard('Right', '', 'todo', 'medium', [], 'Concurrent project', [], dir);
+
+    const outcomes = await Promise.allSettled([
+      Promise.resolve().then(() => store.updateCard(left.id, { parent: right.id }, left.version, dir)),
+      Promise.resolve().then(() => store.updateCard(right.id, { parent: left.id }, right.version, dir)),
+    ]);
+
+    expect(outcomes.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter(result => result.status === 'rejected')).toHaveLength(1);
+    const saved = store.getAllCards(dir);
+    const linked = saved.filter(card => card.parent !== undefined);
+    expect(linked).toHaveLength(1);
+    expect(saved.find(card => card.parent === linked[0]!.id)).toBeUndefined();
+  });
+
   test('persists an explicit clear for an optional next action through the Markdown round trip', () => {
     const created = store.createCard('Clear next action', 'Task body', 'done', 'medium', [], 'UX QA');
     const set = store.updateCard(created.id, { nextAction: 'Old rework prompt' }, created.version);

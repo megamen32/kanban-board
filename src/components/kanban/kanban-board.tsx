@@ -260,7 +260,7 @@ export function KanbanBoard() {
   }
 
   return (
-    <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete, roles, username, refresh, highlightCardId }}>
+    <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete, roles, username, refresh, highlightCardId, relatedCards: visibleCards, breadcrumbCards: scopedCards, onSelectCard: setSelectedCard }}>
       <DndProvider cards={visibleCards} onMoveCard={moveCard} onReorder={reorderColumn}>
         <div className="relative z-20 shrink-0 border-b px-2 py-1.5 sm:px-4">
           <div className="flex flex-wrap items-center gap-1.5 sm:flex-nowrap">
@@ -336,7 +336,7 @@ export function KanbanBoard() {
           </TabsContent>
           <TabsContent value="execution" className="order-1 min-h-0 min-w-0 overflow-y-auto md:order-2">
             {view === 'list' ? (
-              <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} authoritativeCards={cards} highlightCardId={highlightCardId} username={username} onRefresh={refresh} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
+              <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} authoritativeCards={cards} breadcrumbCards={scopedCards} highlightCardId={highlightCardId} username={username} onRefresh={refresh} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
             ) : (
           <div className="flex gap-3 sm:gap-4 p-3 sm:p-6 overflow-x-auto overscroll-x-contain flex-1">
               {PRIMARY_BOARD_COLUMNS.map((col, index) => (
@@ -365,14 +365,14 @@ export function KanbanBoard() {
                 <option value="archived">Не планируется ({counts.archived})</option>
               </select>
             </div>
-            <TaskListView cards={closedCards} authoritativeCards={cards} highlightCardId={highlightCardId} username={username} onRefresh={refresh} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
+            <TaskListView cards={closedCards} authoritativeCards={cards} breadcrumbCards={scopedCards} highlightCardId={highlightCardId} username={username} onRefresh={refresh} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
           </TabsContent>
         </Tabs>
         <Button className="fixed bottom-20 right-4 z-50 h-12 w-12 rounded-full shadow-lg md:bottom-6 md:right-6" aria-label="Новая задача" title="Новая задача" onClick={() => { setDefaultColumn('todo'); setShowAdd(true); }}>
           <Plus className="h-5 w-5" />
         </Button>
-        <AddCardDialog projectOptions={projectOptions} defaultProject={project === 'all' ? '' : project} ownerPreview={identityChecked ? username ?? 'nikita' : null} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
-        {selectedCard && <CardEditDialog projectOptions={projectOptions} relatedCards={cards} roles={roles} card={selectedCard} username={username} onRefresh={refresh} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReviewDecision} />}
+        <AddCardDialog projectOptions={projectOptions} relatedCards={visibleCards} defaultProject={project === 'all' ? '' : project} ownerPreview={identityChecked ? username ?? 'nikita' : null} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
+        {selectedCard && <CardEditDialog projectOptions={projectOptions} relatedCards={visibleCards} breadcrumbCards={scopedCards} roles={roles} card={selectedCard} username={username} onRefresh={refresh} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReviewDecision} onSelectCard={setSelectedCard} />}
         {conflict && <ConflictDialog conflict={conflict} onResolve={resolveConflict} />}
         {isSuperAdmin && <RolesDialog owner={person} open={showRoles} onOpenChange={setShowRoles} onSaved={() => setRoleRefresh(value => value + 1)} />}
       </DndProvider>

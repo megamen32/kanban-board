@@ -175,17 +175,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: decision.reason }, { status: 400 });
     }
     const patch = decision.patch;
-    const card = createCard(
-      String(patch.title ?? title),
-      patch.description as string | undefined,
-      patch.column,
-      patch.priority,
-      patch.tags,
-      String(patch.project ?? project),
-      patch.assignees,
-      tasksDir,
+    const createOptions = {
+      ...(typeof patch.parent === 'string' ? { parent: patch.parent } : {}),
+      ...(typeof patch.owner === 'string' ? { owner: patch.owner } : {}),
+    };
+    const createArgs = [
+      String(patch.title ?? title), patch.description as string | undefined, patch.column,
+      patch.priority, patch.tags, String(patch.project ?? project), patch.assignees, tasksDir,
       patch.dueAt || undefined,
-    );
+    ] as const;
+    const card = Object.keys(createOptions).length > 0
+      ? createCard(...createArgs, createOptions)
+      : createCard(...createArgs);
     const policyFields = [
       'column', 'owner', 'blockerReason', 'shared', 'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
       'week', 'bigRock', 'parent', 'scheduledAt', 'todayRank', 'source', 'needsReview',
@@ -193,7 +194,10 @@ export async function POST(req: NextRequest) {
       'completionEvidence', 'approvalEvidence',
     ];
     const policyPatch = Object.fromEntries(
-      policyFields.filter(key => key in patch).map(key => [key, (patch as Record<string, unknown>)[key]]),
+      policyFields.filter(key => key in patch
+        && !(key === 'parent' && typeof patch.parent === 'string')
+        && !(key === 'owner' && typeof patch.owner === 'string'))
+        .map(key => [key, (patch as Record<string, unknown>)[key]]),
     ) as KanbanCardUpdates;
     const persisted = Object.keys(policyPatch).length > 0
       ? updateCard(card.id, policyPatch, undefined, tasksDir)

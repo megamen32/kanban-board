@@ -45,6 +45,11 @@ function textFromResult(result: unknown): string {
   return text;
 }
 
+function scopedArgsHash(args: Record<string, unknown>): string {
+  const ordered = Object.fromEntries(Object.keys(args).sort().map(key => [key, args[key]]));
+  return createHash('sha256').update(JSON.stringify(ordered)).digest('base64url');
+}
+
 describe('kanban.change MCP transition policy', () => {
   let tasksDir: string;
   let client: Client;
@@ -266,6 +271,23 @@ describe('kanban.change MCP transition policy', () => {
     expect(textFromResult(result)).toMatch(/role|invalid/i);
     expect(getAllCards(tasksDir)).toEqual([]);
     expect(fs.readdirSync(tasksDir)).toEqual([]);
+  });
+
+  it('creates an MCP child under a same-project parent and rejects a missing parent without an orphan', async () => {
+    const parent = createCard('ForEnergo project', '', 'todo', 'medium', [], 'alpha', [], tasksDir);
+    const child = await client.callTool({ name: 'kanban.change', arguments: {
+      mode: 'new', title: 'Direction', project: 'alpha', parent: parent.id,
+    } });
+    expect(child.isError, textFromResult(child)).not.toBe(true);
+    expect(JSON.parse(textFromResult(child)).card).toMatchObject({ title: 'Direction', parent: parent.id, project: 'alpha' });
+
+    const beforeInvalidCreate = getAllCards(tasksDir);
+    const invalid = await client.callTool({ name: 'kanban.change', arguments: {
+      mode: 'new', title: 'Out-of-scope child', project: 'alpha', parent: 'not-visible-parent',
+    } });
+    expect(invalid.isError).toBe(true);
+    expect(textFromResult(invalid)).toContain('parent_relation_missing');
+    expect(getAllCards(tasksDir)).toEqual(beforeInvalidCreate);
   });
 
   it('requires an ExManager signature, then replays one source identity and preserves no-launch outcomes', async () => {
@@ -508,5 +530,35 @@ describe('shared ExManager MCP write scope', () => {
     const cross = await client.callTool({ name: 'kanban.change', arguments: { ...crossArgs, exmanagerScope: signTodoWriteScope(privateKey, crossClaims) } });
     expect(cross.isError).toBe(true);
     expect(findCardById(beta.id, tasksDir)?.title).toBe('Beta task');
+  });
+
+  it('does not let a signed project-scoped create link to a parent from another project', async () => {
+    const alpha = createCard('Alpha parent', '', 'todo', 'medium', [], 'alpha', [], tasksDir);
+    const beta = createCard('Beta parent', '', 'todo', 'medium', [], 'beta', [], tasksDir);
+    const alphaCreateArgs = { mode: 'new', title: 'Alpha child', project: 'alpha', parent: alpha.id };
+    const issuedAtMs = Date.now();
+    const claims: TodoMcpWriteScopeClaims = {
+      v: 1, purpose: 'todo-board-mcp-write', userId: 'manager-a', tool: 'kanban.change',
+      argsSha256: scopedArgsHash(alphaCreateArgs),
+      projects: ['alpha'], owner: false, issuedAtMs, expiresAtMs: issuedAtMs + 120_000,
+    };
+    const valid = await client.callTool({ name: 'kanban.change', arguments: {
+      ...alphaCreateArgs, exmanagerScope: signTodoWriteScope(privateKey, claims),
+    } });
+    expect(valid.isError, textFromResult(valid)).not.toBe(true);
+    expect(JSON.parse(textFromResult(valid)).card.parent).toBe(alpha.id);
+
+    const foreignCreateArgs = { ...alphaCreateArgs, title: 'Foreign-linked child', parent: beta.id };
+    const foreignClaims = {
+      ...claims,
+      argsSha256: scopedArgsHash(foreignCreateArgs),
+    };
+    const beforeForeignCreate = getAllCards(tasksDir);
+    const foreign = await client.callTool({ name: 'kanban.change', arguments: {
+      ...foreignCreateArgs, exmanagerScope: signTodoWriteScope(privateKey, foreignClaims),
+    } });
+    expect(foreign.isError).toBe(true);
+    expect(textFromResult(foreign)).toContain('parent_relation_scope_mismatch');
+    expect(getAllCards(tasksDir)).toEqual(beforeForeignCreate);
   });
 });

@@ -13,6 +13,7 @@ import { RolePicker } from './role-picker';
 import { fromDateTimeLocalValue } from '@/lib/kanban/date-input';
 import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
 import { ASSIGNEE_AUTHORIZATION_NOTICE, createFailureMessage, isAssigneeAuthorizationFailure } from './create-form-errors';
+import { getEligibleParentCards } from './card-hierarchy';
 
 export interface PlanningMetadataForm {
   type: PlanningType;
@@ -56,10 +57,11 @@ interface Props {
   ownerPreview?: string | null;
   roles?: RoleDefinition[];
   projectOptions?: string[];
+  relatedCards?: KanbanCard[];
   onCreate: (title: string, description: string, column: string, priority: string, tags: string[], project: string, assignees: string[], dueAt?: string, planning?: ReturnType<typeof buildPlanningMetadataCreate>) => Promise<KanbanCard | undefined>;
 }
 
-export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProject = '', ownerPreview = 'nikita', onCreate, roles, projectOptions = [] }: Props) {
+export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProject = '', ownerPreview = 'nikita', onCreate, roles, projectOptions = [], relatedCards = [] }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [column, setColumn] = useState(defaultColumn);
@@ -87,6 +89,9 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
   }, [error]);
 
   const typedAssignees = () => assignees.split(',').map(value => value.trim()).filter(Boolean);
+  const parentChoices = project.trim() && ownerPreview
+    ? getEligibleParentCards({ id: '__new_card__', title: '', parent: undefined, project: project.trim(), owner: ownerPreview }, relatedCards)
+    : [];
 
   const submit = async (withoutAssignees = false) => {
     if (!title.trim() || !project.trim() || (column === 'blocked' && !blockerReason.trim()) || submittingRef.current) return;
@@ -304,7 +309,15 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="text-xs text-muted-foreground">Планировать на дату<Input className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
                   <Input placeholder="Ждём от (ID через запятую)" value={planning.waitingFor} onChange={e => setPlanning({ ...planning, waitingFor: e.target.value })} />
                   <Input placeholder="Требует согласования от (ID через запятую)" value={planning.requiresApprovalFrom} onChange={e => setPlanning({ ...planning, requiresApprovalFrom: e.target.value })} />
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><Input placeholder="Предложенный исполнитель" value={planning.suggestedAssignee} onChange={e => setPlanning({ ...planning, suggestedAssignee: e.target.value })} /><Input placeholder="Родительская карточка" value={planning.parent} onChange={e => setPlanning({ ...planning, parent: e.target.value })} /></div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <Input placeholder="Предложенный исполнитель" value={planning.suggestedAssignee} onChange={e => setPlanning({ ...planning, suggestedAssignee: e.target.value })} />
+                    <label className="text-xs text-muted-foreground">Родительская задача
+                      <select aria-label="Родительская задача" value={planning.parent} onChange={e => setPlanning({ ...planning, parent: e.target.value })} className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground">
+                        <option value="">Без родителя</option>
+                        {parentChoices.map(parentCard => <option key={parentCard.id} value={parentCard.id}>{parentCard.title}</option>)}
+                      </select>
+                    </label>
+                  </div>
                 </div>
               </div>
             )}

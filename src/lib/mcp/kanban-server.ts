@@ -414,9 +414,14 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
           decision.patch.dueAt === undefined || decision.patch.dueAt === null
             ? undefined
             : decision.patch.dueAt,
+          {
+            ...(typeof decision.patch.parent === 'string' ? { parent: decision.patch.parent } : {}),
+            ...(typeof decision.patch.owner === 'string' ? { owner: decision.patch.owner } : {}),
+          },
         );
         const persisted = Object.fromEntries(
-          Object.entries(decision.patch).filter(([key]) => !['title', 'description', 'project', 'column', 'priority', 'tags', 'assignees', 'dueAt'].includes(key)),
+          Object.entries(decision.patch).filter(([key]) => !['title', 'description', 'project', 'column', 'priority', 'tags', 'assignees', 'dueAt'].includes(key)
+            && !(key === 'parent' && typeof decision.patch.parent === 'string')),
         ) as KanbanCardUpdates;
         const card = Object.keys(persisted).length > 0
           ? updateCard(basicCard.id, persisted, undefined, tasksDir) as KanbanCard
