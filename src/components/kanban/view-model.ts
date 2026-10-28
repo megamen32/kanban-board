@@ -5,6 +5,17 @@ export type PlanningTab = 'dashboard' | 'execution' | 'inbox' | 'week' | 'today'
 export type WorkspaceView = 'mine' | 'shared' | 'all';
 export type PrimaryBoardLane = 'incoming' | 'in-progress' | 'review';
 
+/** Resolves the visible workspace filter; only the exact QA SSO actor gets the server-scoped QA view. */
+export function resolveInitialWorkspaceView(
+  hostname: string,
+  username: string | null,
+  requested: WorkspaceView | undefined,
+): WorkspaceView {
+  if (hostname === 'qa-board.bezrabotnyi.com' && username === 'testlogin') return 'all';
+  if (username === 'nikita' && requested) return requested;
+  return 'mine';
+}
+
 const INCOMING_COLUMNS = new Set<KanbanCard['column']>(['inbox', 'todo', 'someday']);
 const IN_PROGRESS_COLUMNS = new Set<KanbanCard['column']>(['in-progress', 'blocked']);
 const PRIORITY_ORDER: Record<KanbanCard['priority'], number> = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -48,15 +59,25 @@ export function filterWorkspaceCards(cards: KanbanCard[], person: string, view: 
 
 /** Discovers people already represented by card owners or assignments. */
 export function getPeople(cards: KanbanCard[]): string[] {
-  return [...new Set(cards.flatMap(card => [card.owner, ...card.assignees, ...(card.waitingFor ?? []), ...(card.requiresApprovalFrom ?? [])])
-    .filter((value): value is string => Boolean(value?.trim()))
-    .map(normalizePerson))]
-    .sort((left, right) => left.localeCompare(right, 'ru'));
+  const labels = new Map<string, string>();
+  for (const value of cards.flatMap(card => [card.owner, card.assignee, ...card.assignees, ...(card.waitingFor ?? []), ...(card.requiresApprovalFrom ?? [])])) {
+    if (!value?.trim()) continue;
+    const key = normalizePerson(value);
+    if (!labels.has(key)) labels.set(key, personLabel(value));
+  }
+  return [...labels.values()].sort((left, right) => left.localeCompare(right, 'ru'));
 }
 
-/** Keeps the historic Cyrillic spelling of the board owner on the same person. */
+/** Maps every stored/display alias to the authenticated Nikita identity key. */
 function normalizePerson(value: string): string {
-  return value.trim() === 'Никита' ? 'nikita' : value.trim();
+  const trimmed = value.trim();
+  const alias = trimmed.toLocaleLowerCase('ru-RU');
+  return ['nikita', 'никита', 'никита розанов'].includes(alias) ? 'nikita' : trimmed;
+}
+
+/** Keep the canonical visible name separate from the stable identity key. */
+function personLabel(value: string): string {
+  return normalizePerson(value) === 'nikita' ? 'Никита Розанов' : value.trim();
 }
 
 /** Returns the cards shown by one planning tab, using the shared deterministic predicates. */

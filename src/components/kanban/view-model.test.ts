@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterCards, getAssigneeOptions, getPlanningTabCards, getPrimaryBoardLaneCards, getProjectOptions, isSmartNotesInbox, searchCards } from './view-model';
+import { filterCards, filterWorkspaceCards, getAssigneeOptions, getPlanningTabCards, getPrimaryBoardLaneCards, getProjectOptions, isSmartNotesInbox, resolveInitialWorkspaceView, searchCards } from './view-model';
 import type { KanbanCard } from '@/lib/kanban/types';
 
 const card = (overrides: Partial<KanbanCard> = {}): KanbanCard => ({
@@ -20,6 +20,26 @@ const card = (overrides: Partial<KanbanCard> = {}): KanbanCard => ({
 });
 
 describe('kanban view model', () => {
+  it('shows the server-authorized QA fixture to testlogin without changing its owner or other workspace defaults', () => {
+    const qaCard = card({
+      id: '43687640-5245-4ec4-b29c-2b8970cb9d30',
+      title: 'UX QA: testlogin visibility',
+      owner: 'nikita',
+      project: 'UX QA 2026-10-26',
+    });
+    const qaView = resolveInitialWorkspaceView('qa-board.bezrabotnyi.com', 'testlogin', 'mine');
+
+    expect(qaView).toBe('all');
+    const visible = filterWorkspaceCards([qaCard], 'testlogin', qaView!);
+    expect(visible).toEqual([qaCard]);
+    expect(visible[0]).toBe(qaCard);
+    expect(visible[0].owner).toBe('nikita');
+
+    expect(resolveInitialWorkspaceView('todo-board.airlock.bezrabotnyi.com', 'testlogin', 'mine')).toBe('mine');
+    expect(resolveInitialWorkspaceView('qa-board.bezrabotnyi.com', 'qa_exmanager_a', 'all')).toBe('mine');
+    expect(resolveInitialWorkspaceView('todo-board.airlock.bezrabotnyi.com', 'nikita', 'all')).toBe('all');
+  });
+
   it('returns unique sorted projects and keeps the explicit unassigned bucket', () => {
     expect(getProjectOptions([card(), card({ id: '2', project: 'Xcode' }), card({ id: '3', project: '' })]))
       .toEqual(['Hermes', 'Xcode', 'Без проекта']);

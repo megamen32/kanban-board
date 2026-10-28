@@ -33,7 +33,7 @@ import type { KanbanCard, KanbanCardUpdates, RoleDefinition } from '@/lib/kanban
 import { NIKITA_ACTOR, type HumanReviewAction } from '@/lib/kanban/transition-policy';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { TaskListView } from './task-list-view';
-import { filterCards, filterWorkspaceCards, getAssigneeOptions, getProjectOptions, getPrimaryBoardLaneCards, searchCards, isClosedCard, getBoardCounts, filterAttentionCards, type AttentionFilter, type WorkspaceView } from './view-model';
+import { filterCards, filterWorkspaceCards, getAssigneeOptions, getProjectOptions, getPrimaryBoardLaneCards, searchCards, isClosedCard, getBoardCounts, filterAttentionCards, resolveInitialWorkspaceView, type AttentionFilter, type WorkspaceView } from './view-model';
 import { CardEditDialog } from './card-edit-dialog';
 import { NotificationSettings } from '@/components/notifications/notification-settings';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -112,7 +112,7 @@ export function KanbanBoard() {
     if (initial.project) setProject(initial.project);
     if (initial.assignee) setAssignee(initial.assignee);
     if (initial.search) setSearch(initial.search);
-    if (username === NIKITA_ACTOR && initial.workspaceView) setWorkspaceView(initial.workspaceView);
+    setWorkspaceView(resolveInitialWorkspaceView(window.location.hostname, username, initial.workspaceView));
     if (initial.layout) setView(isMobile ? 'list' : initial.layout);
     if (initial.tab && (initial.tab !== 'balance' || username === NIKITA_ACTOR)) setPlanningTab(initial.tab);
     if (initial.attention) setAttention(initial.attention);

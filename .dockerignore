@@ -6,3 +6,5 @@ git
 *.log
 .env*
 .DS_Store
+**/*.test.*
+**/*.spec.*

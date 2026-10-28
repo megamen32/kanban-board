@@ -1,6 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { CardResultPreview } from './card-result-preview';
 import { ReviewActionGate, type ReviewActionCard } from './review-action-gate';
 
 const malformed: ReviewActionCard = { column: 'in-progress', needsReview: true, requiresApprovalFrom: [], resultHistory: [] };
@@ -19,5 +20,22 @@ describe('malformed review gate recovery affordance', () => {
     expect(renderToStaticMarkup(React.createElement(ReviewActionGate, { card: malformed, verifiedUsername: null }, actions))).toContain('Войдите');
     expect(renderToStaticMarkup(React.createElement(ReviewActionGate, { card: { ...malformed, resultHistory: [{ summary: 'result' }] }, verifiedUsername: 'nikita' }, actions))).toBe('');
     expect(renderToStaticMarkup(React.createElement(ReviewActionGate, { card: { column: 'review', needsReview: true, requiresApprovalFrom: ['nikita'] }, verifiedUsername: 'nikita' }, actions))).toContain('Принять результат');
+  });
+});
+
+describe('card result review preview', () => {
+  it('renders the latest executor result where the reviewer can read it before deciding', () => {
+    const html = renderToStaticMarkup(React.createElement(CardResultPreview, {
+      result: {
+        summary: '## Итого: 2500\n\nНужен **тестовый файл** и проверка тестовым участником.',
+        submittedBy: 'testlogin', submittedAt: '2026-10-28T00:00:00.000Z',
+      },
+    }));
+
+    expect(html).toContain('Результат для проверки');
+    expect(html).toContain('<h2');
+    expect(html).toContain('<strong');
+    expect(html).toContain('тестовый файл');
+    expect(html).toContain('testlogin');
   });
 });

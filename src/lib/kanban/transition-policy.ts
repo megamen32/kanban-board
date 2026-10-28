@@ -369,6 +369,7 @@ export function decideHumanReview(
     patch: {
       column: 'done',
       needsReview: false,
+      nextAction: null,
       completedBy: actor,
       completedAt: decidedAt,
       completionEvidence: appendEvidence(before.completionEvidence, undefined, {

@@ -20,6 +20,8 @@ import type { KanbanUpdateRequest } from '@/hooks/use-kanban';
 import { initialPlanningMetadata } from './initial-planning';
 import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
 import { ReviewActionGate, reviewActionAccess } from './review-action-gate';
+import { CardResultPreview } from './card-result-preview';
+import { MarkdownText } from './markdown-text';
 
 const MarkdownEditor = dynamic(() => import('./markdown-editor').then(module => module.MarkdownEditor), {
   ssr: false,
@@ -173,6 +175,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
 
   const catalogLink = card.catalogLink;
   const reviewAccess = reviewActionAccess(card, username);
+  const latestResult = card.resultHistory?.[card.resultHistory.length - 1] ?? null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -234,6 +237,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             {card.nextAction && <p className="text-sm"><span className="font-medium">Следующий шаг:</span> {card.nextAction}</p>}
             {card.blockerReason && <p className="text-sm"><span className="font-medium">Что мешает:</span> {card.blockerReason}</p>}
             {card.column === 'blocked' && <p className="text-sm text-amber-700 dark:text-amber-300">Укажи причину блокировки ниже, чтобы было ясно, что нужно для продолжения.</p>}
+            {reviewAccess !== 'not-awaiting-review' && latestResult && <CardResultPreview result={latestResult} />}
             {reviewAccess !== 'not-awaiting-review' && <ReviewActionGate card={card} verifiedUsername={username}>
               {onReviewDecision && <div className="space-y-2 border-t pt-3">
                 <p className="text-xs text-muted-foreground">{reviewAccess === 'owner-recovery' ? 'Проверяющий не назначен и результата ещё нет. Укажи исправление и верни задачу в работу.' : reviewAccess === 'owner-review' ? 'Проверяющий не назначен. Владелец может принять готовый результат или вернуть его на доработку.' : 'Решение проверяется сервером по текущему списку согласующих.'}</p>
@@ -255,7 +259,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             {(card.resultHistory ?? []).length > 0 && <div className="space-y-2">
               <h3 className="text-sm font-medium">Результаты исполнителя</h3>
               {[...(card.resultHistory ?? [])].reverse().map((result, index) => <article key={`${result.submittedAt}-${index}`} className="rounded border p-2 text-sm">
-                <p>{result.summary}</p>
+                <MarkdownText text={result.summary} />
                 <p className="mt-1 text-xs text-muted-foreground">{result.submittedBy} · {new Date(result.submittedAt).toLocaleString()}</p>
                 {result.runRef && <p className="break-all text-xs">Запуск: {result.runRef}</p>}
                 {result.evidenceRefs.length > 0 && <div className="mt-1 text-xs"><span className="font-medium">Ссылки на подтверждения:</span><ul className="list-disc pl-5">{result.evidenceRefs.map((ref, refIndex) => <li key={`${ref}-${refIndex}`} className="break-all">{ref}</li>)}</ul></div>}

@@ -12,7 +12,7 @@ const { findCardById, updateCard, validateTransition, dispatchCardEvent, startDu
   startDueReminderScheduler: vi.fn(),
   tasksDirForScope: vi.fn(),
   identity: { current: { username: 'nikita', scope: 'work' as 'work' | 'personal' } },
-  authenticated: { current: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' } | null },
+  authenticated: { current: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' | 'personal' } | null },
   managerAuthorized: { current: false },
   nativeAccess: { current: null as null | { userId: string; forProject: (project: string) => Promise<{ project: string; team: string; readAllowed: true; writeAllowed: boolean }> } },
   nativeProjectAccessContextFromRequest: vi.fn(async (_request?: Request) => nativeAccess.current),
@@ -397,6 +397,50 @@ describe('GET /api/kanban/cards/[id]', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ card: qaCard });
     expect(findCardById).toHaveBeenCalledWith('card-1', '/scoped/work');
+  });
+
+  it('allows SSO testlogin to read only the exact synthetic QA card on the QA host', async () => {
+    vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
+    authenticated.current = { username: 'testlogin', scope: 'work' };
+    identity.current = { username: 'testlogin', scope: 'work' };
+    const qaCard = {
+      ...existingCard,
+      id: '43687640-5245-4ec4-b29c-2b8970cb9d30',
+      owner: 'nikita',
+      project: 'UX QA 2026-10-26',
+    };
+    findCardById.mockReturnValue(qaCard);
+
+    const allowed = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards/43687640-5245-4ec4-b29c-2b8970cb9d30'), {
+      params: Promise.resolve({ id: '43687640-5245-4ec4-b29c-2b8970cb9d30' }),
+    });
+    expect(allowed.status).toBe(200);
+    expect(await allowed.json()).toEqual({ card: qaCard });
+
+    const wrongHost = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards/43687640-5245-4ec4-b29c-2b8970cb9d30'), {
+      params: Promise.resolve({ id: '43687640-5245-4ec4-b29c-2b8970cb9d30' }),
+    });
+    expect(wrongHost.status).toBe(404);
+
+    authenticated.current = { username: 'testlogin', scope: 'personal' };
+    identity.current = { username: 'testlogin', scope: 'personal' };
+    const personalScope = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards/43687640-5245-4ec4-b29c-2b8970cb9d30'), {
+      params: Promise.resolve({ id: '43687640-5245-4ec4-b29c-2b8970cb9d30' }),
+    });
+    expect(personalScope.status).toBe(404);
+
+    authenticated.current = { username: 'testlogin', scope: 'work' };
+    identity.current = { username: 'testlogin', scope: 'work' };
+    const wrongId = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards/another-card'), {
+      params: Promise.resolve({ id: 'another-card' }),
+    });
+    expect(wrongId.status).toBe(404);
+
+    findCardById.mockReturnValue({ ...qaCard, project: 'Олег и Никита' });
+    const wrongProject = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards/43687640-5245-4ec4-b29c-2b8970cb9d30'), {
+      params: Promise.resolve({ id: '43687640-5245-4ec4-b29c-2b8970cb9d30' }),
+    });
+    expect(wrongProject.status).toBe(404);
   });
 
   it('denies QA reads for cards outside the synthetic UX project', async () => {

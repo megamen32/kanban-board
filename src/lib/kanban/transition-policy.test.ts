@@ -55,6 +55,21 @@ describe('kanban transition policy', () => {
       .toMatchObject({ kind: 'rejected', reason: 'reviewer_not_authorized' });
   });
 
+  test('clears the rework next action when an assigned reviewer accepts the result', () => {
+    const waiting: KanbanCard = {
+      ...baseCard,
+      column: 'review',
+      needsReview: true,
+      requiresApprovalFrom: ['testlogin'],
+      nextAction: 'Результат доработки готов к проверке назначенным участником.',
+      resultHistory: [{ summary: 'v2', evidenceRefs: [], submittedBy: 'executor', submittedAt: '2026-10-28T00:00:00.000Z' }],
+    };
+
+    expect(decideHumanReview(waiting, 'accept', 'testlogin')).toMatchObject({
+      kind: 'accepted', patch: { column: 'done', needsReview: false, nextAction: null, completedBy: 'testlogin' },
+    });
+  });
+
   test('owner may assign a reviewer without changing a card already waiting for review', () => {
     const waiting: KanbanCard = { ...baseCard, column: 'review', needsReview: true, requiresApprovalFrom: [] };
     const ownerContext = {
