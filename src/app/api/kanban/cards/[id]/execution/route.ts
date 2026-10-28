@@ -1933,7 +1933,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   let failureStage = 'authorize-card';
   try {
     const { id } = await params;
-    const body: unknown = await request.json();
+    const body: unknown = await request.clone().json();
     const allowAssignedReviewer = isRecord(body)
       && ['continue-task', 'sync-task-continuation'].includes(String(body.action));
     const context = await authorizedTaskCard(request, id, 'write', undefined, allowAssignedReviewer);

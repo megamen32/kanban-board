@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { AIRLOCK_TODO_NATIVE_IDENTITY_HEADER, requestPathAndQuery } from '../../../../../../lib/auth/airlock-native-identity';
+import { nativeProjectAccessForRequest } from '../../../../../../lib/kanban/native-project-access';
 import type { KanbanCard, TaskExecutionProjectBinding } from '@/lib/kanban/types';
 
 const mocks = vi.hoisted(() => ({
@@ -487,6 +489,69 @@ describe('task execution API', () => {
     expect(mocks.updateCard).not.toHaveBeenCalled();
     expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
     expect(mocks.boardHumanIdentityFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('verifies a signed native PATCH after parsing while retaining signature, body, and project checks', async () => {
+    const cardId = '550e8400-e29b-41d4-a716-446655440000';
+    const pair = generateKeyPairSync('ed25519');
+    const domain = Buffer.from('airlock-todo-native-identity-v1\n', 'utf8');
+    const body = JSON.stringify({ action: 'sync-result', operationId: '1'.repeat(64), expectedVersion: baseCard.version });
+    const pathFor = (project: string) => `/api/kanban/cards/${cardId}/execution?project=${encodeURIComponent(project)}`;
+    const signedRequest = (project = 'Demo') => {
+      const request = new NextRequest(`https://todo.example.test${pathFor(project)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body,
+      });
+      const issuedAtMs = Date.now();
+      const payload = { v: 1, userId: 'native-user-1', method: 'PATCH', path: requestPathAndQuery(request),
+        bodySha256: createHash('sha256').update(body).digest('base64url'), project, issuedAtMs, expiresAtMs: issuedAtMs + 60_000 };
+      const bytes = Buffer.from(JSON.stringify(payload));
+      const assertion = `${bytes.toString('base64url')}.${sign(null, Buffer.concat([domain, bytes]), pair.privateKey).toString('base64url')}`;
+      request.headers.set(AIRLOCK_TODO_NATIVE_IDENTITY_HEADER, assertion);
+      return { request, assertion };
+    };
+    mocks.currentCard.value = { ...baseCard, id: cardId };
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const project = (JSON.parse(String(init?.body)) as { project: string }).project;
+      return project === 'Demo'
+        ? Response.json({ project, team: 'integrator', readAllowed: true, writeAllowed: true })
+        : new Response(null, { status: 403 });
+    });
+    const requestModule = await import('@/lib/auth/request');
+    vi.mocked(requestModule.nativeProjectAccessContextFromRequest).mockImplementation(request => nativeProjectAccessForRequest(request, {
+      endpoint: 'https://todo.example.test/internal/todo/project-scope', publicKey: pair.publicKey,
+      fetcher: fetcher as unknown as typeof fetch,
+    }));
+
+    const valid = signedRequest();
+    const response = await PATCH(valid.request, { params: Promise.resolve({ id: cardId }) });
+    if (!response) throw new Error('signed native PATCH response missing');
+    expect(response.status).toBe(404); // Signature and current project grant passed; no matching operation exists.
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(mocks.updateCard).not.toHaveBeenCalled();
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+
+    const invalidSignature = signedRequest();
+    const [payload, signature] = invalidSignature.assertion.split('.');
+    invalidSignature.request.headers.set(AIRLOCK_TODO_NATIVE_IDENTITY_HEADER,
+      `${payload}.${`${signature!.slice(0, -1)}${signature!.endsWith('A') ? 'B' : 'A'}`}`);
+    const deniedSignature = await PATCH(invalidSignature.request, { params: Promise.resolve({ id: cardId }) });
+    if (!deniedSignature) throw new Error('invalid native signature response missing');
+    expect(deniedSignature.status).toBe(403);
+
+    const signedBody = signedRequest();
+    const mismatchedBody = new NextRequest(signedBody.request.url, {
+      method: 'PATCH', headers: signedBody.request.headers,
+      body: JSON.stringify({ action: 'sync-result', operationId: '2'.repeat(64), expectedVersion: baseCard.version }),
+    });
+    const deniedBody = await PATCH(mismatchedBody, { params: Promise.resolve({ id: cardId }) });
+    if (!deniedBody) throw new Error('mismatched native body response missing');
+    expect(deniedBody.status).toBe(403);
+
+    const wrongProject = signedRequest('Other');
+    const deniedProject = await PATCH(wrongProject.request, { params: Promise.resolve({ id: cardId }) });
+    if (!deniedProject) throw new Error('wrong native project response missing');
+    expect(deniedProject.status).toBe(404);
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it('does not map a legacy username receipt onto a native user id during PATCH recovery', async () => {
