@@ -788,6 +788,28 @@ describe('task execution API', () => {
     expect(mocks.boardHumanIdentityFromRequest).not.toHaveBeenCalled();
   });
 
+  it('keeps a native execution read loud on a scope outage and silent only on denial', async () => {
+    const getRequest = () => new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution');
+    mocks.nativeProjectAccess.value = {
+      userId: 'airlock-native-user-42',
+      forProject: vi.fn(async () => { throw new Error('native_project_access_unavailable'); }),
+    };
+    const outage = await GET(getRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!outage) throw new Error('native outage response missing');
+    expect(outage.status).toBe(503);
+    expect(await outage.json()).toEqual({ error: 'project access could not be verified' });
+
+    mocks.nativeProjectAccess.value = {
+      userId: 'airlock-native-user-42',
+      forProject: vi.fn(async () => { throw new Error('native_project_access_denied'); }),
+    };
+    const denied = await GET(getRequest(), { params: Promise.resolve({ id: baseCard.id }) });
+    if (!denied) throw new Error('native denied response missing');
+    expect(denied.status).toBe(404);
+    expect(mocks.updateCard).not.toHaveBeenCalled();
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+  });
+
   it('verifies a signed native PATCH after parsing while retaining signature, body, and project checks', async () => {
     const cardId = '550e8400-e29b-41d4-a716-446655440000';
     const pair = generateKeyPairSync('ed25519');
