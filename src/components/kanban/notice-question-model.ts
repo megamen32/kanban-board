@@ -114,11 +114,23 @@ export function canAnswerTaskQuestion(card: {
     taskDecisionRequest?: { requestId: string };
     executorQuestion?: { humanRequestId: string; questionHash: string; choices: readonly { value: string; label: string }[] };
     taskDecisionProposal?: { requestId: string; value: string; authenticatedActor: string };
-    sessionControls?: { stop?: { phase: string }; stops?: readonly { phase: string }[] };
+    sessionControls?: {
+      stop?: { phase: string; controlEpoch?: string };
+      stops?: readonly { phase: string; controlEpoch?: string }[];
+      direct?: readonly { phase: string; requestHash: string }[];
+    };
   }>;
 }, username: string | null, view: TaskQuestionView | null): boolean {
   const latest = card.taskExecutionHistory?.at(-1);
   const latestStop = latest?.sessionControls?.stops?.at(-1) ?? latest?.sessionControls?.stop;
+  const latestDirect = latest?.sessionControls?.direct?.at(-1);
+  // Match the execution route: only an exact accepted direct input with a
+  // different epoch makes an accepted stop historical. Unknown controls fail closed.
+  const activeStop = !!latestStop && (latestStop.phase !== 'accepted'
+    || latestDirect?.phase !== 'accepted'
+    || !/^[a-f0-9]{64}$/.test(latestDirect.requestHash)
+    || !latestStop.controlEpoch
+    || latestStop.controlEpoch === latestDirect.requestHash);
   return isTaskQuestionOwner(card, username) && view?.state === 'pending' && !view.decision
     && latest?.harness === 'opencode' && latest.phase === 'waiting' && latest.lastBoardVersion === card.version
     && latest.taskDecisionRequest?.requestId === view.requestId
@@ -127,7 +139,7 @@ export function canAnswerTaskQuestion(card: {
     && latest.executorQuestion.choices.length === view.question.choices.length
     && latest.executorQuestion.choices.every((choice, index) => choice.value === view.question.choices[index]?.value
       && choice.label === view.question.choices[index]?.label)
-    && !latest.taskDecisionProposal && !latestStop;
+    && !latest.taskDecisionProposal && !activeStop;
 }
 
 export function parseTaskQuestion(value: unknown): TaskQuestionRead {

@@ -87,6 +87,28 @@ describe('Notice task-question UI model', () => {
     } }] }, 'qa-user', taskQuestion)).toBe(false);
   });
 
+  it('allows answering after a later accepted direct input advances the stop epoch only', () => {
+    const receipt = {
+      operationId: 'a'.repeat(64), lastBoardVersion: 9, phase: 'waiting', harness: 'opencode',
+      taskDecisionRequest: { requestId: 'td-' + 'b'.repeat(40) },
+      executorQuestion: { humanRequestId: '67ce04db-d775-4f81-a86d-31af4bbe1091', questionHash: 'c'.repeat(64), choices: view.question.choices },
+      sessionControls: {
+        stops: [{ requestHash: 'd'.repeat(64), phase: 'accepted', controlEpoch: 'e'.repeat(64) }],
+        direct: [{ requestHash: 'f'.repeat(64), phase: 'accepted' }],
+      },
+    };
+    const card = { owner: 'qa-user', assignees: [], version: 9, taskExecutionHistory: [receipt] };
+    const ready = parseTaskQuestion({ ...view, requestId: receipt.taskDecisionRequest.requestId });
+    const taskQuestion = ready.kind === 'ready' ? ready.view : null;
+    expect(canAnswerTaskQuestion(card, 'qa-user', taskQuestion)).toBe(true);
+    expect(canAnswerTaskQuestion({ ...card, taskExecutionHistory: [{ ...receipt, sessionControls: {
+      ...receipt.sessionControls, stops: [{ ...receipt.sessionControls.stops[0]!, controlEpoch: 'f'.repeat(64) }],
+    } }] }, 'qa-user', taskQuestion)).toBe(false);
+    expect(canAnswerTaskQuestion({ ...card, taskExecutionHistory: [{ ...receipt, sessionControls: {
+      ...receipt.sessionControls, direct: [{ ...receipt.sessionControls.direct[0]!, phase: 'unknown' }],
+    } }] }, 'qa-user', taskQuestion)).toBe(false);
+  });
+
   it('matches the browser-held launch key only to its current card execution receipt', async () => {
     const operationId = 'stored-client-operation';
     const bytes = new TextEncoder().encode(`card-a\0${operationId}`);
