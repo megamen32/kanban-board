@@ -1607,6 +1607,7 @@ export function verifiedQuestionContinuation(view: TaskQuestionView, attempt: Ta
       || !/^[A-Za-z0-9:_-]{1,512}$/.test(continuation.idempotency_key)
       || continuation.input_id !== `herder-resume-${sha256(continuation.idempotency_key).slice(0, 32)}`
       || !attempt.nativeSessionId
+      || typeof continuation.receipt !== 'string'
       || !supportedReceipt) return undefined;
   return {
     requestId: question.humanRequestId,
