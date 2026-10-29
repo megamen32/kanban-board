@@ -74,6 +74,10 @@ export async function GET(req: NextRequest) {
           if ((await nativeContext.forProject(project)).readAllowed) readable.add(project);
         } catch (error) {
           if (error instanceof Error && error.message === 'native_project_access_denied') continue;
+          // A hint-less listing fails closed per project: one unverifiable
+          // project is excluded, it never blocks the verifiable rest of the
+          // board. An explicitly hinted project keeps the loud 503.
+          if (!hint) continue;
           return NextResponse.json({ error: 'project access could not be verified' }, { status: 503 });
         }
       }

@@ -377,6 +377,38 @@ describe('GET /api/kanban/cards', () => {
     expect(nativeProjectAccessContextFromRequest).toHaveBeenCalledOnce();
   });
 
+  it('keeps an unhinted native listing readable when one project check fails instead of failing the whole board', async () => {
+    ownerBrowserReadAllowed.mockResolvedValueOnce(false);
+    nativeAccess.current = {
+      userId: 'agent-user',
+      forProject: vi.fn(async (project: string) => {
+        if (project === 'Alpha') return { project, team: 'integrator', readAllowed: true as const, writeAllowed: false };
+        throw new Error('native_project_access_unavailable');
+      }),
+    };
+    nativeProjectAccessContextFromRequest.mockResolvedValueOnce(nativeAccess.current);
+    const response = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      cards: [alpha],
+      projects: [{ id: '00000000-0000-4000-8000-000000000001', externalKey: 'alpha-key', name: 'Alpha' }],
+    });
+    expect(nativeAccess.current.forProject).toHaveBeenCalledWith('Alpha');
+    expect(nativeAccess.current.forProject).toHaveBeenCalledWith('Beta');
+  });
+
+  it('still fails loudly when an explicitly hinted native project cannot be verified', async () => {
+    ownerBrowserReadAllowed.mockResolvedValueOnce(false);
+    nativeAccess.current = {
+      userId: 'agent-user',
+      forProject: vi.fn(async () => { throw new Error('native_project_access_unavailable'); }),
+    };
+    nativeProjectAccessContextFromRequest.mockResolvedValueOnce(nativeAccess.current);
+    const response = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards?project=Alpha'));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'project access could not be verified' });
+  });
+
   it('returns only the server-allowlisted board project, independent of query hints', async () => {
     authenticated.current = { username: 'oleg', scope: 'work' };
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards?project=Alpha'));
