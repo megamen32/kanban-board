@@ -378,19 +378,24 @@ function saveReceiptProgress(
   return undefined;
 }
 
-function taskPrompt(card: KanbanCard, execution?: { operationId: string; harness: RouteHarness; sessionId: string; cwd: string }): string {
+export function taskPrompt(card: KanbanCard, execution?: { operationId: string; harness: RouteHarness; sessionId: string; cwd: string }): string {
   const parts = [
     `Выполни задачу канбан карточки ${card.id} из проекта «${card.project}».`,
     `Название: ${card.title}`,
     `Описание задачи:\n${card.description}`,
     'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
-    'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
   ];
   if (execution?.harness === 'opencode') {
     const contextRef = `exmanager-task:${card.id}:${execution.operationId}`;
     parts.push(
       `Если для продолжения нужна ясность от ответственного, используй только metadata-only вызов agent-herder_human_request_create с kind="user", harness="opencode", sessionId=${JSON.stringify(execution.sessionId)}, cwd=${JSON.stringify(execution.cwd)}, contextRef=${JSON.stringify(contextRef)}. Не передавай message, choices или notify: вызов только закрепляет эту задачу и сессию.`,
-      'После успешного binding верни только один обычный JSON-объект без Markdown и текста вокруг: {"kind":"question","human_request_id":"<binding.request_id>","question":"<твой точный вопрос>","choices":[{"value":"<value>","label":"<вариант>"},{"value":"<value>","label":"<вариант>"}],"timeoutValue":"<один из value>"}. Не подменяй вопрос ответом или результатом задачи.',
+      'После успешного binding твой следующий ответ должен быть ровно один JSON-объект и ничего больше: {"kind":"question","human_request_id":"<binding.request_id>","question":"<твой точный вопрос>","choices":[{"value":"<value>","label":"<вариант>"},{"value":"<value>","label":"<вариант>"}],"timeoutValue":"<один из value>"}. Никакого Markdown, никакого текста до или после, никаких замечаний, ссылок и сводок. В этом сообщении не пиши результат задачи и не подменяй вопрос ответом.',
+      'Формат ответа «краткий вывод, публичные ссылки на источники и следующий шаг» относится только к финальному результату задачи после того, как человек ответит на вопрос. Вопрос задаётся сейчас — сейчас нужен только JSON-объект выше.',
+      'Не отмечай карточку выполненной.',
+    );
+  } else {
+    parts.push(
+      'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
     );
   }
   return parts.join('\n\n').slice(0, MAX_TASK_TEXT);
@@ -874,8 +879,7 @@ function exactAcceptedOpenCodeAdmission(receipt: TaskExecutionReceipt): boolean 
     && receipt.lastProgress === 'Исходная доставка подтверждена; нативная сессия простаивает. Результат не принят.';
 }
 
-function openCodeTaskMessageIndex(messages: RecordValue[], card: KanbanCard): number | undefined {
-  const prompt = taskPrompt(card);
+function openCodeTaskMessageIndex(messages: RecordValue[], card: KanbanCard, prompt: string): number | undefined {
   const matches = messages.flatMap((message, index) => message.role === 'user'
     && openCodeVisibleText(message)?.includes(prompt) ? [index] : []);
   return matches.length === 1 ? matches[0] : undefined;
@@ -2945,11 +2949,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           ? mainBindingIsExact && mainNativeInputMessageId
             ? openCodeResultInputIndex(messages, mainNativeInputMessageId, attempt.messageInputId, verifiedInitialInputProof)
             : undefined
-          : openCodeTaskMessageIndex(messages, context.card);
+          : openCodeTaskMessageIndex(messages, context.card, taskPromptForReceipt(context.card, attempt));
       if (userIndex === undefined) return NextResponse.json({ ...taskExecutionSnapshot(context.card),
-        waitReason: directBindingIsExact
+        waitReason: (directBindingIsExact
           ? 'Явное продолжение принято, но его точное сообщение пока не найдено в связанной сессии'
-          : 'Точное поручение этой карточки пока не найдено в связанной сессии' }, { status: 202 });
+          : 'Точное поручение этой карточки пока не найдено в связанной сессии') }, { status: 202 });
       const questionInputId = directInputId ?? attempt.messageInputId;
       const questionInputMessageId = directInput?.nativeInputMessageId ?? mainNativeInputMessageId;
       const questionJobId = directInput?.nativeDispatchJobId ?? mainNativeDispatchJobId;
@@ -3049,7 +3053,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           ? mainBindingIsExact && mainNativeInputMessageId
             ? openCodeResultInputIndex(messages, mainNativeInputMessageId, attempt.messageInputId, verifiedInitialInputProof)
             : undefined
-          : openCodeTaskMessageIndex(messages, context.card) : undefined;
+          : openCodeTaskMessageIndex(messages, context.card, taskPromptForReceipt(context.card, attempt)) : undefined;
       const assistant = messages && userIndex !== undefined
         ? completedOpenCodeAssistant(messages, userIndex, resultTurnId ?? attempt.nativeTurnId,
           directInput ? directInput.nativeInputMessageId : userIndex === -1 ? mainNativeInputMessageId : undefined,

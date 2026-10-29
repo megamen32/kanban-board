@@ -43,7 +43,7 @@ vi.mock('@/lib/kanban/task-execution-client', () => ({
 }));
 vi.mock('@/lib/kanban/transition-policy', () => ({ validateTransition: mocks.validateTransition }));
 
-import { GET, PATCH, POST, verifiedQuestionContinuation } from './route';
+import { GET, PATCH, POST, verifiedQuestionContinuation, taskPrompt } from './route';
 
 const baseCard: KanbanCard = {
   id: 'task-1', title: 'Research candidates', description: 'Find two SMB integrators', column: 'todo',
@@ -70,9 +70,10 @@ function expectedOpenCodeTaskPrompt(card: KanbanCard, operationId: string, targe
     `Название: ${card.title}`,
     `Описание задачи:\n${card.description}`,
     'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
-    'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
     `Если для продолжения нужна ясность от ответственного, используй только metadata-only вызов agent-herder_human_request_create с kind="user", harness="opencode", sessionId=${JSON.stringify(targetSessionId)}, cwd=${JSON.stringify(targetCwd)}, contextRef=${JSON.stringify(contextRef)}. Не передавай message, choices или notify: вызов только закрепляет эту задачу и сессию.`,
-    'После успешного binding верни только один обычный JSON-объект без Markdown и текста вокруг: {"kind":"question","human_request_id":"<binding.request_id>","question":"<твой точный вопрос>","choices":[{"value":"<value>","label":"<вариант>"},{"value":"<value>","label":"<вариант>"}],"timeoutValue":"<один из value>"}. Не подменяй вопрос ответом или результатом задачи.',
+    'После успешного binding твой следующий ответ должен быть ровно один JSON-объект и ничего больше: {"kind":"question","human_request_id":"<binding.request_id>","question":"<твой точный вопрос>","choices":[{"value":"<value>","label":"<вариант>"},{"value":"<value>","label":"<вариант>"}],"timeoutValue":"<один из value>"}. Никакого Markdown, никакого текста до или после, никаких замечаний, ссылок и сводок. В этом сообщении не пиши результат задачи и не подменяй вопрос ответом.',
+    'Формат ответа «краткий вывод, публичные ссылки на источники и следующий шаг» относится только к финальному результату задачи после того, как человек ответит на вопрос. Вопрос задаётся сейчас — сейчас нужен только JSON-объект выше.',
+    'Не отмечай карточку выполненной.',
   ].join('\n\n');
 }
 
@@ -554,6 +555,40 @@ function observedHerderDelivery(delivery: string, inputId = 'fixture-input', tar
 }
 
 describe('task execution API', () => {
+  it('asks the executor for a bare question object instead of a prose result', () => {
+    // The board binds a question by parsing the whole final assistant text as
+    // one JSON object. A prompt that also asks for a human-review summary in
+    // the same message makes the executor answer with prose, and the question
+    // can then never be bound.
+    const prompt = taskPrompt(baseCard as KanbanCard, {
+      operationId: 'op-question-1234567890', harness: 'opencode', sessionId: 'ses_question', cwd: '/srv/excode',
+    });
+
+    expect(prompt).toContain('"kind":"question"');
+    expect(prompt).toContain('ровно один JSON-объект');
+    // The result format belongs to the answer that follows the human reply,
+    // never to the message that asks the question.
+    const questionInstruction = prompt.indexOf('После успешного binding');
+    const resultInstruction = prompt.indexOf('Подготовь результат для проверки человеком');
+    expect(questionInstruction).toBeGreaterThan(-1);
+    expect(resultInstruction === -1 || resultInstruction > questionInstruction).toBe(true);
+    // The bare-JSON rule must come before any mention of the result format.
+    expect(prompt.indexOf('Формат ответа')).toBeGreaterThan(questionInstruction);
+  });
+
+  it('sends the executor the same prompt that the board looks for in the session', () => {
+    // The board finds the task message in the native session by matching the
+    // prompt text. When the prompt that was sent and the prompt that is
+    // matched differ, the message is never found and the result stays
+    // unaccepted.
+    const prompt = taskPrompt(baseCard as KanbanCard, {
+      operationId: 'op-question-1234567890', harness: 'opencode', sessionId: 'ses_question', cwd: '/srv/excode',
+    });
+
+    expect(expectedOpenCodeTaskPrompt(baseCard as KanbanCard, 'op-question-1234567890', 'ses_question', '/srv/excode'))
+      .toBe(prompt);
+  });
+
   it('accepts the authoritative opaque Herder resume receipt with exact question bindings', () => {
     const requestId = '500a1426-ab7f-4f19-b2fd-c2325ce67963';
     const resultRef = '52cbc5fe-3bed-5c08-b555-b2f16c0ef9cb';
