@@ -338,6 +338,60 @@ function addAcceptedDirectContinuation(fixture: ReturnType<typeof prepareRegistr
   return { directInputId, directNativeInputMessageId, directJobId };
 }
 
+function fileStoreQuestionRoundTrip(question: NonNullable<KanbanCard['taskExecutionHistory']>[number]['executorQuestion']) {
+  const registrationRef = question?.registrationRef;
+  if (!question || !registrationRef) throw new Error('registry question proof required');
+  return {
+    humanRequestId: question.humanRequestId,
+    contextRef: question.contextRef,
+    registrationTarget: { harness: question.registrationTarget.harness,
+      sessionId: question.registrationTarget.sessionId, cwd: question.registrationTarget.cwd },
+    sourceMessageId: question.sourceMessageId,
+    sourceMessageHash: question.sourceMessageHash,
+    sourceInputMessageId: question.sourceInputMessageId,
+    sourceJobId: question.sourceJobId,
+    text: question.text,
+    choices: question.choices.map(choice => ({ value: choice.value, label: choice.label })),
+    timeoutValue: question.timeoutValue,
+    questionHash: question.questionHash,
+    registrationRef: { kind: registrationRef.kind,
+      requestId: registrationRef.requestId, contextRef: registrationRef.contextRef },
+  };
+}
+
+function canonicalJsonForQuestionTest(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJsonForQuestionTest).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonicalJsonForQuestionTest(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function executorQuestionHashForTest(question: NonNullable<KanbanCard['taskExecutionHistory']>[number]['executorQuestion']): string {
+  if (!question) throw new Error('question proof missing');
+  return createHash('sha256').update(canonicalJsonForQuestionTest({
+    humanRequestId: question.humanRequestId,
+    sourceMessageId: question.sourceMessageId,
+    sourceMessageHash: question.sourceMessageHash,
+    sourceInputMessageId: question.sourceInputMessageId,
+    sourceJobId: question.sourceJobId,
+    text: question.text,
+    choices: question.choices,
+    timeoutValue: question.timeoutValue,
+  })).digest('hex');
+}
+
+function legacyQuestionRequestHash(fixture: ReturnType<typeof prepareRegistryExecutorQuestion>, question: NonNullable<KanbanCard['taskExecutionHistory']>[number]['executorQuestion'], version: number): string {
+  if (!question) throw new Error('question proof missing');
+  return createHash('sha256').update(JSON.stringify({
+    taskRef: fixture.card.id, operationId: fixture.operationId, project: fixture.project,
+    recipient: 'qa-board-only', purpose: 'clarification', version,
+    message: question.text, choices: question.choices, timeoutValue: question.timeoutValue,
+    executorQuestion: question,
+  })).digest('hex');
+}
+
 function controllableOpenCodeCard(): KanbanCard {
   const projectBinding = openCodeProjectBinding();
   mocks.sessionInfo.value = { id: controlSessionId, harness: 'opencode', hostId: 'roomhacker-server-100',
@@ -2002,6 +2056,24 @@ describe('task execution API', () => {
       requestId: expect.stringMatching(/^td-[a-f0-9]{40}$/), version: mocks.currentCard.value!.version,
     }, executorQuestion: { humanRequestId: fixture.humanRequestId } });
     const firstMandate = calls.find(call => call.method === 'POST')?.mandate;
+    const originalQuestion = saved.executorQuestion!;
+    const semanticRequestHash = createHash('sha256').update(canonicalJsonForQuestionTest({
+      taskRef: fixture.card.id, operationId: fixture.operationId, project: fixture.project,
+      recipient: 'qa-board-only', purpose: 'clarification', version: saved.taskDecisionRequest!.version,
+      message: originalQuestion.text, choices: originalQuestion.choices, timeoutValue: originalQuestion.timeoutValue,
+      executorQuestion: originalQuestion,
+    })).digest('hex');
+    expect(saved.taskDecisionRequest!.requestHash).toBe(semanticRequestHash);
+    const legacyRequestHash = legacyQuestionRequestHash(fixture, originalQuestion, saved.taskDecisionRequest!.version);
+    const fileStoreProof = fileStoreQuestionRoundTrip(originalQuestion);
+    expect(Object.keys(fileStoreProof)).toEqual(['humanRequestId', 'contextRef', 'registrationTarget', 'sourceMessageId',
+      'sourceMessageHash', 'sourceInputMessageId', 'sourceJobId', 'text', 'choices', 'timeoutValue', 'questionHash', 'registrationRef']);
+    const beforeRetry = mocks.currentCard.value!;
+    const beforeRetryAttempt = beforeRetry.taskExecutionHistory![0]!;
+    mocks.currentCard.value = { ...beforeRetry, taskExecutionHistory: [{ ...beforeRetryAttempt,
+      taskDecisionRequest: { ...saved.taskDecisionRequest!, requestHash: legacyRequestHash },
+      executorQuestion: fileStoreProof,
+    }] };
 
     const recovered = await sync();
     if (!recovered) throw new Error('same Notice question recovery response missing');
@@ -2012,8 +2084,10 @@ describe('task execution API', () => {
     expect(calls.map(call => call.method)).toEqual(['POST', 'GET', 'POST']);
     expect(calls[1]?.url).toBe(`http://192.168.192.1:19450/v1/task-decisions/${saved.taskDecisionRequest!.requestId}`);
     expect(calls[2]?.mandate).toEqual(firstMandate);
-    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.taskDecisionRequest).toEqual(saved.taskDecisionRequest);
-    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.executorQuestion).toEqual(saved.executorQuestion);
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.taskDecisionRequest).toEqual({
+      ...saved.taskDecisionRequest, requestHash: legacyRequestHash,
+    });
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.executorQuestion).toEqual(fileStoreProof);
   });
 
   it('keeps a durable deferred question query-only when Notice readback is unknown', async () => {
@@ -2049,6 +2123,57 @@ describe('task execution API', () => {
       requestId: saved.taskDecisionRequest!.requestId, state: 'unknown',
     } });
     expect(methods).toEqual(['POST', 'GET']);
+  });
+
+  it.each([
+    { name: 'question text', change: (question: ReturnType<typeof fileStoreQuestionRoundTrip>) => ({
+      ...question, text: `${question.text} (изменено)`,
+    }) },
+    { name: 'choice content', change: (question: ReturnType<typeof fileStoreQuestionRoundTrip>) => ({
+      ...question, choices: question.choices.map((choice, index) => index === 0 ? { ...choice, label: `${choice.label} (изменено)` } : choice),
+    }) },
+    { name: 'registration target', change: (question: ReturnType<typeof fileStoreQuestionRoundTrip>) => ({
+      ...question, registrationTarget: { ...question.registrationTarget, cwd: '/other/project' },
+    }) },
+  ])('does not recover the durable Notice reference if $name changed', async scenario => {
+    const fixture = prepareRegistryExecutorQuestion();
+    addAcceptedDirectContinuation(fixture);
+    const methods: string[] = [];
+    const noticeRequest = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      methods.push(method);
+      if (method === 'POST') return noticeResponse({ error: 'deterministic refusal' }, 409);
+      return noticeResponse({ error: 'not found' }, 404);
+    });
+    vi.stubGlobal('fetch', noticeRequest);
+    const sync = () => {
+      const current = mocks.currentCard.value!;
+      return PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: current.version }),
+      }), { params: Promise.resolve({ id: fixture.card.id }) });
+    };
+
+    const refused = await sync();
+    if (!refused) throw new Error('initial Notice refusal response missing');
+    expect(refused.status).toBe(409);
+    const current = mocks.currentCard.value!;
+    const attempt = current.taskExecutionHistory![0]!;
+    const originalQuestion = attempt.executorQuestion!;
+    const legacyHash = legacyQuestionRequestHash(fixture, originalQuestion, attempt.taskDecisionRequest!.version);
+    const roundTripped = fileStoreQuestionRoundTrip(originalQuestion);
+    const changed = scenario.change(roundTripped);
+    const changedProof = { ...changed, questionHash: executorQuestionHashForTest(changed as typeof roundTripped) };
+    mocks.currentCard.value = { ...current, taskExecutionHistory: [{ ...attempt,
+      executorQuestion: changedProof,
+      taskDecisionRequest: { ...attempt.taskDecisionRequest!, requestHash: legacyHash },
+    }] };
+
+    const rejected = await sync();
+    if (!rejected) throw new Error('changed durable question recovery response missing');
+    expect(rejected.status).toBe(409);
+    expect(methods).toEqual(['POST']);
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.taskDecisionRequest!.requestHash).toBe(legacyHash);
   });
 
   it.each([

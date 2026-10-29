@@ -1380,6 +1380,59 @@ function validTaskQuestionInput(value: unknown): TaskQuestionInput | undefined {
   return { purpose, message, choices, timeoutValue };
 }
 
+function executorQuestionConstructorOrder(question: TaskExecutionQuestionProof): TaskExecutionQuestionProof {
+  const fields = {
+    humanRequestId: question.humanRequestId,
+    sourceMessageId: question.sourceMessageId,
+    sourceMessageHash: question.sourceMessageHash,
+    sourceInputMessageId: question.sourceInputMessageId,
+    sourceJobId: question.sourceJobId,
+    text: question.text,
+    choices: question.choices,
+    timeoutValue: question.timeoutValue,
+  };
+  if (question.registrationRef) {
+    return {
+      ...fields,
+      contextRef: question.contextRef,
+      registrationRef: { kind: question.registrationRef.kind, requestId: question.registrationRef.requestId,
+        contextRef: question.registrationRef.contextRef },
+      registrationTarget: { harness: question.registrationTarget.harness,
+        sessionId: question.registrationTarget.sessionId, cwd: question.registrationTarget.cwd },
+      questionHash: question.questionHash,
+    };
+  }
+  return {
+    ...fields,
+    contextRef: question.contextRef,
+    registrationMessageId: question.registrationMessageId,
+    registrationCallId: question.registrationCallId,
+    registrationTarget: { harness: question.registrationTarget.harness,
+      sessionId: question.registrationTarget.sessionId, cwd: question.registrationTarget.cwd },
+    questionHash: question.questionHash,
+  };
+}
+
+function taskQuestionRequestHashes(input: {
+  taskRef: string; operationId: string; project: string; recipient: string; purpose: string;
+  version: number; message: string; choices: readonly { value: string; label: string }[]; timeoutValue: string;
+  executorQuestion?: TaskExecutionQuestionProof;
+}): { semantic: string; legacyConstructor: string } {
+  const material = {
+    taskRef: input.taskRef, operationId: input.operationId, project: input.project,
+    recipient: input.recipient, purpose: input.purpose, version: input.version,
+    message: input.message, choices: input.choices, timeoutValue: input.timeoutValue,
+    ...(input.executorQuestion ? { executorQuestion: input.executorQuestion } : {}),
+  };
+  const legacyMaterial = input.executorQuestion
+    ? { ...material, executorQuestion: executorQuestionConstructorOrder(input.executorQuestion) }
+    : material;
+  return {
+    semantic: sha256(canonicalJson(material)),
+    legacyConstructor: sha256(JSON.stringify(legacyMaterial)),
+  };
+}
+
 async function noticeFetch(
   token: string,
   method: 'GET' | 'POST',
@@ -1906,17 +1959,17 @@ async function createTaskQuestion(
     return NextResponse.json({ error: 'this execution already has a different Notice question reference' }, { status: 409 });
   }
   const questionVersion = existing?.version ?? context.card.version + 1;
-  const requestHash = sha256(JSON.stringify({ taskRef: context.card.id, operationId, project: context.card.project,
+  const hashes = taskQuestionRequestHashes({ taskRef: context.card.id, operationId, project: context.card.project,
     recipient: config.recipient, purpose: input.purpose, version: questionVersion, message: input.message,
-    choices: input.choices, timeoutValue: input.timeoutValue,
-    ...(executorQuestion ? { executorQuestion } : {}) }));
+    choices: input.choices, timeoutValue: input.timeoutValue, ...(executorQuestion ? { executorQuestion } : {}) });
+  const requestHash = hashes.semantic;
   const reference: TaskDecisionRequestReference = existing ?? {
     requestId: noticeRequestId(context.card.id, input.purpose, questionVersion),
     purpose: input.purpose,
     version: questionVersion,
     requestHash,
   };
-  if (existing && existing.requestHash !== requestHash) {
+  if (existing && existing.requestHash !== requestHash && existing.requestHash !== hashes.legacyConstructor) {
     return NextResponse.json({ error: 'Notice question content conflicts with its durable request reference' }, { status: 409 });
   }
   let saved = context.card;
