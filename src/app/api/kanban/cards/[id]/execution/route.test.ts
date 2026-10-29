@@ -288,7 +288,7 @@ function prepareRegistryExecutorQuestion(input: {
     id: `msg_filler_${String(index).padStart(8, '0')}`, role: 'assistant', phase: 'tool-calls',
     parts: [{ type: 'tool_call', name: 'shell', input: { command: 'bounded QA fixture' } }],
   }));
-  const messages = [...fillerMessages, executeMessage, ...questionMessages];
+  const messages: Array<Record<string, unknown>> = [...fillerMessages, executeMessage, ...questionMessages];
   const messagesUri = `herder://sessions/opencode/${encodeURIComponent(sessionId)}/messages`;
   const firstUserUri = `herder://sessions/opencode/${encodeURIComponent(sessionId)}/first-user-message`;
   const firstUserMessage = {
@@ -313,6 +313,29 @@ function prepareRegistryExecutorQuestion(input: {
   vi.stubEnv('EXMANAGER_NOTICE_API_BASE_URL', 'http://192.168.192.1:19450');
   return { humanRequestId, project, model, projectBinding, inputId, nativeInputMessageId, nativeDispatchJobId,
     card, operationId, contextRef, questionPayload, messages, messagesUri, firstUserUri };
+}
+
+function addAcceptedDirectContinuation(fixture: ReturnType<typeof prepareRegistryExecutorQuestion>, stop: {
+  phase: 'accepted' | 'unknown' | 'intent'; controlEpoch?: string;
+} = { phase: 'accepted', controlEpoch: fixture.inputId }) {
+  const directInputId = '5'.repeat(64);
+  const directNativeInputMessageId = 'msg_direct_1234567890';
+  const directJobId = userMessageJobId(sessionId, directInputId);
+  const control = {
+    requestHash: '6'.repeat(64), phase: stop.phase,
+    ...(stop.controlEpoch ? { controlEpoch: stop.controlEpoch } : {}), updatedAt: '2026-10-29T00:01:00.000Z',
+  } as const;
+  const direct = { requestHash: directInputId, phase: 'accepted' as const,
+    nativeDispatchJobId: directJobId, nativeInputMessageId: directNativeInputMessageId,
+    updatedAt: '2026-10-29T00:02:00.000Z' };
+  const current = mocks.currentCard.value!;
+  const attempt = current.taskExecutionHistory![0]!;
+  mocks.currentCard.value = { ...current, taskExecutionHistory: [{ ...attempt, phase: 'running', sessionControls: {
+    stops: [control], stop: control, direct: [direct],
+  } }] };
+  fixture.messages.unshift({ id: directNativeInputMessageId, inputId: directInputId, role: 'user',
+    parts: [{ type: 'text', text: 'Продолжи задачу и уточни недостающий выбор.' }] });
+  return { directInputId, directNativeInputMessageId, directJobId };
 }
 
 function controllableOpenCodeCard(): KanbanCard {
@@ -1842,6 +1865,105 @@ describe('task execution API', () => {
     expect(persisted.executorQuestion).not.toHaveProperty('registrationCallId');
     expect(persisted.executorQuestion).not.toHaveProperty('registrationMessageId');
     expect(JSON.parse(String(noticeRequest.mock.calls[0]?.[1]?.body)).mandate.executor_question).toEqual(persisted.executorQuestion);
+  });
+
+  it('creates and answers a registry question from the exact accepted direct input after an older accepted stop', async () => {
+    const fixture = prepareRegistryExecutorQuestion();
+    const direct = addAcceptedDirectContinuation(fixture);
+    const noticeRequest = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(_input);
+      if (url.endsWith('/resolve')) {
+        const current = mocks.currentCard.value!;
+        const reference = current.taskExecutionHistory![0]!.taskDecisionRequest!;
+        return noticeResponse({ ...noticeQuestionView({ requestId: reference.requestId, taskRef: fixture.card.id,
+          operationId: fixture.operationId, purpose: 'clarification', version: reference.version,
+          winner: { source: 'human', value: 'brief', decided_at: 789 } }),
+          project: fixture.project, recipient: 'qa-board-only', answer_status: 'accepted' }, 200);
+      }
+      const mandate = JSON.parse(String(init?.body)).mandate as Record<string, unknown>;
+      const requestId = expectedNoticeRequestId(fixture.card.id, 'clarification', Number(mandate.version));
+      return noticeResponse({ schema: 'noticeplace.task_decision_view.v1', request_id: requestId,
+        project: fixture.project, recipient: 'qa-board-only', status: 'pending', question: { text: mandate.message, mode: 'choice',
+          choices: mandate.choices, expires_at: null, reference: { task_ref: fixture.card.id, purpose: 'clarification',
+            version: String(mandate.version), mandate_ref: fixture.operationId } },
+        notification: { attempt_state: 'sent', receipt: { kind: 'successful_sender_response', confirmed_at: 100 }, deadline_at: 1900 },
+        winner: null, control: { state: 'clear' }, delivery_status: 'sent', idempotent: false }, 201);
+    });
+    vi.stubGlobal('fetch', noticeRequest);
+
+    const created = await PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: fixture.card.version }),
+    }), { params: Promise.resolve({ id: fixture.card.id }) });
+    if (!created) throw new Error('direct continuation question response missing');
+    expect(created.status).toBe(201);
+    const question = mocks.currentCard.value!.taskExecutionHistory![0]!.executorQuestion!;
+    expect(question).toMatchObject({ sourceInputMessageId: direct.directNativeInputMessageId, sourceJobId: direct.directJobId });
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.sessionControls?.stops).toHaveLength(1);
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.sessionControls?.direct?.at(-1)).toMatchObject({
+      requestHash: direct.directInputId, phase: 'accepted',
+    });
+
+    const current = mocks.currentCard.value!;
+    const answered = await PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'answer-question', operationId: fixture.operationId,
+        expectedVersion: current.version, value: 'brief' }),
+    }), { params: Promise.resolve({ id: fixture.card.id }) });
+    if (!answered) throw new Error('direct continuation question answer response missing');
+    expect(answered.status, JSON.stringify(await answered.clone().json())).toBe(200);
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.taskDecisionProposal).toMatchObject({
+      sourceMessageId: question.sourceMessageId, sourceJobId: question.sourceJobId, value: 'brief',
+    });
+    expect(noticeRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { name: 'an unresolved stop', phase: 'unknown' as const, controlEpoch: '5'.repeat(64) },
+    { name: 'a stop accepted after the direct input', phase: 'accepted' as const, controlEpoch: '5'.repeat(64) },
+  ])('does not create a deferred question while $name remains active', async stop => {
+    const fixture = prepareRegistryExecutorQuestion();
+    addAcceptedDirectContinuation(fixture, stop);
+    const noticeRequest = vi.fn(async () => new Response('{}', { status: 503 }));
+    vi.stubGlobal('fetch', noticeRequest);
+    const response = await PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: fixture.card.version }),
+    }), { params: Promise.resolve({ id: fixture.card.id }) });
+    if (!response) throw new Error('stop-fenced question response missing');
+    expect(response.status).toBe(409);
+    expect(noticeRequest).not.toHaveBeenCalled();
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.executorQuestion).toBeUndefined();
+  });
+
+  it('does not answer a deferred question bound to the old initial input after a direct continuation', async () => {
+    const fixture = prepareRegistryExecutorQuestion();
+    addAcceptedDirectContinuation(fixture);
+    const current = mocks.currentCard.value!;
+    const attempt = current.taskExecutionHistory![0]!;
+    const question = {
+      humanRequestId: fixture.humanRequestId, contextRef: fixture.contextRef,
+      registrationRef: { kind: 'herder-registry' as const, requestId: fixture.humanRequestId, contextRef: fixture.contextRef },
+      registrationTarget: { harness: 'opencode' as const, sessionId, cwd: fixture.projectBinding.cwd },
+      sourceMessageId: 'msg_question_old_12345678', sourceMessageHash: 'a'.repeat(64),
+      sourceInputMessageId: fixture.nativeInputMessageId, sourceJobId: fixture.nativeDispatchJobId,
+      text: fixture.questionPayload.question, choices: fixture.questionPayload.choices,
+      timeoutValue: 'brief', questionHash: 'b'.repeat(64),
+    };
+    const reference = { requestId: `td-${'c'.repeat(40)}`, requestHash: 'd'.repeat(64), purpose: 'clarification', version: current.version };
+    mocks.currentCard.value = { ...current, version: current.version + 1, taskExecutionHistory: [{ ...attempt,
+      phase: 'waiting', lastBoardVersion: current.version + 1, executorQuestion: question, taskDecisionRequest: reference }] };
+    const noticeRequest = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', noticeRequest);
+    const card = mocks.currentCard.value!;
+    const response = await PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'answer-question', operationId: fixture.operationId,
+        expectedVersion: card.version, value: 'brief' }),
+    }), { params: Promise.resolve({ id: fixture.card.id }) });
+    if (!response) throw new Error('old-input answer response missing');
+    expect(response.status).toBe(409);
+    expect(noticeRequest).not.toHaveBeenCalled();
   });
 
   it.each([

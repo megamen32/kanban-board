@@ -1549,20 +1549,20 @@ async function syncExecutorQuestionContinuation(
   const question = attempt.executorQuestion;
   const reference = attempt.taskDecisionRequest;
   const proposal = attempt.taskDecisionProposal;
+  const acceptedInput = currentOpenCodeInputBinding(attempt);
   if (!question || !reference || !proposal || attempt.phase !== 'waiting' || attempt.harness !== 'opencode'
       || !attempt.nativeSessionId || !attempt.projectBinding || attempt.projectBinding.harness !== 'opencode'
       || attempt.projectBinding.hostId !== attempt.hostId || attempt.projectBinding.projectId !== context.card.project
       || attempt.lastBoardVersion !== context.card.version
-      || question.sourceInputMessageId !== attempt.nativeInputMessageId
-      || question.sourceJobId !== attempt.nativeDispatchJobId
+      || question.sourceInputMessageId !== acceptedInput?.nativeInputMessageId
+      || question.sourceJobId !== acceptedInput?.nativeDispatchJobId
       || proposal.humanRequestId !== question.humanRequestId || proposal.requestId !== reference.requestId
       || proposal.sourceMessageId !== question.sourceMessageId || proposal.sourceJobId !== question.sourceJobId) {
     return NextResponse.json({ ...taskExecutionSnapshot(context.card), waitReason: 'Ожидается актуальная квитанция ответа исполнителя' }, {
       status: 202, headers: { 'Cache-Control': 'no-store' },
     });
   }
-  const latestStop = latestStopControl(attempt.sessionControls);
-  if (latestStop) return NextResponse.json({ ...taskExecutionSnapshot(context.card), waitReason: 'Продолжение заблокировано квитанцией остановки' }, {
+  if (activeOpenCodeStop(attempt)) return NextResponse.json({ ...taskExecutionSnapshot(context.card), waitReason: 'Продолжение заблокировано квитанцией остановки' }, {
     status: 409, headers: { 'Cache-Control': 'no-store' },
   });
   const config = noticeConfig(true);
@@ -1673,7 +1673,7 @@ async function syncExecutorQuestionContinuation(
   const currentAttempt = current?.taskExecutionHistory?.find(item => item.operationId === attempt.operationId);
   if (!current || current.version !== context.card.version || currentAttempt?.phase !== 'waiting'
       || currentAttempt.lastBoardVersion !== current.version || currentAttempt.taskDecisionProposal?.proposalRef !== proposal.proposalRef
-      || currentAttempt.executorQuestion?.questionHash !== question.questionHash || latestStopControl(currentAttempt.sessionControls)) {
+      || currentAttempt.executorQuestion?.questionHash !== question.questionHash || activeOpenCodeStop(currentAttempt)) {
     return NextResponse.json({ error: 'task or answer changed during callback verification' }, { status: 409 });
   }
   const summary = assistant.text.slice(0, 40_000);
@@ -1748,23 +1748,21 @@ async function resolveTaskQuestion(context: AuthorizedTaskCard, body: RecordValu
   const reference = attempt?.taskDecisionRequest;
   const question = attempt?.executorQuestion;
   const answer = body.value.trim();
+  const acceptedInput = attempt ? currentOpenCodeInputBinding(attempt) : undefined;
   if (!attempt || attempt.operationId !== body.operationId || !reference || !question || attempt.phase !== 'waiting'
       || attempt.lastBoardVersion !== context.card.version || attempt.harness !== 'opencode'
       || !attempt.nativeSessionId || !attempt.projectBinding || attempt.projectBinding.harness !== 'opencode'
       || attempt.projectBinding.projectId !== context.card.project || attempt.projectBinding.hostId !== attempt.hostId
       || question.contextRef !== `exmanager-task:${context.card.id}:${attempt.operationId}`
-      || question.sourceInputMessageId !== attempt.nativeInputMessageId || question.sourceJobId !== attempt.nativeDispatchJobId
+      || question.sourceInputMessageId !== acceptedInput?.nativeInputMessageId
+      || question.sourceJobId !== acceptedInput?.nativeDispatchJobId
       || question.registrationTarget.harness !== 'opencode' || question.registrationTarget.sessionId !== attempt.nativeSessionId
       || question.registrationTarget.cwd !== attempt.projectBinding.cwd
       || !question.choices.some(choice => choice.value === answer)) {
     return NextResponse.json({ error: 'current executor question or task scope changed' }, { status: 409 });
   }
-  const latestStop = latestStopControl(attempt.sessionControls);
-  if (latestStop && latestStop.phase !== 'accepted') {
-    return NextResponse.json({ error: 'task stop is pending; answer is fenced' }, { status: 409 });
-  }
-  if (latestStop?.phase === 'accepted') {
-    return NextResponse.json({ error: 'stopped task cannot be answered' }, { status: 409 });
+  if (activeOpenCodeStop(attempt)) {
+    return NextResponse.json({ error: 'task stop is active; answer is fenced' }, { status: 409 });
   }
   const config = noticeConfig(true);
   if (!config?.recipient) return NextResponse.json({ error: 'Notice task-decision channel is not configured' }, { status: 503 });
@@ -1860,12 +1858,13 @@ async function createTaskQuestion(
   const history = context.card.taskExecutionHistory ?? [];
   const attempt = history.at(-1);
   const operationId = executorQuestion ? attempt?.operationId : operationIdFor(context.card.id, String(body.operationId));
+  const acceptedInput = attempt ? currentOpenCodeInputBinding(attempt) : undefined;
   const openCodeSourceMatches = !!executorQuestion && !!attempt && attempt.harness === 'opencode'
     && !!attempt.nativeSessionId && !!attempt.projectBinding && attempt.projectBinding.harness === 'opencode'
     && attempt.projectBinding.hostId === attempt.hostId
     && executorQuestion.contextRef === `exmanager-task:${context.card.id}:${attempt.operationId}`
-    && executorQuestion.sourceInputMessageId === attempt.nativeInputMessageId
-    && executorQuestion.sourceJobId === attempt.nativeDispatchJobId
+    && executorQuestion.sourceInputMessageId === acceptedInput?.nativeInputMessageId
+    && executorQuestion.sourceJobId === acceptedInput?.nativeDispatchJobId
     && executorQuestion.registrationTarget.harness === 'opencode'
     && executorQuestion.registrationTarget.sessionId === attempt.nativeSessionId
     && executorQuestion.registrationTarget.cwd === attempt.projectBinding.cwd;
@@ -1874,7 +1873,7 @@ async function createTaskQuestion(
         : !attempt.nativeTurnId || !(ROUTE_HARNESSES as readonly string[]).includes(attempt.harness))) {
     return NextResponse.json({ error: 'current task execution cannot receive a question' }, { status: 409 });
   }
-  if (latestStopControl(attempt.sessionControls)?.phase === 'accepted') {
+  if (executorQuestion ? activeOpenCodeStop(attempt) : latestStopControl(attempt.sessionControls)?.phase === 'accepted') {
     return NextResponse.json({ error: 'stopped task execution cannot receive a question' }, { status: 409 });
   }
   const config = noticeConfig(true);
@@ -2300,6 +2299,36 @@ function latestAcceptedOpenCodeDirect(receipt: TaskExecutionReceipt): TaskExecut
       || typeof control.nativeInputMessageId !== 'string'
       || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(control.nativeInputMessageId)) return undefined;
   return control;
+}
+
+interface OpenCodeQuestionInputBinding {
+  nativeInputMessageId: string;
+  nativeDispatchJobId: string;
+}
+
+/** The latest exact accepted direct continuation supersedes the initial dispatch input. */
+function currentOpenCodeInputBinding(receipt: TaskExecutionReceipt): OpenCodeQuestionInputBinding | undefined {
+  if (receipt.harness !== 'opencode' || !receipt.nativeSessionId) return undefined;
+  const direct = latestAcceptedOpenCodeDirect(receipt);
+  if ((receipt.sessionControls?.direct?.length ?? 0) > 0 && !direct) return undefined;
+  if (direct?.nativeInputMessageId && direct.nativeDispatchJobId) {
+    return { nativeInputMessageId: direct.nativeInputMessageId, nativeDispatchJobId: direct.nativeDispatchJobId };
+  }
+  if (receipt.nativeInputMessageId && receipt.nativeDispatchJobId
+      && receipt.nativeDispatchJobId === userMessageJobId('opencode', receipt.nativeSessionId, receipt.messageInputId)) {
+    return { nativeInputMessageId: receipt.nativeInputMessageId, nativeDispatchJobId: receipt.nativeDispatchJobId };
+  }
+  return undefined;
+}
+
+/** An accepted stop is historical only when a later exact direct advanced its control epoch. */
+function activeOpenCodeStop(receipt: TaskExecutionReceipt): TaskExecutionSessionControl | undefined {
+  const stop = latestStopControl(receipt.sessionControls);
+  if (!stop) return undefined;
+  if (stop.phase !== 'accepted') return stop;
+  const direct = latestAcceptedOpenCodeDirect(receipt);
+  if (direct && stop.controlEpoch && stop.controlEpoch !== direct.requestHash) return undefined;
+  return stop;
 }
 
 function exactActiveOpenCodeReceipt(card: KanbanCard): TaskExecutionReceipt | undefined {
