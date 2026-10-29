@@ -1966,6 +1966,91 @@ describe('task execution API', () => {
     expect(noticeRequest).not.toHaveBeenCalled();
   });
 
+  it('reconciles a durable deferred question after known Notice refusal and reuses the same request on confirmed absence', async () => {
+    const fixture = prepareRegistryExecutorQuestion();
+    addAcceptedDirectContinuation(fixture);
+    const calls: Array<{ url: string; method: string; mandate?: unknown }> = [];
+    const noticeRequest = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      calls.push({ url: String(input), method, ...(body?.mandate ? { mandate: body.mandate } : {}) });
+      if (method === 'GET') return noticeResponse({ error: 'not found' }, 404);
+      if (calls.filter(call => call.method === 'POST').length === 1) return noticeResponse({ error: 'deterministic refusal' }, 409);
+      const mandate = body?.mandate as Record<string, unknown>;
+      const requestId = expectedNoticeRequestId(fixture.card.id, 'clarification', Number(mandate.version));
+      return noticeResponse({ schema: 'noticeplace.task_decision_view.v1', request_id: requestId,
+        project: fixture.project, recipient: 'qa-board-only', status: 'pending', question: { text: mandate.message, mode: 'choice',
+          choices: mandate.choices, expires_at: null, reference: { task_ref: fixture.card.id, purpose: 'clarification',
+            version: String(mandate.version), mandate_ref: fixture.operationId } },
+        notification: { attempt_state: 'sent', receipt: { kind: 'successful_sender_response', confirmed_at: 100 }, deadline_at: 1900 },
+        winner: null, control: { state: 'clear' }, delivery_status: 'sent', idempotent: true }, 201);
+    });
+    vi.stubGlobal('fetch', noticeRequest);
+    const sync = () => {
+      const current = mocks.currentCard.value!;
+      return PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: current.version }),
+      }), { params: Promise.resolve({ id: fixture.card.id }) });
+    };
+
+    const refused = await sync();
+    if (!refused) throw new Error('initial Notice refusal response missing');
+    expect(refused.status).toBe(409);
+    const saved = mocks.currentCard.value!.taskExecutionHistory![0]!;
+    expect(saved).toMatchObject({ phase: 'waiting', taskDecisionRequest: {
+      requestId: expect.stringMatching(/^td-[a-f0-9]{40}$/), version: mocks.currentCard.value!.version,
+    }, executorQuestion: { humanRequestId: fixture.humanRequestId } });
+    const firstMandate = calls.find(call => call.method === 'POST')?.mandate;
+
+    const recovered = await sync();
+    if (!recovered) throw new Error('same Notice question recovery response missing');
+    expect(recovered.status).toBe(201);
+    expect(await recovered.json()).toMatchObject({ taskQuestion: {
+      requestId: saved.taskDecisionRequest!.requestId, state: 'pending', deliveryStatus: 'sent', idempotent: true,
+    } });
+    expect(calls.map(call => call.method)).toEqual(['POST', 'GET', 'POST']);
+    expect(calls[1]?.url).toBe(`http://192.168.192.1:19450/v1/task-decisions/${saved.taskDecisionRequest!.requestId}`);
+    expect(calls[2]?.mandate).toEqual(firstMandate);
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.taskDecisionRequest).toEqual(saved.taskDecisionRequest);
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.executorQuestion).toEqual(saved.executorQuestion);
+  });
+
+  it('keeps a durable deferred question query-only when Notice readback is unknown', async () => {
+    const fixture = prepareRegistryExecutorQuestion();
+    addAcceptedDirectContinuation(fixture);
+    const methods: string[] = [];
+    const noticeRequest = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      methods.push(method);
+      if (method === 'POST') throw new Error('synthetic ambiguous create transport');
+      return noticeResponse({ error: 'temporarily unavailable' }, 503);
+    });
+    vi.stubGlobal('fetch', noticeRequest);
+    const sync = () => {
+      const current = mocks.currentCard.value!;
+      return PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: current.version }),
+      }), { params: Promise.resolve({ id: fixture.card.id }) });
+    };
+
+    const ambiguous = await sync();
+    if (!ambiguous) throw new Error('ambiguous initial Notice response missing');
+    expect(ambiguous.status).toBe(202);
+    const saved = mocks.currentCard.value!.taskExecutionHistory![0]!;
+    expect(saved.taskDecisionRequest).toBeDefined();
+    expect(saved.executorQuestion).toBeDefined();
+
+    const unresolved = await sync();
+    if (!unresolved) throw new Error('unknown Notice readback response missing');
+    expect(unresolved.status).toBe(202);
+    expect(await unresolved.json()).toMatchObject({ taskQuestion: {
+      requestId: saved.taskDecisionRequest!.requestId, state: 'unknown',
+    } });
+    expect(methods).toEqual(['POST', 'GET']);
+  });
+
   it.each([
     { name: 'a different registered UUID', questionIds: ['88ce04db-d775-4f81-a86d-31af4bbe1091'], registryReads: 1 },
     { name: 'a missing registry record', registryRecord: null, registryReads: 1 },

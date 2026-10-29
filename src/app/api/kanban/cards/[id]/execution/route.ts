@@ -2621,6 +2621,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: 'saved execution receipt owner does not match native identity; do not replay or remap this receipt' }, { status: 409 });
     }
     if (attempt.phase === 'result') return NextResponse.json(taskExecutionSnapshot(context.card), { headers: { 'Cache-Control': 'no-store' } });
+    if (attempt.executorQuestion && attempt.taskDecisionRequest && !attempt.taskDecisionProposal) {
+      // Reconcile the same durable Notice question by GET first; only its
+      // authoritative absence permits the deterministic same-reference create.
+      return await createTaskQuestion(context, {
+        action: 'sync-executor-question', expectedVersion: context.card.version,
+      }, attempt.executorQuestion);
+    }
     if (attempt.executorQuestion) return await syncExecutorQuestionContinuation(context, attempt);
     if (attempt.phase === 'created' && attempt.nativeSessionId) {
       const intentUpdate = consumeLaunchIntent(context.card, context.tasksDir, operationId, attempt.requestHash);
