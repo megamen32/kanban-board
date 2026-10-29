@@ -43,7 +43,7 @@ vi.mock('@/lib/kanban/task-execution-client', () => ({
 }));
 vi.mock('@/lib/kanban/transition-policy', () => ({ validateTransition: mocks.validateTransition }));
 
-import { GET, PATCH, POST } from './route';
+import { GET, PATCH, POST, verifiedQuestionContinuation } from './route';
 
 const baseCard: KanbanCard = {
   id: 'task-1', title: 'Research candidates', description: 'Find two SMB integrators', column: 'todo',
@@ -554,6 +554,29 @@ function observedHerderDelivery(delivery: string, inputId = 'fixture-input', tar
 }
 
 describe('task execution API', () => {
+  it('accepts the authoritative opaque Herder resume receipt with exact question bindings', () => {
+    const requestId = '500a1426-ab7f-4f19-b2fd-c2325ce67963';
+    const resultRef = '52cbc5fe-3bed-5c08-b555-b2f16c0ef9cb';
+    const idempotencyKey = `human-request:${requestId}:1903aa65-18d4-4a99-8070-af0cdd499ee5`;
+    const inputId = `herder-resume-${createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 32)}`;
+    const attempt = { nativeSessionId: 'ses_e7a71fddcffeCnSQ1JWpaCOSOG', executorQuestion: { humanRequestId: requestId } };
+    const view = { continuation: { state: 'accepted', request_id: requestId, result_ref: resultRef,
+      idempotency_key: idempotencyKey, input_id: inputId, receipt: 'resume-40f31f996a434867a3f7cd90c1730e80' } };
+
+    expect(verifiedQuestionContinuation(view as never, attempt as never)).toEqual({
+      requestId, resultRef, idempotencyKey, inputId, receipt: 'resume-40f31f996a434867a3f7cd90c1730e80',
+    });
+    expect(verifiedQuestionContinuation({ ...view, continuation: { ...view.continuation, input_id: 'herder-resume-wrong' } } as never,
+      attempt as never)).toBeUndefined();
+    expect(verifiedQuestionContinuation({ ...view, continuation: { ...view.continuation, receipt: 'resume-short' } } as never,
+      attempt as never)).toBeUndefined();
+    expect(verifiedQuestionContinuation({ ...view, continuation: { ...view.continuation, request_id: 'different-request' } } as never,
+      attempt as never)).toBeUndefined();
+    expect(verifiedQuestionContinuation({ ...view, continuation: { ...view.continuation,
+      receipt: 'agent-herder://opencode/ses_e7a71fddcffeCnSQ1JWpaCOSOG/' + idempotencyKey } } as never,
+      attempt as never)).toEqual(expect.objectContaining({ requestId, resultRef, idempotencyKey, inputId }));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.humanIdentity.value = undefined;

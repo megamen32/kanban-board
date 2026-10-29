@@ -1591,10 +1591,14 @@ function taskQuestionView(
   };
 }
 
-function verifiedQuestionContinuation(view: TaskQuestionView, attempt: TaskExecutionReceipt):
+export function verifiedQuestionContinuation(view: TaskQuestionView, attempt: TaskExecutionReceipt):
   { requestId: string; resultRef: string; idempotencyKey: string; receipt: string; inputId: string } | undefined {
   const continuation = view.continuation;
   const question = attempt.executorQuestion;
+  const expectedLegacyReceipt = attempt.nativeSessionId && typeof continuation?.idempotency_key === 'string'
+    ? `agent-herder://opencode/${attempt.nativeSessionId}/${continuation.idempotency_key}` : undefined;
+  const supportedReceipt = typeof continuation?.receipt === 'string'
+    && (/^resume-[a-f0-9]{32}$/.test(continuation.receipt) || continuation.receipt === expectedLegacyReceipt);
   if (!continuation || continuation.state !== 'accepted' || !question
       || continuation.request_id !== question.humanRequestId
       || typeof continuation.result_ref !== 'string'
@@ -1603,7 +1607,7 @@ function verifiedQuestionContinuation(view: TaskQuestionView, attempt: TaskExecu
       || !/^[A-Za-z0-9:_-]{1,512}$/.test(continuation.idempotency_key)
       || continuation.input_id !== `herder-resume-${sha256(continuation.idempotency_key).slice(0, 32)}`
       || !attempt.nativeSessionId
-      || continuation.receipt !== `agent-herder://opencode/${attempt.nativeSessionId}/${continuation.idempotency_key}`) return undefined;
+      || !supportedReceipt) return undefined;
   return {
     requestId: question.humanRequestId,
     resultRef: continuation.result_ref,
