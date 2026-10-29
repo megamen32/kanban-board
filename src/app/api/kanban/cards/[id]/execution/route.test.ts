@@ -464,6 +464,29 @@ function noticeQuestionView(input: {
   };
 }
 
+function deferredQuestionNoticeView(fixture: ReturnType<typeof prepareRegistryExecutorQuestion>, input: {
+  attemptState: string; delivered?: boolean; deadlineAt?: number | null; deliveryStatus?: string;
+}) {
+  const attempt = mocks.currentCard.value!.taskExecutionHistory![0]!;
+  const reference = attempt.taskDecisionRequest!;
+  const question = attempt.executorQuestion!;
+  const delivered = input.delivered ?? false;
+  return {
+    schema: 'noticeplace.task_decision_view.v1', request_id: reference.requestId,
+    project: fixture.project, recipient: 'qa-board-only', status: 'pending',
+    question: { text: question.text, mode: 'choice', choices: question.choices,
+      expires_at: input.deadlineAt ?? null,
+      reference: { task_ref: fixture.card.id, purpose: 'clarification',
+        version: String(reference.version), mandate_ref: fixture.operationId } },
+    notification: { attempt_state: input.attemptState,
+      receipt: delivered ? { kind: 'successful_sender_response', confirmed_at: 100 } : null,
+      deadline_at: input.deadlineAt ?? null },
+    winner: null, control: { state: 'clear' },
+    delivery_status: input.deliveryStatus ?? input.attemptState,
+    idempotent: true,
+  };
+}
+
 function noticeResponse(body: unknown, status = 201): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
@@ -2124,6 +2147,163 @@ describe('task execution API', () => {
     } });
     expect(methods).toEqual(['POST', 'GET']);
   });
+
+  it('resumes one exact queued Notice notification through the same deterministic mandate', async () => {
+    const fixture = prepareRegistryExecutorQuestion();
+    addAcceptedDirectContinuation(fixture);
+    const calls: Array<{ method: string; url: string; mandate?: unknown }> = [];
+    const noticeRequest = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      calls.push({ method, url: String(input), ...(body?.mandate ? { mandate: body.mandate } : {}) });
+      if (method === 'GET') return noticeResponse(deferredQuestionNoticeView(fixture, {
+        attemptState: 'queued', delivered: false, deadlineAt: null, deliveryStatus: 'queued',
+      }), 200);
+      if (calls.filter(call => call.method === 'POST').length === 1) {
+        return noticeResponse({ error: 'pre-reserve adapter failure' }, 500);
+      }
+      return noticeResponse(deferredQuestionNoticeView(fixture, {
+        attemptState: 'sent', delivered: true, deadlineAt: 1900, deliveryStatus: 'sent',
+      }), 201);
+    });
+    vi.stubGlobal('fetch', noticeRequest);
+    const sync = () => {
+      const current = mocks.currentCard.value!;
+      return PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: current.version }),
+      }), { params: Promise.resolve({ id: fixture.card.id }) });
+    };
+
+    const first = await sync();
+    if (!first) throw new Error('initial pre-reserve failure response missing');
+    expect(first.status).toBe(202);
+    const savedCard = mocks.currentCard.value!;
+    const savedAttempt = savedCard.taskExecutionHistory![0]!;
+    const reference = savedAttempt.taskDecisionRequest!;
+    const proof = savedAttempt.executorQuestion!;
+    const firstMandate = calls[0]?.mandate;
+
+    const resumed = await sync();
+    if (!resumed) throw new Error('queued notification resume response missing');
+    expect(resumed.status, JSON.stringify({ body: await resumed.clone().json(), calls })).toBe(201);
+    expect(await resumed.json()).toMatchObject({ taskQuestion: {
+      requestId: reference.requestId, state: 'pending', deliveryStatus: 'sent', idempotent: true,
+    } });
+    expect(calls.map(call => call.method)).toEqual(['POST', 'GET', 'POST']);
+    expect(calls[2]?.mandate).toEqual(firstMandate);
+    expect(mocks.currentCard.value!.version).toBe(savedCard.version);
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.taskDecisionRequest).toEqual(reference);
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.executorQuestion).toEqual(proof);
+  });
+
+  it('does not report delivery when the idempotent queued-state reuse remains queued', async () => {
+    const fixture = prepareRegistryExecutorQuestion();
+    addAcceptedDirectContinuation(fixture);
+    const methods: string[] = [];
+    const noticeRequest = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      methods.push(method);
+      if (method === 'POST' && methods.filter(item => item === 'POST').length === 1) {
+        return noticeResponse({ error: 'pre-reserve adapter failure' }, 500);
+      }
+      return noticeResponse(deferredQuestionNoticeView(fixture, {
+        attemptState: 'queued', delivered: false, deadlineAt: null, deliveryStatus: 'queued',
+      }), method === 'GET' ? 200 : 201);
+    });
+    vi.stubGlobal('fetch', noticeRequest);
+    const sync = () => {
+      const current = mocks.currentCard.value!;
+      return PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: current.version }),
+      }), { params: Promise.resolve({ id: fixture.card.id }) });
+    };
+    const first = await sync();
+    if (!first) throw new Error('initial adapter failure response missing');
+    expect(first.status).toBe(202);
+    const resumed = await sync();
+    if (!resumed) throw new Error('queued idempotent reuse response missing');
+    expect(resumed.status).toBe(202);
+    expect(await resumed.json()).toMatchObject({ taskQuestion: {
+      state: 'pending', deliveryStatus: 'queued', notification: { delivered: false, deadlineAt: null },
+    } });
+    expect(methods).toEqual(['POST', 'GET', 'POST']);
+  });
+
+  it.each([
+    { name: 'sending', attemptState: 'sending', delivered: false, deadlineAt: null, deliveryStatus: 'sending' },
+    { name: 'unknown', attemptState: 'unknown', delivered: false, deadlineAt: null, deliveryStatus: 'unknown' },
+    { name: 'already sent', attemptState: 'sent', delivered: true, deadlineAt: 1900, deliveryStatus: 'sent' },
+    { name: 'queued but already delivered', attemptState: 'queued', delivered: true, deadlineAt: 1900, deliveryStatus: 'queued' },
+    { name: 'queued with an incompatible deadline', attemptState: 'queued', delivered: false, deadlineAt: 1900, deliveryStatus: 'queued' },
+  ])('does not repeat delivery for a $name Notice question', async state => {
+    const fixture = prepareRegistryExecutorQuestion();
+    addAcceptedDirectContinuation(fixture);
+    const methods: string[] = [];
+    const noticeRequest = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      methods.push(method);
+      if (method === 'POST') return noticeResponse({ error: 'pre-reserve adapter failure' }, 500);
+      return noticeResponse(deferredQuestionNoticeView(fixture, state), 200);
+    });
+    vi.stubGlobal('fetch', noticeRequest);
+    const sync = () => {
+      const current = mocks.currentCard.value!;
+      return PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: current.version }),
+      }), { params: Promise.resolve({ id: fixture.card.id }) });
+    };
+
+    const first = await sync();
+    if (!first) throw new Error('initial Notice partial failure response missing');
+    expect(first.status).toBe(202);
+    const second = await sync();
+    if (!second) throw new Error('Notice delivery state readback response missing');
+    expect(second.status).toBe(state.attemptState === 'queued' && !state.delivered && state.deadlineAt !== null ? 502 : 200);
+    expect(methods).toEqual(['POST', 'GET']);
+  });
+
+  it.each(['card version', 'request reference', 'executor proof'] as const)(
+    'does not retry a queued notification if the %s changed during readback', async changed => {
+      const fixture = prepareRegistryExecutorQuestion();
+      addAcceptedDirectContinuation(fixture);
+      const methods: string[] = [];
+      const noticeRequest = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        methods.push(method);
+        if (method === 'POST') return noticeResponse({ error: 'pre-reserve adapter failure' }, 500);
+        const current = mocks.currentCard.value!;
+        const attempt = current.taskExecutionHistory![0]!;
+        const receipt = { ...attempt };
+        const payload = deferredQuestionNoticeView(fixture, {
+          attemptState: 'queued', delivered: false, deadlineAt: null, deliveryStatus: 'queued',
+        });
+        const nextAttempt = changed === 'request reference'
+          ? { ...receipt, taskDecisionRequest: { ...receipt.taskDecisionRequest!, requestHash: '9'.repeat(64) } }
+          : changed === 'executor proof'
+            ? { ...receipt, executorQuestion: { ...receipt.executorQuestion!, text: 'Изменённый вопрос' } }
+            : receipt;
+        mocks.currentCard.value = { ...current, version: changed === 'card version' ? current.version + 1 : current.version,
+          taskExecutionHistory: [nextAttempt] };
+        return noticeResponse(payload, 200);
+      });
+      vi.stubGlobal('fetch', noticeRequest);
+      const sync = () => {
+        const current = mocks.currentCard.value!;
+        return PATCH(new NextRequest(`https://todo.example.test/api/kanban/cards/${fixture.card.id}/execution`, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: current.version }),
+        }), { params: Promise.resolve({ id: fixture.card.id }) });
+      };
+      const first = await sync();
+      if (!first) throw new Error('initial Notice partial failure response missing');
+      const second = await sync();
+      if (!second) throw new Error('changed queued question response missing');
+      expect(second.status).toBe(409);
+      expect(methods).toEqual(['POST', 'GET']);
+    });
 
   it.each([
     { name: 'question text', change: (question: ReturnType<typeof fileStoreQuestionRoundTrip>) => ({

@@ -1433,6 +1433,25 @@ function taskQuestionRequestHashes(input: {
   };
 }
 
+function queuedExecutorQuestionReferenceIsCurrent(
+  context: AuthorizedTaskCard,
+  attempt: TaskExecutionReceipt,
+  reference: TaskDecisionRequestReference,
+  executorQuestion: TaskExecutionQuestionProof,
+): boolean {
+  const current = findCardById(context.card.id, context.tasksDir);
+  const currentAttempt = current?.taskExecutionHistory?.find(item => item.operationId === attempt.operationId);
+  return !!current && current.version === context.card.version
+    && !!currentAttempt && currentAttempt.phase === 'waiting'
+    && currentAttempt.lastBoardVersion === current.version && currentAttempt.operationId === attempt.operationId
+    && !currentAttempt.taskDecisionProposal
+    && currentAttempt.taskDecisionRequest !== undefined
+    && canonicalJson(currentAttempt.taskDecisionRequest) === canonicalJson(reference)
+    && currentAttempt.executorQuestion !== undefined
+    && canonicalJson(currentAttempt.executorQuestion) === canonicalJson(executorQuestion)
+    && reference.version === current.version;
+}
+
 async function noticeFetch(
   token: string,
   method: 'GET' | 'POST',
@@ -1990,9 +2009,10 @@ async function createTaskQuestion(
     saved = result;
   }
 
-  // A stored reference after a prior attempt is reconciled by request ID first.
-  // GET is query-only; only an authoritative 404 permits the same deterministic
-  // create/reuse request to continue. UNKNOWN never triggers a blind POST.
+  // A stored reference is reconciled by request ID first. Only authoritative
+  // absence or an exact still-queued unsent executor question permits the same
+  // deterministic request to re-enter Notice's idempotent create path.
+  let queuedNotificationRetry = false;
   if (existing) {
     const queried = await noticeFetch(config.token, 'GET', config.apiBaseUrl, reference.requestId);
     if (!queried) return NextResponse.json({ ...taskExecutionSnapshot(saved), taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
@@ -2000,10 +2020,22 @@ async function createTaskQuestion(
       const view = queried.payload && taskQuestionView(queried.payload, saved.id, operationId, reference,
         saved.project, config.recipient);
       if (!view) return NextResponse.json({ error: 'Notice returned a mismatched task question' }, { status: 502 });
-      return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved, taskQuestion: view, replay: true }, { headers: { 'Cache-Control': 'no-store' } });
+      const queuedUnsent = !!executorQuestion && view.state === 'pending' && view.decision === null
+        && (view.answerStatus === undefined || view.answerStatus === 'pending')
+        && view.notification.attemptState === 'queued' && view.notification.delivered === false
+        && view.notification.deadlineAt === null
+        && (view.deliveryStatus === undefined || view.deliveryStatus === 'queued');
+      if (!queuedUnsent) {
+        return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved, taskQuestion: view, replay: true }, { headers: { 'Cache-Control': 'no-store' } });
+      }
+      if (!queuedExecutorQuestionReferenceIsCurrent(context, attempt, reference, executorQuestion)) {
+        return NextResponse.json({ error: 'queued Notice question changed before notification retry' }, { status: 409 });
+      }
+      queuedNotificationRetry = true;
     }
-    if (queried.status !== 404) return NextResponse.json({ ...taskExecutionSnapshot(saved), taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
-    if (attempt.lastBoardVersion !== context.card.version || reference.version !== context.card.version) {
+    if (queried.status !== 404 && !queuedNotificationRetry) return NextResponse.json({ ...taskExecutionSnapshot(saved), taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+    if ((queried.status === 404 || queuedNotificationRetry)
+        && (attempt.lastBoardVersion !== context.card.version || reference.version !== context.card.version)) {
       return NextResponse.json({ error: 'question reference is historical; creation is denied after the execution version changed' }, { status: 409 });
     }
   }
@@ -2037,7 +2069,9 @@ async function createTaskQuestion(
   const deliveryUncertain = created.payload.delivery_status === 'unknown'
     || created.payload.delivery_status === 'sending'
     || view.notification.attemptState === 'unknown'
-    || view.notification.attemptState === 'sending';
+    || view.notification.attemptState === 'sending'
+    || created.payload.delivery_status === 'queued'
+    || view.notification.attemptState === 'queued';
   return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved,
     taskQuestion: { ...view, deliveryStatus: created.payload.delivery_status, idempotent: created.payload.idempotent },
     retryable: false }, {
