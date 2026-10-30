@@ -71,14 +71,16 @@ function postRequest(body: Record<string, unknown> = { operationId, expectedVers
 function expectedOpenCodeTaskPrompt(card: KanbanCard, operationId: string, targetSessionId: string, targetCwd: string): string {
   const contextRef = `exmanager-task:${card.id}:${operationId}`;
   return [
+    'ПРОТОКОЛ ВОПРОСА (строгий порядок, если задача требует ответа владельца): сначала binding, затем ровно один JSON-объект.',
+    `Если для продолжения нужна ясность от ответственного, используй только metadata-only вызов agent-herder_human_request_create с kind="user", harness="opencode", sessionId=${JSON.stringify(targetSessionId)}, cwd=${JSON.stringify(targetCwd)}, contextRef=${JSON.stringify(contextRef)}. Не передавай message, choices или notify: вызов только закрепляет эту задачу и сессию.`,
+    'После успешного binding твой следующий ответ должен быть ровно один JSON-объект и ничего больше: {"kind":"question","human_request_id":"<binding.request_id>","question":"<твой точный вопрос>","choices":[{"value":"<value>","label":"<вариант>"},{"value":"<value>","label":"<вариант>"}],"timeoutValue":"<один из value>"}. Никакого Markdown, никакого текста до или после, никаких замечаний, ссылок и сводок. В этом сообщении не пиши результат задачи и не подменяй вопрос ответом.',
+    'Запрещено: искать и читать файл карточки на диске (в т.ч. в /home/roomhacker/todo-kanban/work-tasks); читать или анализировать код доски (/home/roomhacker/excode, airlock-agent), чтобы понять, как доставляются вопросы и ответы: доставку и возобновление делает доска сама; использовать sudo; писать результат в файлы. Ответ придёт в этой же сессии, результат задачи - текст финального ответа.',
+    'Формат ответа «краткий вывод, публичные ссылки на источники и следующий шаг» относится только к финальному результату задачи после того, как человек ответит на вопрос. Вопрос задаётся сейчас — сейчас нужен только JSON-объект выше.',
+    'Не отмечай карточку выполненной.',
     `Выполни задачу канбан карточки ${card.id} из проекта «${card.project}».`,
     `Название: ${card.title}`,
     `Описание задачи:\n${card.description}`,
     'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
-    `Если для продолжения нужна ясность от ответственного, используй только metadata-only вызов agent-herder_human_request_create с kind="user", harness="opencode", sessionId=${JSON.stringify(targetSessionId)}, cwd=${JSON.stringify(targetCwd)}, contextRef=${JSON.stringify(contextRef)}. Не передавай message, choices или notify: вызов только закрепляет эту задачу и сессию.`,
-    'После успешного binding твой следующий ответ должен быть ровно один JSON-объект и ничего больше: {"kind":"question","human_request_id":"<binding.request_id>","question":"<твой точный вопрос>","choices":[{"value":"<value>","label":"<вариант>"},{"value":"<value>","label":"<вариант>"}],"timeoutValue":"<один из value>"}. Никакого Markdown, никакого текста до или после, никаких замечаний, ссылок и сводок. В этом сообщении не пиши результат задачи и не подменяй вопрос ответом.',
-    'Формат ответа «краткий вывод, публичные ссылки на источники и следующий шаг» относится только к финальному результату задачи после того, как человек ответит на вопрос. Вопрос задаётся сейчас — сейчас нужен только JSON-объект выше.',
-    'Не отмечай карточку выполненной.',
   ].join('\n\n');
 }
 
@@ -579,6 +581,18 @@ describe('task execution API', () => {
     expect(resultInstruction === -1 || resultInstruction > questionInstruction).toBe(true);
     // The bare-JSON rule must come before any mention of the result format.
     expect(prompt.indexOf('Формат ответа')).toBeGreaterThan(questionInstruction);
+  });
+
+  it('puts the question protocol and its prohibitions before the card description', () => {
+    const prompt = taskPrompt(baseCard as KanbanCard, {
+      operationId: 'op-question-1234567890', harness: 'opencode', sessionId: 'ses_question', cwd: '/srv/excode',
+    });
+
+    const protocol = prompt.indexOf('ПРОТОКОЛ ВОПРОСА');
+    const prohibition = prompt.indexOf('Запрещено: искать и читать файл карточки на диске');
+    expect(protocol).toBe(0);
+    expect(prohibition).toBeGreaterThan(protocol);
+    expect(prohibition).toBeLessThan(prompt.indexOf('Описание задачи:'));
   });
 
   it('sends the executor the same prompt that the board looks for in the session', () => {

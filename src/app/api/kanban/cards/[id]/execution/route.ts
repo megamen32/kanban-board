@@ -390,21 +390,25 @@ function saveReceiptProgress(
 }
 
 export function taskPrompt(card: KanbanCard, execution?: { operationId: string; harness: RouteHarness; sessionId: string; cwd: string }): string {
-  const parts = [
+  const parts: string[] = [];
+  if (execution?.harness === 'opencode') {
+    const contextRef = `exmanager-task:${card.id}:${execution.operationId}`;
+    parts.push(
+      'ПРОТОКОЛ ВОПРОСА (строгий порядок, если задача требует ответа владельца): сначала binding, затем ровно один JSON-объект.',
+      `Если для продолжения нужна ясность от ответственного, используй только metadata-only вызов agent-herder_human_request_create с kind="user", harness="opencode", sessionId=${JSON.stringify(execution.sessionId)}, cwd=${JSON.stringify(execution.cwd)}, contextRef=${JSON.stringify(contextRef)}. Не передавай message, choices или notify: вызов только закрепляет эту задачу и сессию.`,
+      'После успешного binding твой следующий ответ должен быть ровно один JSON-объект и ничего больше: {"kind":"question","human_request_id":"<binding.request_id>","question":"<твой точный вопрос>","choices":[{"value":"<value>","label":"<вариант>"},{"value":"<value>","label":"<вариант>"}],"timeoutValue":"<один из value>"}. Никакого Markdown, никакого текста до или после, никаких замечаний, ссылок и сводок. В этом сообщении не пиши результат задачи и не подменяй вопрос ответом.',
+      'Запрещено: искать и читать файл карточки на диске (в т.ч. в /home/roomhacker/todo-kanban/work-tasks); читать или анализировать код доски (/home/roomhacker/excode, airlock-agent), чтобы понять, как доставляются вопросы и ответы: доставку и возобновление делает доска сама; использовать sudo; писать результат в файлы. Ответ придёт в этой же сессии, результат задачи - текст финального ответа.',
+      'Формат ответа «краткий вывод, публичные ссылки на источники и следующий шаг» относится только к финальному результату задачи после того, как человек ответит на вопрос. Вопрос задаётся сейчас — сейчас нужен только JSON-объект выше.',
+      'Не отмечай карточку выполненной.',
+    );
+  }
+  parts.push(
     `Выполни задачу канбан карточки ${card.id} из проекта «${card.project}».`,
     `Название: ${card.title}`,
     `Описание задачи:\n${card.description}`,
     'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
-  ];
-  if (execution?.harness === 'opencode') {
-    const contextRef = `exmanager-task:${card.id}:${execution.operationId}`;
-    parts.push(
-      `Если для продолжения нужна ясность от ответственного, используй только metadata-only вызов agent-herder_human_request_create с kind="user", harness="opencode", sessionId=${JSON.stringify(execution.sessionId)}, cwd=${JSON.stringify(execution.cwd)}, contextRef=${JSON.stringify(contextRef)}. Не передавай message, choices или notify: вызов только закрепляет эту задачу и сессию.`,
-      'После успешного binding твой следующий ответ должен быть ровно один JSON-объект и ничего больше: {"kind":"question","human_request_id":"<binding.request_id>","question":"<твой точный вопрос>","choices":[{"value":"<value>","label":"<вариант>"},{"value":"<value>","label":"<вариант>"}],"timeoutValue":"<один из value>"}. Никакого Markdown, никакого текста до или после, никаких замечаний, ссылок и сводок. В этом сообщении не пиши результат задачи и не подменяй вопрос ответом.',
-      'Формат ответа «краткий вывод, публичные ссылки на источники и следующий шаг» относится только к финальному результату задачи после того, как человек ответит на вопрос. Вопрос задаётся сейчас — сейчас нужен только JSON-объект выше.',
-      'Не отмечай карточку выполненной.',
-    );
-  } else {
+  );
+  if (execution?.harness !== 'opencode') {
     parts.push(
       'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
     );
