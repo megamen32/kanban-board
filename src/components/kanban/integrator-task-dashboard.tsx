@@ -131,6 +131,28 @@ async function sessionControlRequestHash(cardId: string, operationId: string, ac
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
+const AUTO_SYNC_INTERVAL_MS = 20_000;
+const AUTO_SYNC_LIMIT_MS = 30 * 60_000;
+const AUTO_SYNC_PHASES: ReadonlySet<string> = new Set(['intent', 'create-unknown', 'created', 'dispatch-unknown', 'running', 'waiting']);
+
+/** Polls the saved start receipt while the attempt is non-terminal; the parent guards against overlapping requests. */
+function ResultAutoSync({ active, phaseKey, onSync }: { active: boolean; phaseKey: string; onSync: () => void }) {
+  const onSyncRef = useRef(onSync);
+  const firstActiveAt = useRef<number | null>(null);
+  useEffect(() => { onSyncRef.current = onSync; });
+  useEffect(() => {
+    if (!active) { firstActiveAt.current = null; return; }
+    const started = firstActiveAt.current ?? Date.now();
+    firstActiveAt.current = started;
+    const timer = window.setInterval(() => {
+      if (Date.now() - started >= AUTO_SYNC_LIMIT_MS) { window.clearInterval(timer); return; }
+      onSyncRef.current();
+    }, AUTO_SYNC_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [active, phaseKey]);
+  return null;
+}
+
 export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignReviewer, onAssignReviewer }: Props) {
   const [executions, setExecutions] = useState<Record<string, ExecutionSnapshot | null>>({});
   const [storedOperations, setStoredOperations] = useState<Record<string, StoredOperationState>>({});
@@ -603,6 +625,10 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
               const canRetry = retryOperation !== null && !startBusy[card.id] && !syncBusy[card.id];
               const durableReceiptId = durableExecutionReceiptId(executionReceipt);
               const canSyncDurableReceipt = storageReady && storedOperation === null && durableReceiptId !== null;
+              const autoSyncOperation = !storageReady ? null
+                : storedOperation && storedOperation !== 'invalid' ? storedOperation
+                : storedOperation === null && durableReceiptId ? { operationId: durableReceiptId, status: 'unknown' as const }
+                : null;
               const canContinueCreatedSession = storageReady
                 && storedOperation !== null && storedOperation !== 'invalid'
                 && storedOperation.status !== 'admitted'
@@ -656,6 +682,8 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                 || (card.column === 'review' && card.needsReview
                   ? approvers.length ? `Проверить результат: ${approvers.join(', ')}` : 'Проверить результат'
                   : undefined);
+              // A pending human decision means the question is already shown, so polling stops there.
+              const autoSyncActive = autoSyncOperation !== null && AUTO_SYNC_PHASES.has(executionReceipt?.phase ?? '') && !humanWait;
               const sourceUrl = card.source ? safeSourceUrl(card.source) : null;
               return (
                 <article key={card.id} className="rounded-lg border bg-card p-4 shadow-sm">
@@ -748,6 +776,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                       {storedOperation && storedOperation !== 'invalid' && <Button size="sm" variant="outline" disabled={startBusy[card.id] || syncBusy[card.id]} onClick={() => void syncResult(card, storedOperation)}>
                         {syncBusy[card.id] ? 'Проверяю…' : 'Проверить результат'}
                       </Button>}
+                      {autoSyncActive && autoSyncOperation && <ResultAutoSync active={autoSyncActive} phaseKey={executionReceipt?.phase ?? ''} onSync={() => void syncResult(card, autoSyncOperation)} />}
                       {canSyncDurableReceipt && durableReceiptId && <>
                         <p role="status" className="text-sm text-muted-foreground">Найдена сохранённая квитанция запуска. Проверка не создаёт новый запуск.</p>
                         <Button size="sm" variant="outline" disabled={startBusy[card.id] || syncBusy[card.id]}

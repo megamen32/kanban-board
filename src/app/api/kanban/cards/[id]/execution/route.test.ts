@@ -973,6 +973,21 @@ describe('task execution API', () => {
       expect(otherAction.status).toBe(401);
       expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
     });
+
+    it('admits a valid token to the result sync action and still rejects session-stop', async () => {
+      process.env.KANBAN_AUTOMATION_TOKEN = secret;
+      const sync = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+        method: 'PATCH', headers: { 'content-type': 'application/json', ...automationHeader },
+        body: JSON.stringify({ action: 'sync-result', operationId: questionOperationId, expectedVersion: 4 }),
+      }), cardParams());
+      expect([401, 403]).not.toContain(sync.status);
+
+      const stop = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+        method: 'PATCH', headers: { 'content-type': 'application/json', ...automationHeader },
+        body: JSON.stringify({ action: 'session-stop', operationId: 'b'.repeat(64), expectedVersion: 4 }),
+      }), cardParams());
+      expect(stop.status).toBe(401);
+    });
   });
 
   it('does not start a task from the anonymous display persona alone', async () => {

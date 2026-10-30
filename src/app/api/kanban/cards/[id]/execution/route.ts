@@ -2690,7 +2690,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const body: unknown = await request.clone().json();
     const allowAssignedReviewer = isRecord(body)
       && ['continue-task', 'sync-task-continuation'].includes(String(body.action));
-    const allowAutomation = isRecord(body) && body.action === 'answer-question';
+    const allowAutomation = isRecord(body) && ['answer-question', 'sync-result'].includes(String(body.action));
     const context = await authorizedTaskCard(request, id, 'write', undefined, allowAssignedReviewer, allowAutomation);
     if ('response' in context) return context.response;
     if (context.native && isRecord(body) && typeof body.operationId === 'string') {
