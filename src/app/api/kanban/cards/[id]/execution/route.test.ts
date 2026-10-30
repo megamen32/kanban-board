@@ -2283,6 +2283,70 @@ describe('task execution API', () => {
     expect(mocks.currentCard.value!.taskExecutionHistory![0]!.executorQuestion).toEqual(fileStoreProof);
   });
 
+  it('re-POSTs a stored executor question with the same mandate only when Notice reads not_found', async () => {
+    const fixture = prepareRegistryExecutorQuestion();
+    addAcceptedDirectContinuation(fixture);
+    const calls: Array<{ url: string; method: string; mandate?: unknown }> = [];
+    let readStatus = 404;
+    let rejectNextPost = true;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const view = (requestId: string, message: unknown, choices: unknown, version: unknown) => ({
+      schema: 'noticeplace.task_decision_view.v1', request_id: requestId, project: fixture.project,
+      recipient: 'qa-board-only', status: 'pending', question: { text: message, mode: 'choice', choices,
+        expires_at: null, reference: { task_ref: fixture.card.id, purpose: 'clarification', version: String(version), mandate_ref: fixture.operationId } },
+      notification: { attempt_state: 'sent', receipt: { kind: 'successful_sender_response', confirmed_at: 100 }, deadline_at: 1900 },
+      winner: null, control: { state: 'clear' }, delivery_status: 'sent', idempotent: true,
+    });
+    const noticeRequest = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      calls.push({ url: String(input), method, ...(body?.mandate ? { mandate: body.mandate } : {}) });
+      if (method === 'GET') {
+        if (readStatus === 404) return noticeResponse({ error: 'not found' }, 404);
+        const stored = mocks.currentCard.value!.taskExecutionHistory![0]!;
+        return noticeResponse(view(String(input).split('/').pop()!, stored.executorQuestion!.text,
+          stored.executorQuestion!.choices, stored.taskDecisionRequest!.version), 200);
+      }
+      if (rejectNextPost) { rejectNextPost = false; return noticeResponse({ error: 'unauthorized' }, 401); }
+      const mandate = body?.mandate as Record<string, unknown>;
+      return noticeResponse(view(expectedNoticeRequestId(fixture.card.id, 'clarification', Number(mandate.version)),
+        mandate.message, mandate.choices, mandate.version), 201);
+    });
+    vi.stubGlobal('fetch', noticeRequest);
+    const sync = () => {
+      const current = mocks.currentCard.value!;
+      return PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/' + fixture.card.id + '/execution', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'sync-result', operationId: fixture.operationId, expectedVersion: current.version }),
+      }), { params: Promise.resolve({ id: fixture.card.id }) });
+    };
+
+    const refused = await sync();
+    expect(refused.status).toBe(409);
+    expect(errorSpy).toHaveBeenCalledWith('[kanban task execution notice]', expect.objectContaining({ stage: 'create-task-decision', status: 401 }));
+    const firstMandate = calls.find(call => call.method === 'POST')?.mandate;
+    const requestId = mocks.currentCard.value!.taskExecutionHistory![0]!.taskDecisionRequest!.requestId;
+
+    calls.length = 0;
+    readStatus = 200;
+    const found = await sync();
+    expect(found.status).toBe(200);
+    expect(calls.map(call => call.method)).toEqual(['GET']);
+    expect(calls[0]?.url).toBe('http://192.168.192.1:19450/v1/task-decisions/' + requestId);
+
+    calls.length = 0;
+    readStatus = 404;
+    const recreated = await sync();
+    expect(recreated.status).toBe(201);
+    expect(calls.map(call => call.method)).toEqual(['GET', 'POST']);
+    expect(calls[1]?.mandate).toEqual(firstMandate);
+    expect(mocks.currentCard.value!.taskExecutionHistory![0]!.taskDecisionRequest!.requestId).toBe(requestId);
+    expect(warnSpy).toHaveBeenCalledWith('[kanban task execution notice]', expect.objectContaining({ stage: 'recreate-task-decision', requestId }));
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
   it('keeps a durable deferred question query-only when Notice readback is unknown', async () => {
     const fixture = prepareRegistryExecutorQuestion();
     addAcceptedDirectContinuation(fixture);

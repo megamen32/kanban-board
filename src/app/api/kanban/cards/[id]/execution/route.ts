@@ -2062,6 +2062,7 @@ async function createTaskQuestion(
         && (attempt.lastBoardVersion !== context.card.version || reference.version !== context.card.version)) {
       return NextResponse.json({ error: 'question reference is historical; creation is denied after the execution version changed' }, { status: 409 });
     }
+    if (queried.status === 404) console.warn('[kanban task execution notice]', { stage: 'recreate-task-decision', requestId: reference.requestId });
   }
 
   const mandate: RecordValue = {
@@ -2077,9 +2078,11 @@ async function createTaskQuestion(
     ...(executorQuestion ? { executor_question: executorQuestion } : {}),
   };
   const created = await noticeFetch(config.token, 'POST', config.apiBaseUrl, undefined, mandate);
+  if (!created) console.error('[kanban task execution notice]', { stage: 'create-task-decision', outcome: 'unreachable', requestId: reference.requestId });
   if (!created) return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved,
     taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   if (![200, 201].includes(created.status)) {
+    console.error('[kanban task execution notice]', { stage: 'create-task-decision', outcome: 'rejected', status: created.status, requestId: reference.requestId });
     if ([400, 401, 403, 409].includes(created.status)) return NextResponse.json({ error: 'Notice rejected the task question mandate' }, { status: 409 });
     return NextResponse.json({ ...taskExecutionSnapshot(saved), card: saved,
       taskQuestion: { requestId: reference.requestId, state: 'unknown' }, retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
