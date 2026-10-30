@@ -16,6 +16,7 @@ vi.mock('web-push', () => ({
 // The source-intent launch is wired into the existing tick; the launch entry
 // itself is covered by src/lib/kanban/source-launch.test.ts.
 vi.mock('../kanban/source-launch', () => ({ consumeSourceIntentLaunchOnce }));
+vi.mock('../kanban/board-questions', () => ({ sweepQuestionTimeout: vi.fn(), reconcileQuestionDelivery: vi.fn() }));
 
 const roots: string[] = [];
 

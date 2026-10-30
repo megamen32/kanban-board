@@ -307,6 +307,7 @@ export interface PendingQuestion {
   askedAt: string;
   attemptOperationId: string;
   answer?: { value: string; label: string; answeredAt: string; by: string };
+  deliveryAcceptedAt?: string;
   deliveredAt?: string;
   deliveryError?: string;
 }

@@ -26,7 +26,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
   return NextResponse.json({
     ok: true, idempotent: outcome.idempotent, answer: outcome.question.answer,
-    deliveredAt: outcome.question.deliveredAt, deliveryError: outcome.question.deliveryError,
+    deliveryAcceptedAt: outcome.question.deliveryAcceptedAt, deliveredAt: outcome.question.deliveredAt, deliveryError: outcome.question.deliveryError,
   }, { headers: { 'Cache-Control': 'no-store' } });
 }
 

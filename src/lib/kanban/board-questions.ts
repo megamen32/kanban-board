@@ -113,6 +113,9 @@ export function questionTimeoutMs(): number {
 }
 
 export function answerMessage(question: PendingQuestion, label: string, value: string): string {
+  if (question.answer?.by === 'timeout') {
+    return `Ответ на вопрос «${question.text}» не поступил вовремя. Выбран вариант по умолчанию: «${label}» (value: ${value}). Продолжай задачу с этого места.`;
+  }
   return `Ответ владельца на твой вопрос «${question.text}»: «${label}» (value: ${value}). Продолжай задачу с этого места.`;
 }
 
@@ -129,13 +132,18 @@ export async function applyAnswer(cardId: string, tasksDir: string, value: strin
     const q = card.pendingQuestion;
     if (!q) { failure = 'no_question'; return undefined; }
     if (q.answer) { alreadyAnswered = true; stored = q; return undefined; }
+    const attempt = latestAttempt(card);
+    if (by === 'timeout' && (attempt?.operationId !== q.attemptOperationId || attempt.phase !== 'waiting')) {
+      failure = 'no_question';
+      return undefined;
+    }
     const choice = q.choices.find(item => item.value === value);
     if (!choice) { failure = 'bad_value'; return undefined; }
     stored = { ...q, answer: { value: choice.value, label: choice.label, answeredAt: now(), by } };
-    const attempt = card.taskExecutionHistory?.find(item => item.operationId === q.attemptOperationId);
+    const questionAttempt = card.taskExecutionHistory?.find(item => item.operationId === q.attemptOperationId);
     return {
       pendingQuestion: stored,
-      ...(attempt?.phase === 'waiting' ? { taskExecutionHistory: withAttemptPhase(card, attempt.operationId, { phase: 'running' }) } : {}),
+      ...(questionAttempt?.phase === 'waiting' ? { taskExecutionHistory: withAttemptPhase(card, questionAttempt.operationId, { phase: 'running' }) } : {}),
     };
   });
   if (failure) return { status: failure };
@@ -144,7 +152,7 @@ export async function applyAnswer(cardId: string, tasksDir: string, value: strin
 
   const question = stored as PendingQuestion;
   const attempt = saved.taskExecutionHistory?.find(item => item.operationId === question.attemptOperationId);
-  let deliveredAt: string | undefined;
+  let deliveryAcceptedAt: string | undefined;
   let deliveryError: string | undefined;
   if (!attempt?.nativeSessionId) {
     deliveryError = 'native_session_missing';
@@ -156,15 +164,45 @@ export async function applyAnswer(cardId: string, tasksDir: string, value: strin
         message: answerMessage(question, question.answer!.label, question.answer!.value),
         mode: 'queue', humanRequested: true,
       });
-      if (result.isError) deliveryError = 'send_message_error'; else deliveredAt = now();
+      if (result.isError) deliveryError = 'send_message_error'; else deliveryAcceptedAt = now();
     } catch (error) {
       deliveryError = error instanceof Error ? error.message.slice(0, 120) : 'send_message_failed';
     }
   }
   const final = mutateCard(cardId, tasksDir, card => card.pendingQuestion?.id === question.id
-    ? { pendingQuestion: { ...card.pendingQuestion, ...(deliveredAt ? { deliveredAt } : {}), ...(deliveryError ? { deliveryError } : {}) } }
+    ? { pendingQuestion: { ...card.pendingQuestion, ...(deliveryAcceptedAt ? { deliveryAcceptedAt } : {}), ...(deliveryError ? { deliveryError } : {}) } }
     : undefined) ?? saved;
   return { status: 'ok', card: final, question: final.pendingQuestion ?? question, idempotent: false };
+}
+
+/** Read the exact durable job; admission alone does not prove delivery. Never resend. */
+export async function reconcileQuestionDelivery(card: KanbanCard, tasksDir: string): Promise<void> {
+  const q = card.pendingQuestion;
+  if (!q?.answer || q.deliveredAt) return;
+  const attempt = card.taskExecutionHistory?.find(item => item.operationId === q.attemptOperationId);
+  if (!attempt?.nativeSessionId || !attempt.harness) return;
+  const inputId = sha256(`board-answer\0${card.id}\0${q.id}`);
+  const onceKey = ['user-message', attempt.harness, attempt.nativeSessionId, inputId].join('\0');
+  const jobId = `job_${sha256(onceKey)}`;
+  try {
+    const response = await callOwnerHerderTool('job_get', { jobId });
+    let payload: unknown = response.structuredContent;
+    if (!payload) {
+      const raw = response.content.filter(item => item.type === 'text').map(item => item.text ?? '').join('');
+      payload = JSON.parse(raw);
+    }
+    if (!payload || typeof payload !== 'object') return;
+    const job = (payload as { job?: Record<string, unknown> }).job;
+    const result = job?.result as Record<string, unknown> | undefined;
+    if (job?.id !== jobId || job.state !== 'completed' || job.ownerSessionId !== attempt.nativeSessionId
+        || job.onceKey !== onceKey || result?.ok !== true || result.admitted !== true || result.inputId !== inputId
+        || typeof result.nativeInputMessageId !== 'string' || !/^msg_[A-Za-z0-9_-]{8,256}$/.test(result.nativeInputMessageId)) return;
+    mutateCard(card.id, tasksDir, current => {
+      if (current.pendingQuestion?.id !== q.id || current.pendingQuestion.deliveredAt) return undefined;
+      const { deliveryError: _deliveryError, ...question } = current.pendingQuestion;
+      return { pendingQuestion: { ...question, deliveredAt: now() } };
+    });
+  } catch { /* retry readback on the next tick; sending remains exactly once */ }
 }
 
 /** Lazy timeout: any board call after the deadline applies timeoutValue as the owner's answer. */

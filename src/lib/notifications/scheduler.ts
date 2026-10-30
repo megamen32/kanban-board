@@ -4,6 +4,7 @@ import type { BoardScope } from '@/lib/auth/scopes';
 import { reminderIntervalMs, reminderLookbackHours, subscriptionsFilePath } from './config';
 import { dispatchDueReminder } from './push';
 import { consumeSourceIntentLaunchOnce } from '../kanban/source-launch';
+import { reconcileQuestionDelivery, sweepQuestionTimeout } from '../kanban/board-questions';
 
 const SCHEDULER_KEY = '__excodeDueReminderScheduler';
 type SchedulerGlobal = typeof globalThis & { [SCHEDULER_KEY]?: { timer: ReturnType<typeof setInterval> } };
@@ -25,6 +26,16 @@ export async function runDueReminderTick(
     }
     const cards = getAllCards(tasksDir);
     for (const card of cards) {
+      if (scope === 'work' && card.pendingQuestion && !card.pendingQuestion.answer) {
+        try {
+          await sweepQuestionTimeout(card, tasksDir);
+        } catch (error) {
+          console.error('board question timeout failed', error);
+        }
+      }
+      if (scope === 'work' && card.pendingQuestion?.answer && !card.pendingQuestion.deliveredAt) {
+        await reconcileQuestionDelivery(card, tasksDir);
+      }
       if (!card.dueAt) continue;
       const dueAt = new Date(card.dueAt).getTime();
       if (!Number.isFinite(dueAt) || dueAt > now.getTime() || dueAt < earliest) continue;

@@ -6,7 +6,8 @@ import { NextRequest } from 'next/server';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as store from '../../../../../../lib/kanban/file-store';
 import { callOwnerHerderTool } from '@/lib/kanban/task-execution-client';
-import { executorProtocolBlock } from '../../../../../../lib/kanban/board-questions';
+import { executorProtocolBlock, reconcileQuestionDelivery } from '../../../../../../lib/kanban/board-questions';
+import { runDueReminderTick } from '../../../../../../lib/notifications/scheduler';
 import * as questionRoute from './route';
 import * as answerRoute from '../answer/route';
 import * as resultRoute from '../result/route';
@@ -14,6 +15,7 @@ import * as resultRoute from '../result/route';
 const harness = vi.hoisted(() => ({ tasksDir: '' }));
 vi.mock('../../../../../../lib/auth/data-scope', () => ({ tasksDirForScope: () => harness.tasksDir }));
 vi.mock('@/lib/kanban/task-execution-client', () => ({ callOwnerHerderTool: vi.fn(), readOwnerHerderResource: vi.fn() }));
+vi.mock('../../../../../../lib/kanban/source-launch', () => ({ consumeSourceIntentLaunchOnce: vi.fn() }));
 
 const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-board-questions-'));
 harness.tasksDir = fixtureRoot;
@@ -25,6 +27,8 @@ const CHOICES = [{ value: 'a', label: 'Вариант А' }, { value: 'b', label
 afterAll(() => { fs.rmSync(fixtureRoot, { recursive: true, force: true }); });
 
 beforeEach(() => {
+  fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  fs.mkdirSync(fixtureRoot, { recursive: true });
   send.mockReset();
   send.mockResolvedValue({ content: [{ type: 'text', text: 'queued' }] });
   vi.stubEnv('KANBAN_AUTOMATION_TOKEN', AUTOMATION);
@@ -99,7 +103,8 @@ describe('board-owned executor questions', () => {
     });
     const saved = store.findCardById(card.id, fixtureRoot)!;
     expect(saved.pendingQuestion?.answer).toMatchObject({ value: 'a', label: 'Вариант А', by: 'automation' });
-    expect(saved.pendingQuestion?.deliveredAt).toBeTruthy();
+    expect(saved.pendingQuestion?.deliveredAt).toBeUndefined();
+    expect(saved.pendingQuestion?.deliveryAcceptedAt).toBeTruthy();
     expect(saved.taskExecutionHistory?.at(-1)?.phase).toBe('running');
     const second = await answerRoute.POST(post(card.id, 'answer', { value: 'b' }, asAutomation), ctx(card.id));
     expect(second.status).toBe(200);
@@ -116,6 +121,24 @@ describe('board-owned executor questions', () => {
     const saved = store.findCardById(card.id, fixtureRoot)!;
     expect(saved.pendingQuestion?.answer?.value).toBe('a');
     expect(saved.pendingQuestion?.deliveryError).toBe('task_execution_transport_unknown');
+  });
+
+  it('marks delivery only after the exact durable job is completed', async () => {
+    const { card } = runningCard();
+    await ask(card.id);
+    await answerRoute.POST(post(card.id, 'answer', { value: 'a' }, asAutomation), ctx(card.id));
+    const answered = store.findCardById(card.id, fixtureRoot)!;
+    const inputId = createHash('sha256').update(`board-answer\0${card.id}\0${answered.pendingQuestion!.id}`).digest('hex');
+    const onceKey = ['user-message', 'opencode', 'ses_board_question', inputId].join('\0');
+    const jobId = `job_${createHash('sha256').update(onceKey).digest('hex')}`;
+    send.mockResolvedValueOnce({ content: [], structuredContent: { job: { id: jobId, state: 'running' } } });
+    await reconcileQuestionDelivery(answered, fixtureRoot);
+    expect(store.findCardById(card.id, fixtureRoot)?.pendingQuestion?.deliveredAt).toBeUndefined();
+    send.mockResolvedValueOnce({ content: [], structuredContent: { job: { id: jobId, state: 'completed', ownerSessionId: 'ses_board_question', onceKey,
+      result: { ok: true, admitted: true, inputId, nativeInputMessageId: 'msg_12345678' } } } });
+    await reconcileQuestionDelivery(answered, fixtureRoot);
+    expect(store.findCardById(card.id, fixtureRoot)?.pendingQuestion?.deliveredAt).toBeTruthy();
+    expect(send.mock.calls.filter(call => call[0] === 'send_message')).toHaveLength(1);
   });
 
   it('result moves the card to review with the text', async () => {
@@ -146,6 +169,32 @@ describe('board-owned executor questions', () => {
     expect((await late.json()).question.answer).toMatchObject({ value: 'b', by: 'timeout' });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![1]).toMatchObject({ message: expect.stringContaining('(value: b)') });
+  });
+
+  it('sends the default answer on the scheduler tick without a board request', async () => {
+    const { card } = runningCard();
+    await ask(card.id);
+    vi.stubEnv('KANBAN_QUESTION_TIMEOUT_MS', '1');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    await runDueReminderTick(new Date(), { scopes: ['work'], tasksDir: () => fixtureRoot });
+    expect(store.findCardById(card.id, fixtureRoot)?.pendingQuestion?.answer).toMatchObject({ value: 'b', by: 'timeout' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![1]).toMatchObject({ message: expect.stringContaining('по умолчанию') });
+    await runDueReminderTick(new Date(), { scopes: ['work'], tasksDir: () => fixtureRoot });
+    expect(send.mock.calls.filter(call => call[0] === 'send_message')).toHaveLength(1);
+  });
+
+  it('does not resume a stopped attempt when a question times out', async () => {
+    const { card } = runningCard();
+    await ask(card.id);
+    const waiting = store.findCardById(card.id, fixtureRoot)!;
+    const history = waiting.taskExecutionHistory!.map(item => ({ ...item, phase: 'stopped' as const }));
+    store.updateCard(card.id, { taskExecutionHistory: history }, waiting.version, fixtureRoot);
+    vi.stubEnv('KANBAN_QUESTION_TIMEOUT_MS', '1');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    await runDueReminderTick(new Date(), { scopes: ['work'], tasksDir: () => fixtureRoot });
+    expect(send).not.toHaveBeenCalled();
+    expect(store.findCardById(card.id, fixtureRoot)?.pendingQuestion?.answer).toBeUndefined();
   });
 
   it('builds a short protocol block that carries the key and the exact commands', () => {

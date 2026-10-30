@@ -36,7 +36,7 @@ export function BoardQuestionPanel({ card, onAnswered }: { card: KanbanCard; onA
         <p className="mt-2 text-muted-foreground">
           Ответ: <span className="text-foreground">{question.answer.label}</span>
           {question.answer.by === 'timeout' ? ' (по таймауту)' : ''}
-          {question.deliveryError ? ' · доставка в сессию не подтверждена' : ''}
+          {question.deliveredAt ? ' · доставлен исполнителю' : ' · доставка в сессию не подтверждена'}
         </p>
       ) : (
         <div className="mt-2 flex flex-wrap gap-2">
