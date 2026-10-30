@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
 import { boardHumanIdentityFromRequest } from '../../../../../../lib/auth/board-human';
-import { boardIdentityFromRequest, identityFromRequest, nativeProjectAccessContextFromRequest, type RequestIdentity } from '@/lib/auth/request';
+import { automationTokenValid, boardIdentityFromRequest, identityFromRequest, nativeProjectAccessContextFromRequest, type RequestIdentity } from '@/lib/auth/request';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { findCardById, updateCard } from '@/lib/kanban/file-store';
 import { taskExecutionSnapshot } from '@/lib/kanban/task-execution';
@@ -272,6 +272,16 @@ function operationIdFor(cardId: string, rawOperationId: string): string {
 type AuthorizedTaskCard = { actor: string; native: boolean; tasksDir: string; card: KanbanCard };
 type AuthorizedTaskCardResult = AuthorizedTaskCard | { response: NextResponse };
 
+/**
+ * The automation token acts as the card owner, using the same default owner
+ * that taskOwner uses. Only callers that opt in for an action can use it.
+ */
+function automationIdentityFor(request: NextRequest, id: string): RequestIdentity | null {
+  if (!automationTokenValid(request)) return null;
+  const card = findCardById(id, tasksDirForScope('work'));
+  return card ? { username: card.owner ?? 'nikita', scope: 'work' } : null;
+}
+
 async function executionIdentityFromRequest(request: NextRequest): Promise<RequestIdentity | null> {
   // Preserve existing native Kanban session and OAuth identity semantics.
   // When neither applies, accept only the existing server-verified human login
@@ -294,6 +304,7 @@ async function authorizedTaskCard(
   requiredAccess: 'read' | 'write' = 'write',
   verifiedNativeContext?: NativeProjectAccessContext | null,
   allowAssignedReviewer = false,
+  allowAutomation = false,
 ): Promise<AuthorizedTaskCardResult> {
   let nativeContext = verifiedNativeContext;
   if (nativeContext === undefined) {
@@ -315,7 +326,7 @@ async function authorizedTaskCard(
       return { response: NextResponse.json({ error: 'project access could not be verified' }, { status: denied ? 404 : 503 }) };
     }
   }
-  const identity = await executionIdentityFromRequest(request);
+  const identity = (allowAutomation ? automationIdentityFor(request, id) : null) ?? await executionIdentityFromRequest(request);
   if (!identity) return { response: NextResponse.json({ error: 'authenticated operator required' }, { status: 401 }) };
   if (identity.scope !== 'work') return { response: NextResponse.json({ error: 'work board required' }, { status: 403 }) };
   const tasksDir = tasksDirForScope(identity.scope);
@@ -2100,7 +2111,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       if (request.nextUrl.searchParams.get('question') !== 'latest' || [...request.nextUrl.searchParams.keys()].some(key => key !== 'question')) {
         return NextResponse.json({ error: 'invalid task question read request' }, { status: 400 });
       }
-      const context = await authorizedTaskCard(request, id, 'read', nativeContext);
+      const context = await authorizedTaskCard(request, id, 'read', nativeContext, false, true);
       if ('response' in context) return context.response;
       return await readTaskQuestion(context);
     }
@@ -2120,7 +2131,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         : { startAvailable: false, unavailableReason: 'Текущие права проекта доступны только для чтения.' };
       return NextResponse.json({ ...taskExecutionSnapshot(card), ...availability }, { headers: { 'Cache-Control': 'no-store' } });
     }
-    const identity = await executionIdentityFromRequest(request);
+    const identity = automationIdentityFor(request, id) ?? await executionIdentityFromRequest(request);
     const readIdentity = identity ?? boardIdentityFromRequest(request);
     const card = findCardById(id, tasksDirForScope(readIdentity.scope));
     if (!card) return NextResponse.json({ error: 'not found' }, { status: 404 });
@@ -2135,7 +2146,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   let context: AuthorizedTaskCardResult;
   try {
     const { id } = await params;
-    context = await authorizedTaskCard(request, id, 'write', currentNativeProjectContext());
+    context = await authorizedTaskCard(request, id, 'write', currentNativeProjectContext(), false, true);
   } catch {
     return NextResponse.json({ error: 'task execution identity unavailable' }, { status: 400 });
   }
@@ -2679,7 +2690,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const body: unknown = await request.clone().json();
     const allowAssignedReviewer = isRecord(body)
       && ['continue-task', 'sync-task-continuation'].includes(String(body.action));
-    const context = await authorizedTaskCard(request, id, 'write', undefined, allowAssignedReviewer);
+    const allowAutomation = isRecord(body) && body.action === 'answer-question';
+    const context = await authorizedTaskCard(request, id, 'write', undefined, allowAssignedReviewer, allowAutomation);
     if ('response' in context) return context.response;
     if (context.native && isRecord(body) && typeof body.operationId === 'string') {
       const receiptId = ['continue-task', 'sync-task-continuation'].includes(String(body.action))

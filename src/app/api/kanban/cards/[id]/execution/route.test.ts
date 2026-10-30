@@ -30,6 +30,11 @@ vi.mock('@/lib/kanban/file-store', () => ({ findCardById: mocks.findCardById, up
 vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => mocks.identity.value ?? { username: 'anonymous', scope: 'work' },
   identityFromRequest: () => mocks.identity.value,
+  automationTokenValid: (request: Request) => {
+    const expected = process.env.KANBAN_AUTOMATION_TOKEN?.trim();
+    const provided = request.headers.get('x-kanban-automation-token')?.trim();
+    return !!expected && provided === expected;
+  },
   nativeProjectAccessContextFromRequest: mocks.nativeProjectAccessContextFromRequest,
 }));
 vi.mock('../../../../../../lib/auth/board-human', () => ({
@@ -912,6 +917,62 @@ describe('task execution API', () => {
       startAvailable: false, unavailableReason: expect.stringMatching(/ответствен|исполнитель|доступ/i),
     });
     expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+  });
+
+  describe('automation token', () => {
+    const secret = 'automation-secret-1234567890';
+    const automationHeader = { 'x-kanban-automation-token': secret };
+    const cardParams = () => ({ params: Promise.resolve({ id: baseCard.id }) });
+    let previousToken: string | undefined;
+    beforeEach(() => {
+      previousToken = process.env.KANBAN_AUTOMATION_TOKEN;
+      mocks.identity.value = null;
+    });
+    afterEach(() => {
+      if (previousToken === undefined) delete process.env.KANBAN_AUTOMATION_TOKEN;
+      else process.env.KANBAN_AUTOMATION_TOKEN = previousToken;
+    });
+
+    it('rejects automation requests when the token is unset or empty', async () => {
+      delete process.env.KANBAN_AUTOMATION_TOKEN;
+      expect((await POST(postRequest(undefined, automationHeader), cardParams())).status).toBe(401);
+      process.env.KANBAN_AUTOMATION_TOKEN = '';
+      expect((await POST(postRequest(undefined, automationHeader), cardParams())).status).toBe(401);
+      expect(mocks.updateCard).not.toHaveBeenCalled();
+      expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+    });
+
+    it('rejects a wrong or missing automation token', async () => {
+      process.env.KANBAN_AUTOMATION_TOKEN = secret;
+      expect((await POST(postRequest(undefined, { 'x-kanban-automation-token': 'automation-secret-0000000000' }), cardParams())).status).toBe(401);
+      expect((await POST(postRequest(), cardParams())).status).toBe(401);
+      expect(mocks.updateCard).not.toHaveBeenCalled();
+      expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+    });
+
+    it('starts the card as its owner with a valid token', async () => {
+      process.env.KANBAN_AUTOMATION_TOKEN = secret;
+      mocks.currentCard.value = { ...baseCard, owner: 'testlogin' };
+      const response = await POST(postRequest(undefined, automationHeader), cardParams());
+      expect(response.status).toBe(201);
+      expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.startedBy).toBe('testlogin');
+    });
+
+    it('admits a valid token to the answer action only', async () => {
+      process.env.KANBAN_AUTOMATION_TOKEN = secret;
+      const answer = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+        method: 'PATCH', headers: { 'content-type': 'application/json', ...automationHeader },
+        body: JSON.stringify({ action: 'answer-question', operationId: questionOperationId, expectedVersion: 4, value: 'yes' }),
+      }), cardParams());
+      expect([401, 403]).not.toContain(answer.status);
+
+      const otherAction = await PATCH(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', {
+        method: 'PATCH', headers: { 'content-type': 'application/json', ...automationHeader },
+        body: JSON.stringify({ action: 'session-stop', operationId: 'b'.repeat(64), expectedVersion: 4 }),
+      }), cardParams());
+      expect(otherAction.status).toBe(401);
+      expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+    });
   });
 
   it('does not start a task from the anonymous display persona alone', async () => {

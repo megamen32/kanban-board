@@ -50,6 +50,17 @@ export function managerRequestAuthorized(request: NextRequest): boolean {
   return timingSafeEqual(expectedHash, providedHash);
 }
 
+/** Authenticate the separate automation capability; an unset or empty token disables it. */
+export function automationTokenValid(request: Request): boolean {
+  const expected = process.env.KANBAN_AUTOMATION_TOKEN?.trim();
+  const provided = request.headers.get('x-kanban-automation-token')?.trim();
+  if (!expected || !provided) return false;
+  const expectedBytes = Buffer.from(expected);
+  const providedBytes = Buffer.from(provided);
+  if (expectedBytes.length !== providedBytes.length) return false;
+  return timingSafeEqual(expectedBytes, providedBytes);
+}
+
 /**
  * Resolve only the signed native caller on this exact request. With no
  * assertion this preserves the existing Board identity path; a present bad
