@@ -1,6 +1,9 @@
 FROM node:22-slim AS deps
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
-RUN npm install -g bun@1.3.14
+# Node 22 (OpenSSL 3.5) sends a post-quantum key share; the uplink DPI drops that
+# ClientHello to registry.npmjs.org. Classic groups only, for this one install.
+RUN printf "nodejs_conf = a\n[a]\nssl_conf = b\n[b]\nsystem_default = c\n[c]\nGroups = X25519:P-256:P-384\n" > /tmp/no-pq.cnf \
+    && OPENSSL_CONF=/tmp/no-pq.cnf npm install -g bun@1.3.14 && rm /tmp/no-pq.cnf
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
@@ -15,14 +18,20 @@ COPY postcss.config.mjs .
 RUN bun run build
 
 FROM node:22-slim AS ws
-RUN npm install -g bun@1.3.14
+# Node 22 (OpenSSL 3.5) sends a post-quantum key share; the uplink DPI drops that
+# ClientHello to registry.npmjs.org. Classic groups only, for this one install.
+RUN printf "nodejs_conf = a\n[a]\nssl_conf = b\n[b]\nsystem_default = c\n[c]\nGroups = X25519:P-256:P-384\n" > /tmp/no-pq.cnf \
+    && OPENSSL_CONF=/tmp/no-pq.cnf npm install -g bun@1.3.14 && rm /tmp/no-pq.cnf
 WORKDIR /ws
 COPY mini-services/kanban-ws/package.json mini-services/kanban-ws/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY mini-services/kanban-ws/ ./
 
 FROM node:22-slim AS runner
-RUN npm install -g bun@1.3.14
+# Node 22 (OpenSSL 3.5) sends a post-quantum key share; the uplink DPI drops that
+# ClientHello to registry.npmjs.org. Classic groups only, for this one install.
+RUN printf "nodejs_conf = a\n[a]\nssl_conf = b\n[b]\nsystem_default = c\n[c]\nGroups = X25519:P-256:P-384\n" > /tmp/no-pq.cnf \
+    && OPENSSL_CONF=/tmp/no-pq.cnf npm install -g bun@1.3.14 && rm /tmp/no-pq.cnf
 WORKDIR /app
 
 COPY --from=builder /app/.next/standalone ./
