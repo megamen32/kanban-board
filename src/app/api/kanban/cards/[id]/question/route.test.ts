@@ -86,6 +86,14 @@ describe('board-owned executor questions', () => {
     expect((await ask(card.id)).status).toBe(409);
   });
 
+  it('accepts the question as proof of dispatch after an uncertain admission', async () => {
+    const { card } = runningCard();
+    const history = card.taskExecutionHistory!.map(item => ({ ...item, phase: 'dispatch-unknown' as const }));
+    store.updateCard(card.id, { taskExecutionHistory: history }, card.version, fixtureRoot);
+    expect((await ask(card.id)).status).toBe(201);
+    expect(store.findCardById(card.id, fixtureRoot)?.taskExecutionHistory?.at(-1)?.phase).toBe('waiting');
+  });
+
   it('answers by automation token, delivers once into the same session and is idempotent', async () => {
     const { card } = runningCard();
     await ask(card.id);

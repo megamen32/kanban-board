@@ -37,10 +37,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   let conflict = false;
   const saved = mutateCard(id, tasksDir, current => {
     if (current.pendingQuestion && !current.pendingQuestion.answer) { conflict = true; return undefined; }
+    if (executorAttempt(request, current)?.operationId !== attempt.operationId) { conflict = true; return undefined; }
     const running = current.taskExecutionHistory?.find(item => item.operationId === attempt.operationId);
     return {
       pendingQuestion: question,
-      ...(running && (running.phase === 'running' || running.phase === 'waiting')
+      ...(running && (running.phase === 'running' || running.phase === 'waiting' || running.phase === 'dispatch-unknown')
         ? { taskExecutionHistory: withAttemptPhase(current, attempt.operationId, { phase: 'waiting', lastProgress: 'Ожидается ответ владельца на вопрос.', lastProgressAt: question.askedAt }) }
         : {}),
     };
