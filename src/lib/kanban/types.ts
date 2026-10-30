@@ -45,6 +45,8 @@ export interface KanbanCard {
   reviewHistory?: TaskReviewRecord[];
   /** Durable native-session launch/dispatch receipts stored on this Markdown card. */
   taskExecutionHistory?: TaskExecutionReceipt[];
+  /** Board-owned executor question (stage 1); asked and answered through the card routes only. */
+  pendingQuestion?: PendingQuestion;
   /** null is a durable human clear that must suppress executor-history fallback. */
   nextAction?: string | null;
   /** Immutable source admission identity; the board operation journal owns lifecycle state. */
@@ -296,7 +298,21 @@ export interface TaskExecutionProjectBinding {
     identityMatches: true;
   };
 }
+/** One executor question owned by the board; no Notice task-decision or mandate is involved. */
+export interface PendingQuestion {
+  id: string;
+  text: string;
+  choices: Array<{ value: string; label: string }>;
+  timeoutValue?: string;
+  askedAt: string;
+  attemptOperationId: string;
+  answer?: { value: string; label: string; answeredAt: string; by: string };
+  deliveredAt?: string;
+  deliveryError?: string;
+}
 export interface TaskExecutionReceipt {
+  /** sha256 hex of the per-attempt executor key; the plain key exists only in the executor prompt. */
+  executorKeyHash?: string;
   operationId: string;
   requestHash: string;
   /** Exact Board version after the latest execution-owned Markdown CAS write. */
@@ -344,7 +360,7 @@ export interface ExecutorResultInput {
 }
 export const PLANNING_VERSION = 1 as const;
 
-export type KanbanCardUpdates = Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'project' | 'assignees' | 'owner' | 'shared' | 'planningVersion' | 'type' | 'role' | 'accountable' | 'assignee' | 'important' | 'urgent' | 'week' | 'bigRock' | 'parent' | 'scheduledAt' | 'todayRank' | 'source' | 'needsReview' | 'suggestedAssignee' | 'waitingFor' | 'requiresApprovalFrom' | 'completedBy' | 'completedAt' | 'completionEvidence' | 'approvalEvidence' | 'resultHistory' | 'reviewHistory' | 'taskExecutionHistory'>> & {
+export type KanbanCardUpdates = Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'project' | 'assignees' | 'owner' | 'shared' | 'planningVersion' | 'type' | 'role' | 'accountable' | 'assignee' | 'important' | 'urgent' | 'week' | 'bigRock' | 'parent' | 'scheduledAt' | 'todayRank' | 'source' | 'needsReview' | 'suggestedAssignee' | 'waitingFor' | 'requiresApprovalFrom' | 'completedBy' | 'completedAt' | 'completionEvidence' | 'approvalEvidence' | 'resultHistory' | 'reviewHistory' | 'taskExecutionHistory' | 'pendingQuestion'>> & {
   blockerReason?: string | null;
   dueAt?: string | null;
   nextAction?: string | null;

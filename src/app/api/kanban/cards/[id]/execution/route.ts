@@ -6,6 +6,7 @@ import { automationTokenValid, boardIdentityFromRequest, identityFromRequest, na
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { findCardById, updateCard } from '@/lib/kanban/file-store';
 import { taskExecutionSnapshot } from '@/lib/kanban/task-execution';
+import { executorProtocolBlock, newExecutorKey, sweepQuestionTimeout } from '../../../../../../lib/kanban/board-questions';
 import { callOwnerHerderTool, readOwnerHerderResource, type HerderResourceResult, type HerderToolResult } from '@/lib/kanban/task-execution-client';
 import { validateTransition } from '@/lib/kanban/transition-policy';
 import { markSourceIntentConsumed } from '../../../../../../lib/kanban/source-operation';
@@ -390,29 +391,15 @@ function saveReceiptProgress(
 }
 
 export function taskPrompt(card: KanbanCard, execution?: { operationId: string; harness: RouteHarness; sessionId: string; cwd: string }): string {
+  // Stage 1: the question/result protocol (with the per-attempt key) is appended at dispatch by executorProtocolBlock.
   const parts: string[] = [];
-  if (execution?.harness === 'opencode') {
-    const contextRef = `exmanager-task:${card.id}:${execution.operationId}`;
-    parts.push(
-      'ПРОТОКОЛ ВОПРОСА (строгий порядок, если задача требует ответа владельца): сначала binding, затем ровно один JSON-объект.',
-      `Если для продолжения нужна ясность от ответственного, используй только metadata-only вызов agent-herder_human_request_create с kind="user", harness="opencode", sessionId=${JSON.stringify(execution.sessionId)}, cwd=${JSON.stringify(execution.cwd)}, contextRef=${JSON.stringify(contextRef)}. Не передавай message, choices или notify: вызов только закрепляет эту задачу и сессию.`,
-      'После успешного binding твой следующий ответ должен быть ровно один JSON-объект и ничего больше: {"kind":"question","human_request_id":"<binding.request_id>","question":"<твой точный вопрос>","choices":[{"value":"<value>","label":"<вариант>"},{"value":"<value>","label":"<вариант>"}],"timeoutValue":"<один из value>"}. Никакого Markdown, никакого текста до или после, никаких замечаний, ссылок и сводок. В этом сообщении не пиши результат задачи и не подменяй вопрос ответом.',
-      'Запрещено: искать и читать файл карточки на диске (в т.ч. в /home/roomhacker/todo-kanban/work-tasks); читать или анализировать код доски (/home/roomhacker/excode, airlock-agent), чтобы понять, как доставляются вопросы и ответы: доставку и возобновление делает доска сама; использовать sudo; писать результат в файлы. Ответ придёт в этой же сессии, результат задачи - текст финального ответа.',
-      'Формат ответа «краткий вывод, публичные ссылки на источники и следующий шаг» относится только к финальному результату задачи после того, как человек ответит на вопрос. Вопрос задаётся сейчас — сейчас нужен только JSON-объект выше.',
-      'Не отмечай карточку выполненной.',
-    );
-  }
   parts.push(
     `Выполни задачу канбан карточки ${card.id} из проекта «${card.project}».`,
     `Название: ${card.title}`,
     `Описание задачи:\n${card.description}`,
     'Используй только явно указанный проект и задачу. Не пиши людям, не звони и не выполняй внешние действия, если это прямо не разрешено в тексте задачи.',
   );
-  if (execution?.harness !== 'opencode') {
-    parts.push(
-      'Подготовь результат для проверки человеком: краткий вывод, публичные ссылки на источники и следующий шаг. Не отмечай карточку выполненной.',
-    );
-  }
+  parts.push('Не отмечай карточку выполненной.');
   return parts.join('\n\n').slice(0, MAX_TASK_TEXT);
 }
 
@@ -1267,15 +1254,18 @@ async function dispatchCreatedTask(input: {
   harness: RouteHarness;
 }): Promise<NextResponse> {
   let dispatchTool: HerderToolResult;
+  // Per-attempt executor key: only its sha256 is stored (with the post-send receipt save); the plain key goes into the prompt once.
+  const executorKey = newExecutorKey();
   try {
     dispatchTool = await callOwnerHerderTool('send_message', {
       sessionId: input.nativeSessionId, harness: input.harness, inputId: input.messageInputId,
       message: taskPrompt(input.card, { operationId: input.operationId, harness: input.harness,
-        sessionId: input.nativeSessionId, cwd: input.cwd }), mode: 'queue', humanRequested: true,
+        sessionId: input.nativeSessionId, cwd: input.cwd }) + '\n\n' + executorProtocolBlock(input.card.id, executorKey.key),
+      mode: 'queue', humanRequested: true,
     });
   } catch {
     const saved = saveReceiptProgress(input.card.id, input.tasksDir, input.operationId, input.requestHash, {
-      phase: 'dispatch-unknown', nativeSessionId: input.nativeSessionId,
+      phase: 'dispatch-unknown', nativeSessionId: input.nativeSessionId, executorKeyHash: executorKey.hash,
       dispatchReceiptText: 'owner MCP dispatch outcome unknown; never replay this operation',
     });
     // B04d: the native session already exists, so an ambiguous dispatch closes the
@@ -1297,7 +1287,7 @@ async function dispatchCreatedTask(input: {
     && typeof dispatchReceipt.turnId === 'string' && dispatchReceipt.turnId.trim().length > 0;
   const startedFromVersion = input.card.version;
   const updated = saveReceiptProgress(input.card.id, input.tasksDir, input.operationId, input.requestHash, {
-    phase: admitted ? 'running' : 'dispatch-unknown', nativeSessionId: input.nativeSessionId,
+    phase: admitted ? 'running' : 'dispatch-unknown', nativeSessionId: input.nativeSessionId, executorKeyHash: executorKey.hash,
     ...(typeof dispatchReceipt?.turnId === 'string' ? { nativeTurnId: dispatchReceipt.turnId } : {}),
     dispatchReceiptText: dispatchText,
     lastProgress: admitted ? 'Задание передано в нативную сессию; ожидается результат.' : 'Статус передачи задания не подтверждён.',
@@ -2140,8 +2130,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     }
     const identity = automationIdentityFor(request, id) ?? await executionIdentityFromRequest(request);
     const readIdentity = identity ?? boardIdentityFromRequest(request);
-    const card = findCardById(id, tasksDirForScope(readIdentity.scope));
-    if (!card) return NextResponse.json({ error: 'not found' }, { status: 404 });
+    const found = findCardById(id, tasksDirForScope(readIdentity.scope));
+    if (!found) return NextResponse.json({ error: 'not found' }, { status: 404 });
+    // Stage 1 lazy timeout: an overdue unanswered board question gets its timeoutValue now.
+    const card = identity ? await sweepQuestionTimeout(found, tasksDirForScope(readIdentity.scope)) : found;
     return NextResponse.json({ ...taskExecutionSnapshot(card), ...taskStartAvailability(card, identity) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch {
     return NextResponse.json({ error: 'execution status could not be read' }, { status: 400 });

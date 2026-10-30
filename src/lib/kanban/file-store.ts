@@ -7,7 +7,7 @@ import { DEFAULT_COLUMNS, parseCatalogTaskLink, PLANNING_VERSION } from './types
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
 import { approvalListForProject } from './project-reviewers';
 import { validateCardParentRelations, validateParentRelation } from './parent-relations';
-import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskDecisionAnswerProposal, TaskExecutionContinuation, TaskExecutionQuestionProof, TaskExecutionQuestionContinuation, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls, TaskExecutionQuestionChoice, TaskResult, TaskReviewRecord } from './types';
+import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskDecisionAnswerProposal, TaskExecutionContinuation, TaskExecutionQuestionProof, TaskExecutionQuestionContinuation, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls, TaskExecutionQuestionChoice, TaskResult, TaskReviewRecord, PendingQuestion } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
@@ -17,7 +17,7 @@ const KNOWN_FRONTMATTER_KEYS = new Set([
   'today_rank', 'source', 'needs_review', 'suggested_assignee', 'waiting_for',
   'requires_approval_from', 'completed_by', 'completed_at', 'completion_evidence',
   'approval_evidence', 'result_history', 'review_history', 'next_action',
-  'source_admission', 'catalog_task_link', 'catalog_task_links', 'task_execution_history',
+  'source_admission', 'catalog_task_link', 'catalog_task_links', 'task_execution_history', 'pending_question',
 ]);
 const PLANNING_FRONTMATTER_KEYS = new Set([
   'planning_version', 'type', 'role', 'accountable', 'assignee', 'blocker_reason', 'important', 'urgent',
@@ -156,6 +156,7 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     ...(catalogLink ? { catalogLink } : {}),
     ...(catalogLinks.length ? { catalogLinks } : {}),
     ...(data.task_execution_history !== undefined ? { taskExecutionHistory: taskExecutionHistoryField(data.task_execution_history) } : {}),
+    ...(isRecord(data.pending_question) ? { pendingQuestion: data.pending_question as unknown as PendingQuestion } : {}),
     rawFrontmatter,
   };
 }
@@ -502,6 +503,7 @@ function buildFrontmatter(card: KanbanCard): string {
   data.result_history = card.resultHistory ?? [];
   data.review_history = card.reviewHistory ?? [];
   if (card.taskExecutionHistory?.length) data.task_execution_history = card.taskExecutionHistory;
+  if (card.pendingQuestion) data.pending_question = card.pendingQuestion;
   if (card.dueAt) data.dueAt = card.dueAt;
   if (card.role !== undefined) data.role = card.role;
   if (card.accountable !== undefined) data.accountable = card.accountable;
@@ -927,6 +929,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       ...(typeof entry.nativeInputMessageId === 'string' ? { nativeInputMessageId: entry.nativeInputMessageId } : {}),
       ...(typeof entry.nativeDispatchJobId === 'string' ? { nativeDispatchJobId: entry.nativeDispatchJobId } : {}),
       ...(typeof entry.requestedBy === 'string' ? { requestedBy: entry.requestedBy } : {}),
+      ...(typeof entry.executorKeyHash === 'string' && /^[a-f0-9]{64}$/.test(entry.executorKeyHash) ? { executorKeyHash: entry.executorKeyHash } : {}),
       ...(isRecord(entry.taskDecisionRequest) ? { taskDecisionRequest: {
         requestId: entry.taskDecisionRequest.requestId as string,
         requestHash: entry.taskDecisionRequest.requestHash as string,

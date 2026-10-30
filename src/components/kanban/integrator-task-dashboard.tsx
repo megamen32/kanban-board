@@ -5,6 +5,7 @@ import { ArrowUpRight, CircleHelp, Clock3, Pencil, Play, UserRoundCheck } from '
 import type { KanbanCard, TaskExecutionReceipt, TaskExecutionSessionControlPhase } from '@/lib/kanban/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { BoardQuestionPanel } from './board-question-panel';
 import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import { MarkdownText } from './markdown-text';
 import { CardBriefPanel } from './card-brief-panel';
@@ -694,6 +695,8 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                     </button>
                     {card.column === 'review' && card.needsReview && <Button size="sm" onClick={() => onOpen(card)}>Открыть проверку</Button>}
                   </div>
+
+                  <BoardQuestionPanel card={card} onAnswered={onRefresh} />
 
                   <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
                     <div>
