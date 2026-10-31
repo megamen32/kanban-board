@@ -63,6 +63,9 @@ describe('board tab panel scroll contract', () => {
     expect(strip).not.toContain('md:hidden');
     expect(strip).toContain('<span>Актив</span>');
     expect(strip).toContain('<span>Архив</span>');
+    for (const panel of tabPanels(boardSource)) {
+      expect(panel.classes, 'tab ' + panel.value + ' must stay above bottom navigation').not.toContain('md:order-2');
+    }
   });
 
   it('keeps the tab strip reachable on narrow viewports', () => {

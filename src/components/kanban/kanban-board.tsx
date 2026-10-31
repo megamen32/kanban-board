@@ -362,10 +362,10 @@ export function KanbanBoard() {
           </div>
             )}
           </TabsContent>
-          <TabsContent value="inbox" className="order-1 min-h-0 overflow-y-auto space-y-3 p-3 sm:p-6 md:order-2"><InboxCapture owner={person} onCaptured={refresh} /><PlanningCardList cards={derivedCards} roles={roles} onOpen={setSelectedCard} empty="Входящих задач пока нет" /></TabsContent>
-          <TabsContent value="week" className="order-1 min-h-0 overflow-y-auto p-3 sm:p-6 md:order-2"><WeeklyPlanView cards={visibleCards} roles={roles} draft={weeklyDraft} loading={weeklyLoading} error={weeklyError} canAccept={username === NIKITA_ACTOR} onLoad={() => void fetchWeeklyDraft()} onAccept={ids => acceptWeeklyPlan(ids)} onOpen={setSelectedCard} /></TabsContent>
-          <TabsContent value="today" className="order-1 min-h-0 overflow-y-auto p-3 sm:p-6 md:order-2"><PlanningCardList cards={derivedCards} roles={roles} onOpen={setSelectedCard} empty="На сегодня задач нет" /></TabsContent>
-          <TabsContent value="balance" className="order-1 min-h-0 overflow-y-auto p-3 sm:p-6 md:order-2">{roleError && <p role="alert" className="text-sm text-destructive">{roleError}</p>}<RoleBalanceView balance={roleBalance} roles={roles} /></TabsContent>
+          <TabsContent value="inbox" className="order-1 min-h-0 overflow-y-auto space-y-3 p-3 sm:p-6"><InboxCapture owner={person} onCaptured={refresh} /><PlanningCardList cards={derivedCards} roles={roles} onOpen={setSelectedCard} empty="Входящих задач пока нет" /></TabsContent>
+          <TabsContent value="week" className="order-1 min-h-0 overflow-y-auto p-3 sm:p-6"><WeeklyPlanView cards={visibleCards} roles={roles} draft={weeklyDraft} loading={weeklyLoading} error={weeklyError} canAccept={username === NIKITA_ACTOR} onLoad={() => void fetchWeeklyDraft()} onAccept={ids => acceptWeeklyPlan(ids)} onOpen={setSelectedCard} /></TabsContent>
+          <TabsContent value="today" className="order-1 min-h-0 overflow-y-auto p-3 sm:p-6"><PlanningCardList cards={derivedCards} roles={roles} onOpen={setSelectedCard} empty="На сегодня задач нет" /></TabsContent>
+          <TabsContent value="balance" className="order-1 min-h-0 overflow-y-auto p-3 sm:p-6">{roleError && <p role="alert" className="text-sm text-destructive">{roleError}</p>}<RoleBalanceView balance={roleBalance} roles={roles} /></TabsContent>
           <TabsContent value="closed" className="order-1 min-h-0 overflow-y-auto">
             <div className="flex flex-wrap items-center gap-2 px-3 pt-3 sm:px-6">
               <p className="text-sm text-muted-foreground">Карточки сохранены. Отмена не считается выполнением.</p>
