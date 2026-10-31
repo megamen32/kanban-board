@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { KanbanCard } from '../../lib/kanban/types';
 import { defaultGraphLayout } from '../../lib/kanban/graph-layout-preferences';
 import { buildCardGraph } from './card-graph-model';
-import { draggedProjectOrder, freeGraphPoint, graphPositionKey, GRAPH_ZONES, graphZoneIdOf, layoutProjectGrid } from './project-grid-layout';
+import { draggedProjectOrder, freeGraphPoint, graphPositionKey, graphTaskDrop, GRAPH_ZONES, graphZoneIdOf, layoutProjectGrid } from './project-grid-layout';
 const card = (id: string, project = 'Альфа', parent?: string): KanbanCard => ({ id, title: id, project, parent, owner: 'qa', description: '', column: 'todo', priority: 'medium', order: 0, tags: [], assignees: [], created: '', updated: '', version: 1, fileName: id + '.md' });
 function graph(cards: KanbanCard[], prefs = defaultGraphLayout()) { const g = buildCardGraph(cards); return layoutProjectGrid(g.roots, new Set(g.branches), prefs); }
+function groupedGraph(cards: KanbanCard[], prefs = defaultGraphLayout()) {
+  return graph(cards, { ...prefs, groupByStatus: true });
+}
 
 describe('status subzones inside one project area', () => {
   it('maps every active status to exactly one zone and keeps unknown statuses visible', () => {
@@ -26,7 +29,7 @@ describe('status subzones inside one project area', () => {
     input[3].column = 'in-progress';
     input[4].column = 'blocked';
     input[5].column = 'review';
-    const layout = graph(input);
+    const layout = groupedGraph(input);
     const area = layout.areas.find(item => item.project === 'Альфа')!;
     expect(area.zones.map(zone => zone.id)).toEqual(['queue', 'work', 'review']);
     const byId = (id: string) => area.zones.find(zone => zone.id === id)!;
@@ -49,14 +52,14 @@ describe('status subzones inside one project area', () => {
       const a = nodes[i], b = nodes[j];
       expect(a.x + 248 <= b.x || b.x + 248 <= a.x || a.y + 100 <= b.y || b.y + 100 <= a.y).toBe(true);
     }
-    expect(graph(input)).toEqual(layout);
+    expect(groupedGraph(input)).toEqual(layout);
   });
 
   it('switching layout direction keeps zones stacked along the flow without overlaps', () => {
     const input = [card('q', 'Альфа'), card('w', 'Альфа'), card('r', 'Альфа')];
     input[1].column = 'in-progress';
     input[2].column = 'review';
-    const horizontal = graph(input, { ...defaultGraphLayout(), direction: 'horizontal' });
+    const horizontal = groupedGraph(input, { ...defaultGraphLayout(), direction: 'horizontal' });
     const area = horizontal.areas[0];
     const [queue, work, review] = area.zones;
     expect(work.y).toBeGreaterThan(queue.y + queue.height);
@@ -70,15 +73,97 @@ describe('status subzones inside one project area', () => {
 
   it('keeps remembered manual positions exact and never places others onto them', () => {
     const prefs = defaultGraphLayout();
-    prefs.positions.vertical[graphPositionKey('Альфа', 'w')] = { x: 48, y: 304 };
     const input = [card('q', 'Альфа'), card('w', 'Альфа')];
     input[1].column = 'in-progress';
-    const layout = graph(input, prefs);
+    const baseline = groupedGraph(input);
+    const origin = baseline.areas[0];
+    const originalWork = baseline.nodes.find(node => node.id === 'w')!;
+    const remembered = { x: originalWork.x - origin.x, y: originalWork.y - origin.y };
+    prefs.positions.vertical[graphPositionKey('Альфа', 'w', true)] = remembered;
+    const layout = groupedGraph(input, prefs);
     const w = layout.nodes.find(node => node.id === 'w')!,
       q = layout.nodes.find(node => node.id === 'q')!;
-    expect(w.x - layout.areas[0].x).toBe(48);
-    expect(w.y - layout.areas[0].y).toBe(304);
+    expect(w.x - layout.areas[0].x).toBe(remembered.x);
+    expect(w.y - layout.areas[0].y).toBe(remembered.y);
     expect(q.x + 248 <= w.x || w.x + 248 <= q.x || q.y + 100 <= w.y || w.y + 100 <= q.y).toBe(true);
+  });
+});
+
+describe('opt-in stages and drag placement', () => {
+  it('keeps the original linked project matrix by default, grouping only when requested', () => {
+    const input = [card('q'), card('w'), card('r')];
+    input[1].column = 'in-progress';
+    input[2].column = 'review';
+    const automatic = graph(input);
+    const grouped = groupedGraph(input);
+    expect(defaultGraphLayout().groupByStatus).toBe(false);
+    expect(automatic.areas[0].zones).toEqual([]);
+    expect(grouped.areas[0].zones.map(zone => zone.id)).toEqual(['queue', 'work', 'review']);
+    expect(automatic.nodes.find(node => node.id === 'q')?.parentId).toBe(grouped.nodes.find(node => node.id === 'q')?.parentId);
+    expect(graph(input)).toEqual(automatic);
+  });
+
+  it('swaps a task onto an occupied card without pushing anything outside its area', () => {
+    const input = [card('a'), card('b'), card('c')];
+    const before = graph(input);
+    const a = before.nodes.find(node => node.id === 'a')!;
+    const b = before.nodes.find(node => node.id === 'b')!;
+    const delta = { x: b.x - a.x, y: b.y - a.y };
+    const prefs = defaultGraphLayout();
+    const patch = graphTaskDrop(before.nodes, before.areas, a.id, delta, prefs);
+    expect(patch).not.toBeNull();
+    expect(Object.keys(patch!)).toHaveLength(2);
+    prefs.positions.vertical = { ...patch! };
+    const after = graph(input, prefs);
+    const moved = after.nodes.find(node => node.id === 'a')!;
+    const swapped = after.nodes.find(node => node.id === 'b')!;
+    expect({ x: moved.x, y: moved.y }).toEqual({ x: b.x, y: b.y });
+    expect({ x: swapped.x, y: swapped.y }).toEqual({ x: a.x, y: a.y });
+    expect(after.areas[0].width).toBe(before.areas[0].width);
+    expect(after.areas[0].height).toBe(before.areas[0].height);
+    expect(moved.parentId).toBe(a.parentId);
+    expect(graphTaskDrop(before.nodes, before.areas, a.id, { x: 4000, y: 0 }, prefs)).toBeNull();
+  });
+
+  it('snaps a free drop to an empty matrix cell without enlarging the project', () => {
+    const input = [card('a'), card('b'), card('c')];
+    const before = graph(input);
+    const area = before.areas[0];
+    const a = before.nodes.find(node => node.id === 'a')!;
+    const b = before.nodes.find(node => node.id === 'b')!;
+    const c = before.nodes.find(node => node.id === 'c')!;
+    const empty = { x: b.x, y: c.y };
+    const patch = graphTaskDrop(before.nodes, before.areas, a.id,
+      { x: empty.x - a.x, y: empty.y - a.y }, defaultGraphLayout())!;
+    expect(Object.keys(patch)).toEqual([graphPositionKey('Альфа', 'a')]);
+    const prefs = defaultGraphLayout();
+    prefs.positions.vertical = patch;
+    const after = graph(input, prefs);
+    expect({ x: after.nodes.find(node => node.id === 'a')!.x,
+      y: after.nodes.find(node => node.id === 'a')!.y }).toEqual(empty);
+    expect(after.areas[0].width).toBe(area.width);
+    expect(after.areas[0].height).toBe(area.height);
+  });
+
+  it('isolates grouped positions and refuses a drop into a different stage', () => {
+    const input = [card('q1'), card('q2'), card('work')];
+    input[2].column = 'in-progress';
+    const prefs = { ...defaultGraphLayout(), groupByStatus: true };
+    const grouped = graph(input, prefs);
+    const queue = grouped.nodes.find(node => node.id === 'q1')!;
+    const otherQueue = grouped.nodes.find(node => node.id === 'q2')!;
+    const work = grouped.nodes.find(node => node.id === 'work')!;
+    const swap = graphTaskDrop(grouped.nodes, grouped.areas, queue.id,
+      { x: otherQueue.x - queue.x, y: otherQueue.y - queue.y }, prefs)!;
+    expect(Object.keys(swap)).toEqual(expect.arrayContaining([
+      graphPositionKey('Альфа', queue.id, true), graphPositionKey('Альфа', otherQueue.id, true),
+    ]));
+    expect(graphTaskDrop(grouped.nodes, grouped.areas, queue.id,
+      { x: work.x - queue.x, y: work.y - queue.y }, prefs)).toBeNull();
+    prefs.positions.vertical = { ...swap };
+    expect(graph(input, prefs).nodes.find(node => node.id === 'q1')?.x).toBe(otherQueue.x);
+    const plain = graph(input, { ...prefs, groupByStatus: false });
+    expect(plain.areas[0].zones).toEqual([]);
   });
 });
 

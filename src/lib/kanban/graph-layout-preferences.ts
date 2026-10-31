@@ -6,6 +6,8 @@ export interface GraphLayoutPreferences {
   direction: GraphDirection;
   columns: number;
   projectOrder: string[];
+  /** Off by default: status areas are an optional presentation layer. */
+  groupByStatus: boolean;
   positions: Record<GraphDirection, Record<string, GraphPoint>>;
   updatedAt?: string;
 }
@@ -13,11 +15,12 @@ export interface GraphLayoutChange {
   direction?: GraphDirection;
   columns?: number;
   projectOrder?: string[];
+  groupByStatus?: boolean;
   placement?: { direction: GraphDirection; values: Record<string, GraphPoint | null> };
 }
 export const MAX_GRAPH_ENTRIES = 10000;
 export function defaultGraphLayout(): GraphLayoutPreferences {
-  return { version: 0, direction: 'vertical', columns: 0, projectOrder: [], positions: { vertical: {}, horizontal: {} } };
+  return { version: 0, direction: 'vertical', columns: 0, projectOrder: [], groupByStatus: false, positions: { vertical: {}, horizontal: {} } };
 }
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const direction = (value: unknown): value is GraphDirection => value === 'vertical' || value === 'horizontal';
@@ -27,10 +30,11 @@ const point = (value: unknown): value is GraphPoint => record(value) && Object.k
   && ['x', 'y'].every(key => typeof value[key] === 'number' && Number.isFinite(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= 1000000);
 
 export function parseGraphLayoutChange(value: unknown): GraphLayoutChange | null {
-  if (!record(value) || !Object.keys(value).length || Object.keys(value).some(key => !['direction', 'columns', 'projectOrder', 'placement'].includes(key))) return null;
+  if (!record(value) || !Object.keys(value).length || Object.keys(value).some(key => !['direction', 'columns', 'projectOrder', 'groupByStatus', 'placement'].includes(key))) return null;
   const result: GraphLayoutChange = {};
   if ('direction' in value) { if (!direction(value.direction)) return null; result.direction = value.direction; }
   if ('columns' in value) { if (!Number.isInteger(value.columns) || Number(value.columns) < 0 || Number(value.columns) > 6) return null; result.columns = Number(value.columns); }
+  if ('groupByStatus' in value) { if (typeof value.groupByStatus !== 'boolean') return null; result.groupByStatus = value.groupByStatus; }
   if ('projectOrder' in value) {
     if (!Array.isArray(value.projectOrder) || value.projectOrder.length > MAX_GRAPH_ENTRIES || !value.projectOrder.every(validId)
       || new Set(value.projectOrder).size !== value.projectOrder.length) return null;
@@ -56,6 +60,7 @@ export function applyGraphLayoutChange(previous: GraphLayoutPreferences, change:
   if (change.direction) next.direction = change.direction;
   if (change.columns !== undefined) next.columns = change.columns;
   if (change.projectOrder) next.projectOrder = [...change.projectOrder];
+  if (change.groupByStatus !== undefined) next.groupByStatus = change.groupByStatus;
   if (change.placement) {
     const values = next.positions[change.placement.direction];
     for (const [id, position] of Object.entries(change.placement.values)) {
@@ -68,7 +73,8 @@ export function applyGraphLayoutChange(previous: GraphLayoutPreferences, change:
 
 export function parseStoredGraphLayout(value: unknown): GraphLayoutPreferences | null {
   if (!record(value) || !Number.isSafeInteger(value.version) || Number(value.version) < 0 || !record(value.positions)) return null;
-  const settings = parseGraphLayoutChange({ direction: value.direction, columns: value.columns, projectOrder: value.projectOrder });
+  const settings = parseGraphLayoutChange({ direction: value.direction, columns: value.columns, projectOrder: value.projectOrder,
+    ...(value.groupByStatus !== undefined ? { groupByStatus: value.groupByStatus } : {}) });
   if (!settings) return null;
   let parsed = applyGraphLayoutChange(defaultGraphLayout(), settings);
   for (const orientation of ['vertical', 'horizontal'] as const) {

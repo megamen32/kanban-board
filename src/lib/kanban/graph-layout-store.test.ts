@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { parseGraphLayoutChange } from './graph-layout-preferences';
+import { defaultGraphLayout, parseGraphLayoutChange, parseStoredGraphLayout } from './graph-layout-preferences';
 import { readGraphLayout, updateGraphLayout } from './graph-layout-store';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'graph-layout-'));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -10,6 +10,26 @@ const alice = { username: 'qa-alice', scope: 'work' };
 const bob = { username: 'qa-bob', scope: 'work' };
 
 describe('cloud-backed personal graph layout', () => {
+  it('keeps status grouping opt-in and persists it without changing the old positions', () => {
+    const legacy = { ...defaultGraphLayout(), version: 1 } as Record<string, unknown>;
+    delete legacy.groupByStatus;
+    expect(parseStoredGraphLayout(legacy)?.groupByStatus).toBe(false);
+    expect(parseGraphLayoutChange({ groupByStatus: 'yes' })).toBeNull();
+    const actor = { username: 'qa-grouping', scope: 'work' };
+    const initial = updateGraphLayout(root, actor, 0, {
+      placement: { direction: 'vertical', values: { legacyTask: { x: 32, y: 160 } } },
+    });
+    expect(initial.layout.groupByStatus).toBe(false);
+    const selected = updateGraphLayout(root, actor, 1, { groupByStatus: true, placement: {
+      direction: 'vertical', values: { '["status-groups","Проект","t1"]': { x: 400, y: 160 } },
+    } });
+    expect(selected.layout.groupByStatus).toBe(true);
+    expect(selected.layout.positions.vertical.legacyTask).toEqual({ x: 32, y: 160 });
+    expect(readGraphLayout(root, actor).groupByStatus).toBe(true);
+    expect(updateGraphLayout(root, actor, 2, { groupByStatus: false }).layout.positions.vertical.legacyTask)
+      .toEqual({ x: 32, y: 160 });
+  });
+
   it('round-trips positions from disk for the same account and never changes tasks', () => {
     fs.writeFileSync(path.join(root, 'existing-card.md'), 'unchanged task');
     const change = parseGraphLayoutChange({ direction: 'vertical', columns: 3, projectOrder: ['project-b', 'project-a'],

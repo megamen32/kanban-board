@@ -8,7 +8,7 @@ import type { WorkspaceView } from './view-model';
 import type { GraphDirection, GraphPoint } from '@/lib/kanban/graph-layout-preferences';
 import { buildCardGraph, graphBounds, toggleGraphBranch,
   GRAPH_NODE_WIDTH as WIDTH, GRAPH_NODE_HEIGHT as HEIGHT, type CardGraphNode } from './card-graph-model';
-import { draggedProjectOrder, freeGraphPoint, graphPositionKey, layoutProjectGrid, type ProjectGraphArea } from './project-grid-layout';
+import { draggedProjectOrder, graphTaskDrop, graphPositionKey, layoutProjectGrid, type ProjectGraphArea } from './project-grid-layout';
 import { useGraphLayout } from './use-graph-layout';
 import { WORKSPACE_HINT } from './view-model';
 
@@ -61,9 +61,9 @@ function DraggableGraphNode({ node, actions, pinned }: { node: CardGraphNode; ac
   </div>;
 }
 
-export function CardGraphScene({ nodes, expanded, onToggle, onOpen, direction = 'horizontal', areas = [], draggable = false, positions = {} }: {
+export function CardGraphScene({ nodes, expanded, onToggle, onOpen, direction = 'horizontal', areas = [], draggable = false, positions = {}, grouped = false }: {
   nodes: readonly CardGraphNode[]; expanded: ReadonlySet<string>; onToggle: (id: string) => void; onOpen: (card: KanbanCard) => void;
-  direction?: GraphDirection; areas?: readonly ProjectGraphArea[]; draggable?: boolean; positions?: Record<string, GraphPoint>;
+  direction?: GraphDirection; areas?: readonly ProjectGraphArea[]; draggable?: boolean; positions?: Record<string, GraphPoint>; grouped?: boolean;
 }) {
   const byId = new Map(nodes.map(node => [node.id, node]));
   const bounds = graphBounds(nodes);
@@ -83,9 +83,6 @@ export function CardGraphScene({ nodes, expanded, onToggle, onOpen, direction = 
       {nodes.map(node => {
         const parent = node.parentId ? byId.get(node.parentId) : undefined;
         if (!parent) return null;
-        // Inside project areas the membership is already obvious from the area;
-        // only real parent-child connectors are drawn there.
-        if (parent.kind === 'project' && areas.length) return null;
         const x = parent.x + (direction === 'vertical' ? WIDTH / 2 : WIDTH);
         const y = parent.y + (direction === 'vertical' ? HEIGHT : HEIGHT / 2);
         const endX = node.x + (direction === 'vertical' ? WIDTH / 2 : -2);
@@ -95,12 +92,12 @@ export function CardGraphScene({ nodes, expanded, onToggle, onOpen, direction = 
           ? 'M ' + x + ' ' + y + ' C ' + x + ' ' + middle + ', ' + endX + ' ' + middle + ', ' + endX + ' ' + endY
           : 'M ' + x + ' ' + y + ' C ' + middle + ' ' + y + ', ' + middle + ' ' + endY + ', ' + endX + ' ' + endY;
         return <path key={node.id} data-graph-edge={parent.kind === 'project' ? 'project-task' : 'parent-task'} data-from={parent.id} data-to={node.id}
-          d={path} fill="none" strokeWidth={parent.kind === 'project' ? '1.5' : '2.5'} markerEnd="url(#task-graph-arrow)"
-          className={parent.kind === 'project' ? 'stroke-sky-600/40 dark:stroke-sky-400/40' : 'stroke-slate-500 dark:stroke-slate-300'} />;
+          d={path} fill="none" strokeWidth={parent.kind === 'project' ? '1.75' : '2.5'} markerEnd="url(#task-graph-arrow)"
+          className={parent.kind === 'project' ? 'stroke-sky-600/70 dark:stroke-sky-400/70' : 'stroke-slate-500 dark:stroke-slate-300'} />;
       })}
     </svg>
     {nodes.map(node => draggable
-      ? <DraggableGraphNode key={node.id} node={node} actions={{ expanded, onToggle, onOpen }} pinned={!!positions[graphPositionKey(node.project, node.id)]} />
+      ? <DraggableGraphNode key={node.id} node={node} actions={{ expanded, onToggle, onOpen }} pinned={!!positions[graphPositionKey(node.project, node.id, grouped)]} />
       : <div key={node.id} data-graph-kind={node.kind} data-graph-node={node.id} className={nodeClass(node)}
           style={{ left: node.x, top: node.y, width: WIDTH, height: HEIGHT }}>{nodeBody(node, { expanded, onToggle, onOpen })}</div>)}
   </div>;
@@ -134,14 +131,14 @@ export function CardGraphView({ cards, onOpen, workspaceView, onWorkspaceViewCha
     setDrag(null);
     if (!node || (Math.abs(delta.x) < 1 && Math.abs(delta.y) < 1)) return;
     if (node.kind === 'project') {
-      preferences.change({ projectOrder: draggedProjectOrder(layout.areas, preferences.layout.projectOrder, id, delta, direction) });
+      const next = draggedProjectOrder(layout.areas, preferences.layout.projectOrder, id, delta, direction);
+      const before = layout.areas.map(area => area.id);
+      const after = next.filter(projectId => before.includes(projectId));
+      if (JSON.stringify(after) !== JSON.stringify(before)) preferences.change({ projectOrder: next });
       return;
     }
-    const area = layout.areas.find(item => item.project === node.project)!;
-    const occupied = layout.nodes.filter(item => item.project === node.project && item.kind === 'task' && item.id !== id)
-      .map(item => ({ x: item.x - area.x, y: item.y - area.y }));
-    const point = freeGraphPoint({ x: node.x - area.x + delta.x, y: node.y - area.y + delta.y }, occupied, direction);
-    preferences.change({ placement: { direction, values: { [graphPositionKey(node.project, node.id)]: point } } });
+    const values = graphTaskDrop(layout.nodes, layout.areas, id, delta, preferences.layout);
+    if (values) preferences.change({ placement: { direction, values } });
   };
   const draggedNode = drag && layout.nodes.find(node => node.id === drag.id);
   const displayed = drag ? layout.nodes.map(node => node.id === drag.id || (draggedNode?.kind === 'project' && draggedNode.project === node.project)
@@ -153,7 +150,7 @@ export function CardGraphView({ cards, onOpen, workspaceView, onWorkspaceViewCha
   const height = Math.max(layout.height, bounds.height);
   const tasks = layout.nodes.filter(node => node.kind === 'task');
   const automatic = () => {
-    const values = Object.fromEntries(tasks.map(node => [graphPositionKey(node.project, node.id), null]));
+    const values = Object.fromEntries(tasks.map(node => [graphPositionKey(node.project, node.id, preferences.layout.groupByStatus), null]));
     preferences.change({ placement: { direction, values } });
   };
   const button = 'rounded border bg-background px-2 py-2 text-xs hover:bg-muted disabled:opacity-40';
@@ -177,6 +174,13 @@ export function CardGraphView({ cards, onOpen, workspaceView, onWorkspaceViewCha
           <option value="vertical">Сверху вниз</option><option value="horizontal">Слева направо</option>
         </select>
       </label>
+      <button type="button" className={button + (preferences.layout.groupByStatus ? ' border-sky-500 bg-sky-500/10' : '')}
+        aria-pressed={preferences.layout.groupByStatus}
+        title="Не меняет задачи или их статусы. Показывает дополнительные области внутри каждого проекта."
+        disabled={!preferences.editable}
+        onClick={() => preferences.change({ groupByStatus: !preferences.layout.groupByStatus })}>
+        {preferences.layout.groupByStatus ? '✓ Группировать по этапам' : 'Группировать по этапам'}
+      </button>
       <label className="flex items-center gap-1">Статус
         <select aria-label="Фильтр точного статуса задач" className={button} value={statusFilter}
           title="Показывает задачи одного статуса; скрытые задачи сохраняют свои позиции раскладки"
@@ -199,20 +203,20 @@ export function CardGraphView({ cards, onOpen, workspaceView, onWorkspaceViewCha
       <button type="button" className={button} onClick={() => setZoom(Math.max(0.25, Math.min(1, (viewport.current?.clientWidth ?? width) / width)))}>По ширине</button>
     </div>
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-      <span>Проектов: {graph.roots.length} · Задач: {tasks.length} из {filtered.length}. Перетащите за ⋮⋮: проект меняет порядок, задача — только позицию.</span>
+      <span>Проектов: {graph.roots.length} · Задач: {tasks.length} из {filtered.length}. Перетаскивание за ⋮⋮: проект меняет порядок; задачи меняются местами или занимают свободную ячейку. Статус и связи не меняются; между этапами задачи переводятся через карточку.</span>
       <span role="status" aria-live="polite" className={preferences.status === 'error' ? 'text-red-600' : ''}>Моя раскладка · {savedLabel}</span>
       {preferences.status === 'error' && <button className={button} onClick={preferences.retry}>Повторить сохранение</button>}
     </div>
     {cards.length === 0 ? <p className="p-6 text-sm text-muted-foreground">По текущим фильтрам задач нет</p>
       : filtered.length === 0 ? <p className="p-6 text-sm text-muted-foreground">Задач выбранного статуса нет</p>
-      : <DndContext id="task-project-graph" sensors={sensors} autoScroll={false} onDragMove={onMove} onDragEnd={onEnd} onDragCancel={() => setDrag(null)}
+      : <DndContext id="task-project-graph" sensors={sensors} autoScroll onDragMove={onMove} onDragEnd={onEnd} onDragCancel={() => setDrag(null)}
           accessibility={{ screenReaderInstructions: { draggable: 'Нажмите пробел для перемещения, стрелки для изменения позиции, пробел для сохранения или Escape для отмены.' } }}>
         <div ref={viewport} tabIndex={0} aria-label="Область графа с прокруткой" className="max-h-[70dvh] overflow-auto overscroll-contain rounded-xl border bg-muted/15">
           <div style={{ width: width * zoom, height: height * zoom }}>
             <div style={{ width, height, transform: 'scale(' + zoom + ')', transformOrigin: 'top left' }}>
               <CardGraphScene nodes={displayed} areas={displayedAreas} direction={direction} expanded={expanded}
                 onToggle={id => setExpansion(toggleGraphBranch(expanded, id))} onOpen={onOpen} draggable={preferences.editable}
-                positions={preferences.layout.positions[direction]} />
+                positions={preferences.layout.positions[direction]} grouped={preferences.layout.groupByStatus} />
             </div>
           </div>
         </div>

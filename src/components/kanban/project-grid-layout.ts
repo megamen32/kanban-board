@@ -25,7 +25,10 @@ export function graphZoneIdOf(column: KanbanCard['column']): GraphZoneId {
 export interface GraphZone { id: GraphZoneId; label: string; x: number; y: number; width: number; height: number; count: number }
 export interface ProjectGraphArea { id: string; project: string; x: number; y: number; width: number; height: number; zones: GraphZone[] }
 export interface ProjectGrid { nodes: CardGraphNode[]; areas: ProjectGraphArea[]; width: number; height: number }
-export function graphPositionKey(project: string, id: string): string { return JSON.stringify([project, id]); }
+export function graphPositionKey(project: string, id: string, grouped = false): string {
+  // Existing saved positions remain the default tree view. Grouping gets separate pins.
+  return JSON.stringify(grouped ? ['status-groups', project, id] : [project, id]);
+}
 export function matrixColumns(count: number, preference = 0): number {
   return Math.max(1, Math.min(count || 1, preference || Math.min(6, Math.ceil(Math.sqrt(count * (H + GAP) / (W + GAP))))));
 }
@@ -64,7 +67,7 @@ function levels(root: CardGraphBranch, expanded: ReadonlySet<string>): LevelEntr
 }
 
 /** Each project owns one vertical area; its tasks are grouped into status subzones. Wide levels wrap into a matrix per zone. */
-export function layoutProjectGrid(roots: readonly CardGraphBranch[], expanded: ReadonlySet<string>, preferences: GraphLayoutPreferences): ProjectGrid {
+function layoutGroupedProjectGrid(roots: readonly CardGraphBranch[], expanded: ReadonlySet<string>, preferences: GraphLayoutPreferences): ProjectGrid {
   const nodes: CardGraphNode[] = [];
   const areas: ProjectGraphArea[] = [];
   let offset = PROJECT_PAD;
@@ -76,7 +79,7 @@ export function layoutProjectGrid(roots: readonly CardGraphBranch[], expanded: R
     const occupied: GraphPoint[] = [];
     // Place remembered nodes first, so new tasks never evict manual positions.
     for (const entry of [...entries].sort((a, b) => a.branch.id.localeCompare(b.branch.id))) {
-      const remembered = positions[graphPositionKey(root.project, entry.branch.id)];
+      const remembered = positions[graphPositionKey(root.project, entry.branch.id, true)];
       if (!remembered) continue;
       const placed = freeGraphPoint(remembered, occupied, preferences.direction);
       points.set(entry.branch.id, placed); occupied.push(placed);
@@ -150,6 +153,124 @@ export function layoutProjectGrid(roots: readonly CardGraphBranch[], expanded: R
   }
   return { nodes, areas, width: Math.max(320, ...areas.map(area => area.x + area.width + PROJECT_PAD)),
     height: Math.max(160, ...areas.map(area => area.y + area.height + PROJECT_PAD)) };
+}
+
+function layoutUngroupedProjectGrid(roots: readonly CardGraphBranch[], expanded: ReadonlySet<string>, preferences: GraphLayoutPreferences): ProjectGrid {
+  const nodes: CardGraphNode[] = [];
+  const areas: ProjectGraphArea[] = [];
+  let offset = PROJECT_PAD;
+  for (const root of orderedProjects(roots, preferences.projectOrder)) {
+    const rows = levels(root, expanded);
+    const entries = rows.flat();
+    const columns = matrixColumns(Math.max(0, ...rows.map(row => row.length)), preferences.columns);
+    const positions = preferences.positions[preferences.direction];
+    const points = new Map<string, GraphPoint>();
+    const occupied: GraphPoint[] = [];
+    // Place remembered nodes first, so new tasks never evict manual positions.
+    for (const entry of [...entries].sort((a, b) => a.branch.id.localeCompare(b.branch.id))) {
+      const remembered = positions[graphPositionKey(root.project, entry.branch.id)];
+      if (!remembered) continue;
+      const placed = freeGraphPoint(remembered, occupied, preferences.direction);
+      points.set(entry.branch.id, placed); occupied.push(placed);
+    }
+    let startRow = 0;
+    for (const row of rows) {
+      row.forEach((entry, index) => {
+        if (points.has(entry.branch.id)) return;
+        const lane = index % columns;
+        const rank = startRow + Math.floor(index / columns);
+        const desired = preferences.direction === 'vertical'
+          ? { x: PROJECT_PAD + lane * (W + GAP), y: HEADER + rank * (H + GAP) }
+          : { x: HORIZONTAL_HEADER + rank * (W + GAP), y: PROJECT_PAD + lane * (H + GAP) };
+        const placed = freeGraphPoint(desired, occupied, preferences.direction);
+        points.set(entry.branch.id, placed); occupied.push(placed);
+      });
+      startRow += Math.ceil(row.length / columns);
+    }
+    const width = Math.max(W + PROJECT_PAD * 2, ...occupied.map(p => p.x + W + PROJECT_PAD));
+    const height = Math.max(H + PROJECT_PAD * 2, ...occupied.map(p => p.y + H + PROJECT_PAD));
+    const x = preferences.direction === 'vertical' ? offset : PROJECT_PAD;
+    const y = preferences.direction === 'vertical' ? PROJECT_PAD : offset;
+    areas.push({ id: root.id, project: root.project, x, y, width, height, zones: [] });
+    const { children, ...projectData } = root;
+    nodes.push({ ...projectData, depth: 0, childCount: children.length,
+      x: x + (preferences.direction === 'vertical' ? (width - W) / 2 : PROJECT_PAD),
+      y: y + (preferences.direction === 'horizontal' ? (height - H) / 2 : PROJECT_PAD) });
+    for (const entry of entries) {
+      const { children: taskChildren, ...taskData } = entry.branch;
+      const point = points.get(entry.branch.id)!;
+      nodes.push({ ...taskData, parentId: entry.parentId, depth: entry.depth, childCount: taskChildren.length, x: x + point.x, y: y + point.y });
+    }
+    offset += (preferences.direction === 'vertical' ? width : height) + PROJECT_GAP;
+  }
+  return { nodes, areas, width: Math.max(320, ...areas.map(area => area.x + area.width + PROJECT_PAD)),
+    height: Math.max(160, ...areas.map(area => area.y + area.height + PROJECT_PAD)) };
+}
+
+/** Stage grouping is opt-in and never changes task metadata or default pins. */
+export function layoutProjectGrid(
+  roots: readonly CardGraphBranch[], expanded: ReadonlySet<string>, preferences: GraphLayoutPreferences,
+): ProjectGrid {
+  return preferences.groupByStatus
+    ? layoutGroupedProjectGrid(roots, expanded, preferences)
+    : layoutUngroupedProjectGrid(roots, expanded, preferences);
+}
+
+/** Snap one drop inside the current project (and stage, when grouped).
+ * Dropping onto another task swaps their positions; it never changes status,
+ * hierarchy or business cards. A free drop must not inflate the entire project.
+ */
+export function graphTaskDrop(
+  nodes: readonly CardGraphNode[], areas: readonly ProjectGraphArea[],
+  draggedId: string, delta: GraphPoint, preferences: GraphLayoutPreferences,
+): Record<string, GraphPoint> | null {
+  const node = nodes.find(item => item.id === draggedId && item.kind === 'task');
+  if (!node) return null;
+  const area = areas.find(item => item.project === node.project);
+  if (!area) return null;
+  const zone = preferences.groupByStatus
+    ? area.zones.find(item => item.id === graphZoneIdOf(node.card?.column ?? 'inbox'))
+    : undefined;
+  if (preferences.groupByStatus && !zone) return null;
+  const rect = zone ?? area;
+  const minX = preferences.groupByStatus
+    ? rect.x + (preferences.direction === 'vertical' ? ZONE_PAD : ZONE_LABEL + ZONE_PAD)
+    : area.x + (preferences.direction === 'vertical' ? PROJECT_PAD : HORIZONTAL_HEADER);
+  const minY = preferences.groupByStatus
+    ? rect.y + (preferences.direction === 'vertical' ? ZONE_HEADER : ZONE_PAD)
+    : area.y + (preferences.direction === 'vertical' ? HEADER : PROJECT_PAD);
+  const maxX = Math.max(minX, rect.x + rect.width - (zone ? ZONE_PAD : PROJECT_PAD) - W);
+  const maxY = Math.max(minY, rect.y + rect.height - (zone ? ZONE_PAD : PROJECT_PAD) - H);
+  const dropX = node.x + delta.x;
+  const dropY = node.y + delta.y;
+  const centerX = dropX + W / 2;
+  const centerY = dropY + H / 2;
+  // Releasing outside the selected project/stage is not a task reassignment.
+  if (centerX < minX - W / 2 || centerX > maxX + W * 1.5
+    || centerY < minY - H / 2 || centerY > maxY + H * 1.5) return null;
+  // A grid slot, not an arbitrary 8px offset: releasing in a free cell leaves the
+  // project bounds stable and gives consistent positions across reloads/devices.
+  const snapSlot = (value: number, start: number, end: number, step: number) =>
+    start + Math.min(Math.max(0, Math.floor((end - start + 1) / step)),
+      Math.max(0, Math.round((value - start) / step))) * step;
+  const nextX = snapSlot(dropX, minX, maxX, W + GAP);
+  const nextY = snapSlot(dropY, minY, maxY, H + GAP);
+  const others = nodes.filter(item => item.kind === 'task' && item.project === node.project && item.id !== draggedId
+    && (!preferences.groupByStatus || graphZoneIdOf(item.card?.column ?? 'inbox') === zone?.id));
+  // Swap with a card under the pointer or snapped slot; never push an occupied
+  // cell beneath every other item or silently move a card into another status.
+  const hits = (other: CardGraphNode, x: number, y: number) =>
+    x < other.x + W + 8 && x + W + 8 > other.x
+      && y < other.y + H + 8 && y + H + 8 > other.y;
+  const target = [...others].filter(item => hits(item, dropX, dropY) || hits(item, nextX, nextY))
+    .sort((a, b) => (a.x - dropX) ** 2 + (a.y - dropY) ** 2
+      - (b.x - dropX) ** 2 - (b.y - dropY) ** 2 || a.id.localeCompare(b.id))[0];
+  const key = (item: CardGraphNode) => graphPositionKey(item.project, item.id, preferences.groupByStatus);
+  const relative = (point: CardGraphNode | GraphPoint) => ({ x: Math.max(0, Math.round(point.x - area.x)),
+    y: Math.max(0, Math.round(point.y - area.y)) });
+  if (target) return { [key(node)]: relative(target), [key(target)]: relative(node) };
+  if (Math.abs(nextX - node.x) < 4 && Math.abs(nextY - node.y) < 4) return null;
+  return { [key(node)]: relative({ x: nextX, y: nextY }) };
 }
 
 /** Reorder only the visible projects; hidden project order remains untouched. */

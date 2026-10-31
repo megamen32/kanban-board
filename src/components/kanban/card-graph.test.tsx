@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { KanbanCard } from '@/lib/kanban/types';
 import { buildCardGraph, layoutCardGraph, toggleGraphBranch } from './card-graph-model';
+import { defaultGraphLayout } from '../../lib/kanban/graph-layout-preferences';
+import { layoutProjectGrid } from './project-grid-layout';
 import { CardGraphScene, CardGraphView } from './card-graph-view';
 
 function card(id: string, parent?: string): KanbanCard {
@@ -34,29 +36,38 @@ describe('filtered card graph', () => {
     }
   });
 
-  it('groups tasks into status subzones inside project areas and drops the project membership web there', () => {
+  it('keeps project-task connections in the default graph and groups stages only on request', () => {
     const queue = card('queue-card');
     const working = { ...card('work-card'), column: 'in-progress' as const };
     const reviewing = { ...card('review-card'), column: 'review' as const };
-    const html = renderToStaticMarkup(<CardGraphView cards={[queue, working, reviewing]} onOpen={() => {}} />);
+    const cards = [queue, working, reviewing];
+    const defaultView = renderToStaticMarkup(<CardGraphView cards={cards} onOpen={() => {}} />);
+    expect(defaultView).not.toContain('data-graph-zone="queue"');
+    expect(defaultView.match(/data-graph-edge="project-task"/g)).toHaveLength(3);
+    expect(defaultView).toContain('Группировать по этапам');
+    expect(defaultView).toContain('aria-pressed="false"');
+    const tree = buildCardGraph(cards);
+    const expanded = new Set(tree.branches);
+    const grouped = layoutProjectGrid(tree.roots, expanded, { ...defaultGraphLayout(), groupByStatus: true });
+    const html = renderToStaticMarkup(<CardGraphScene nodes={grouped.nodes} areas={grouped.areas}
+      direction="vertical" expanded={expanded} onOpen={() => {}} onToggle={() => {}} />);
     expect(html).toContain('data-graph-zone="queue"');
     expect(html).toContain('data-graph-zone="work"');
     expect(html).toContain('data-graph-zone="review"');
     expect(html).toContain('Очередь · 1');
     expect(html).toContain('В работе · 1');
     expect(html).toContain('На приёмке · 1');
-    expect(html).not.toContain('data-graph-edge="project-task"');
-    expect(html).not.toContain('data-graph-edge="parent-task"');
+    expect(html.match(/data-graph-edge="project-task"/g)).toHaveLength(3);
   });
 
-  it('keeps real parent-child connectors inside project areas, without inventing project links', () => {
+  it('keeps both parent-child and project membership connectors', () => {
     const parent = card('root');
     parent.column = 'in-progress';
     const child = card('leaf', 'root');
     child.column = 'review';
     const html = renderToStaticMarkup(<CardGraphView cards={[parent, child]} onOpen={() => {}} />);
     expect(html).toContain('data-graph-edge="parent-task"');
-    expect(html).not.toContain('data-graph-edge="project-task"');
+    expect(html).toContain('data-graph-edge="project-task"');
   });
 
 
