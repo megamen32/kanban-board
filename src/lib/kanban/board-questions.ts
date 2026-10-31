@@ -45,11 +45,14 @@ export function latestAttempt(card: KanbanCard): TaskExecutionReceipt | undefine
   return card.taskExecutionHistory?.at(-1);
 }
 
-/** Returns the latest attempt only when the presented key matches its stored hash and it is not finished. */
-export function executorAttempt(request: Request, card: KanbanCard): TaskExecutionReceipt | undefined {
+/** Authenticate the latest attempt. Finished attempts are read-only unless a caller explicitly reconciles a result. */
+export function executorAttempt(
+  request: Request, card: KanbanCard, options: { allowResult?: boolean } = {},
+): TaskExecutionReceipt | undefined {
   const provided = request.headers.get(EXECUTOR_KEY_HEADER)?.trim();
   const attempt = latestAttempt(card);
-  if (!provided || !attempt?.executorKeyHash || attempt.phase === 'result' || attempt.phase === 'stopped') return undefined;
+  if (!provided || !attempt?.executorKeyHash || attempt.phase === 'stopped'
+      || (attempt.phase === 'result' && !options.allowResult)) return undefined;
   const a = Buffer.from(sha256(provided), 'hex');
   const b = Buffer.from(attempt.executorKeyHash, 'hex');
   return a.length === b.length && timingSafeEqual(a, b) ? attempt : undefined;

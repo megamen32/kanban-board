@@ -161,7 +161,44 @@ describe('board-owned executor questions', () => {
     expect(saved.resultHistory?.at(-1)?.summary).toContain('Готово');
     expect(saved.taskExecutionHistory?.at(-1)?.phase).toBe('result');
     const again = await resultRoute.POST(post(card.id, 'result', { text: 'ещё' }, asExecutor), ctx(card.id));
-    expect(again.status).toBe(401);
+    expect(again.status).toBe(409);
+  });
+
+  it('acknowledges an identical result retry without appending or changing the card', async () => {
+    const { card } = runningCard();
+    const body = { text: 'Result available: https://example.test/result' };
+    expect((await resultRoute.POST(post(card.id, 'result', body, asExecutor), ctx(card.id))).status).toBe(200);
+    const saved = store.findCardById(card.id, fixtureRoot)!;
+    const retry = await resultRoute.POST(post(card.id, 'result', body, asExecutor), ctx(card.id));
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ ok: true, idempotent: true, column: 'review' });
+    expect(store.findCardById(card.id, fixtureRoot)).toEqual(saved);
+    expect(saved.resultHistory).toHaveLength(1);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('does not replace a saved result with different text on retry', async () => {
+    const { card } = runningCard();
+    expect((await resultRoute.POST(post(card.id, 'result', { text: 'Original result' }, asExecutor), ctx(card.id))).status).toBe(200);
+    const saved = store.findCardById(card.id, fixtureRoot)!;
+    const retry = await resultRoute.POST(post(card.id, 'result', { text: 'Changed result' }, asExecutor), ctx(card.id));
+    expect(retry.status).toBe(409);
+    expect(store.findCardById(card.id, fixtureRoot)).toEqual(saved);
+  });
+
+  it('a final result does not resume the executor to answer an overdue question', async () => {
+    const { card } = runningCard();
+    await ask(card.id);
+    vi.stubEnv('KANBAN_QUESTION_TIMEOUT_MS', '1');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const response = await resultRoute.POST(post(card.id, 'result', { text: 'Finished without clarification' }, asExecutor), ctx(card.id));
+    expect(response.status).toBe(200);
+    expect(send).not.toHaveBeenCalled();
+    const saved = store.findCardById(card.id, fixtureRoot)!;
+    expect(saved.column).toBe('review');
+    expect(saved.taskExecutionHistory?.at(-1)?.phase).toBe('result');
+    await runDueReminderTick(new Date(), { scopes: ['work'], tasksDir: () => fixtureRoot });
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('lazily applies timeoutValue to an overdue unanswered question', async () => {
