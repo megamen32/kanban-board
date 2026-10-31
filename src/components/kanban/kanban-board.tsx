@@ -277,6 +277,11 @@ export function KanbanBoard() {
             </label>
             <div className="ml-auto flex shrink-0 items-center gap-0.5">
               <div className="hidden items-center gap-0.5 md:flex">{renderAttentionFilters()}</div>
+              {planningTab !== 'execution' && (
+                <Button aria-label="Открыть граф задач" title="Открыть граф задач" variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => { handlePlanningTabChange('execution'); setView('graph'); }}>
+                  <GitFork aria-hidden className="h-4 w-4" />Граф
+                </Button>
+              )}
               {planningTab === 'execution' && <div className="flex items-center gap-0.5 rounded-md border p-0.5">
                 {!isMobile && <Button aria-label="Канбан" title="Канбан" aria-pressed={view === 'kanban'} variant={view === 'kanban' ? 'secondary' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setView('kanban')}><Columns3 aria-hidden className="h-4 w-4" /></Button>}
                 <Button aria-label="Список" title="Список" aria-pressed={view === 'list'} variant={view === 'list' ? 'secondary' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setView('list')}><ListTodo aria-hidden className="h-4 w-4" /></Button>
