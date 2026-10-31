@@ -19,6 +19,26 @@ const attempt = (): TaskExecutionReceipt => ({
 });
 
 describe('task execution visible in opened card', () => {
+  it('shows an exact Agent Herder deep link for the attached native session', () => {
+    const card = {
+      ...base(),
+      taskExecutionHistory: [{ ...attempt(), hostId: 'roomhacker-server-100', nativeSessionId: 'ses_fixture-123' }],
+    };
+    const html = renderToStaticMarkup(<CardExecutionOverview card={card} />);
+    expect(html).toContain('Agent Herder · OpenCode');
+    expect(html).toContain('https://agent.bezrabotnyi.com/#/session/opencode%3Ases_fixture-123');
+    expect(html).toContain('Открыть сессию');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it('does not invent a session link before Herder confirms a native session ID', () => {
+    const card = { ...base(), taskExecutionHistory: [{ ...attempt(), phase: 'create-unknown' as const }] };
+    const html = renderToStaticMarkup(<CardExecutionOverview card={card} />);
+    expect(html).toContain('Сессия пока не подтверждена');
+    expect(html).not.toContain('Открыть сессию');
+  });
+
   it('does not pollute ordinary personal tasks', () => {
     expect(renderToStaticMarkup(<CardExecutionOverview card={base()} />)).toBe('');
   });

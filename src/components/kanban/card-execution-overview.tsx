@@ -1,5 +1,6 @@
 import type { KanbanCard, TaskExecutionPhase } from '../../lib/kanban/types';
 import { CardResultPreview } from './card-result-preview';
+import { TaskSessionLink } from './task-session-link';
 
 const PHASE: Record<TaskExecutionPhase, string> = {
   intent: 'Запуск запрошен',
@@ -43,6 +44,7 @@ export function CardExecutionOverview({ card, onRefresh, refreshing = false }: {
           {refreshing ? 'Обновляю…' : 'Обновить'}
         </button>}
       </div>
+      <TaskSessionLink card={card} />
       {progress && <div className="space-y-1 text-sm">
         <p className="text-xs font-medium text-muted-foreground">Последнее действие</p>
         <p className="whitespace-pre-wrap break-words">{progress}</p>

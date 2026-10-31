@@ -8,6 +8,7 @@ import { CardEditDialog } from './card-edit-dialog';
 import { MarkdownCardPreview } from './markdown-card-preview';
 import { getCardAncestorChain } from './card-hierarchy';
 import { ReviewRecoveryControl } from './review-recovery-control';
+import { TaskSessionLink } from './task-session-link';
 import { shouldOpenCardAfterPointer, type PointerCoordinates } from './card-interaction';
 import { PRIORITY_COLORS } from '@/lib/kanban/types';
 import type { KanbanCard as CardType, KanbanCardUpdates, RoleDefinition } from '@/lib/kanban/types';
@@ -110,6 +111,7 @@ export function KanbanCard({ card, columnId }: Props) {
             {card.parent && <p className="mb-1 truncate text-[10px] text-muted-foreground">Подзадача · {hierarchyTrail.length ? hierarchyTrail.map(item => item.title).join(' › ') : 'родитель скрыт текущей выборкой'}</p>}
             <MarkdownCardPreview card={card} />
             <ReviewRecoveryControl card={card} username={username} onDone={refresh} />
+            <TaskSessionLink card={card} compact />
             {card.column === 'blocked' && card.blockerReason && <p className="mb-2 line-clamp-2 text-xs text-amber-700 dark:text-amber-300">Что мешает: {card.blockerReason}</p>}
             <div className="flex items-center gap-1.5 flex-wrap">
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{card.project || 'Без проекта'}</Badge>
