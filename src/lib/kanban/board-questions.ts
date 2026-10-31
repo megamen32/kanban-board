@@ -4,6 +4,7 @@ import { boardHumanIdentityFromRequest } from '../auth/board-human';
 import { automationTokenValid, identityFromRequest } from '../auth/request';
 import { findCardById, updateCard } from './file-store';
 import { callOwnerHerderTool } from '@/lib/kanban/task-execution-client';
+import { isAutomatedQaAccount } from './qa-notification';
 import type { KanbanCard, KanbanCardUpdates, PendingQuestion, TaskExecutionReceipt } from './types';
 
 /** Stage 1 board-owned executor questions: no Notice task-decision, no mandate, no Herder human-request. */
@@ -220,6 +221,8 @@ export async function sweepQuestionTimeout(card: KanbanCard, tasksDir: string): 
 
 /** Best effort plain Notice event; failures are logged and never block the question. */
 export async function notifyQuestion(card: KanbanCard, question: PendingQuestion): Promise<void> {
+  // Automated QA accounts must never notify the real owner during synthetic E2E runs.
+  if (isAutomatedQaAccount(card.owner)) return;
   const token = process.env.EXMANAGER_NOTICE_PROJECT_TOKEN?.trim();
   const recipient = process.env.NOTIFY_CENTER_RECIPIENT?.trim();
   if (!token || !recipient) return;
