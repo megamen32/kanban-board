@@ -909,7 +909,12 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
     }
     const exactOpenCodeInputBinding = entry.harness === 'opencode' && entry.projectBinding !== undefined
       && typeof entry.nativeInputMessageId === 'string' && typeof entry.nativeDispatchJobId === 'string';
-    if (['running', 'waiting', 'result'].includes(String(entry.phase)) && !entry.nativeTurnId && !exactOpenCodeInputBinding) {
+    // The direct Board /question and /result protocol uses its per-attempt
+    // executor key; unlike the legacy transcript path it has no native turn ID.
+    const directBoardExecutor = typeof entry.executorKeyHash === 'string'
+      && /^[a-f0-9]{64}$/.test(entry.executorKeyHash);
+    if (['running', 'waiting', 'result'].includes(String(entry.phase)) && !entry.nativeTurnId
+      && !exactOpenCodeInputBinding && !directBoardExecutor) {
       throw invalidPlanningField(`${field}.nativeTurnId`, 'required after native turn admission');
     }
     const projectBinding = entry.projectBinding === undefined ? undefined : normalizeTaskExecutionProjectBinding(entry.projectBinding);

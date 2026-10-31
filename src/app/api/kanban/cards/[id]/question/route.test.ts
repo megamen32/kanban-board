@@ -94,6 +94,34 @@ describe('board-owned executor questions', () => {
     expect(store.findCardById(card.id, fixtureRoot)?.taskExecutionHistory?.at(-1)?.phase).toBe('waiting');
   });
 
+  it('completes the direct Board QA chain after queued OpenCode admission without a native turn ID', async () => {
+    const { card } = runningCard();
+    const noTurn = card.taskExecutionHistory!.map(entry => ({
+      ...entry, phase: 'dispatch-unknown' as const, nativeTurnId: undefined,
+    }));
+    const saved = store.updateCard(card.id, { taskExecutionHistory: noTurn }, card.version, fixtureRoot);
+    expect('conflict' in saved).toBe(false);
+
+    const question = await ask(card.id);
+    expect(question.status).toBe(201);
+    const waiting = store.findCardById(card.id, fixtureRoot)!;
+    expect(waiting.taskExecutionHistory?.at(-1)?.phase).toBe('waiting');
+    expect(waiting.pendingQuestion?.text).toBe('Какой вариант?');
+
+    const answered = await answerRoute.POST(post(card.id, 'answer', { value: 'b' }, asAutomation), ctx(card.id));
+    expect(answered.status).toBe(200);
+    expect(send.mock.calls.filter(call => call[0] === 'send_message')).toHaveLength(1);
+    expect(store.findCardById(card.id, fixtureRoot)?.pendingQuestion?.answer?.value).toBe('b');
+
+    const result = await resultRoute.POST(post(card.id, 'result', { text: 'Выбран вариант Б' }, asExecutor), ctx(card.id));
+    expect(result.status).toBe(200);
+    const completed = store.findCardById(card.id, fixtureRoot)!;
+    expect(completed.column).toBe('review');
+    expect(completed.needsReview).toBe(true);
+    expect(completed.resultHistory?.at(-1)?.summary).toBe('Выбран вариант Б');
+    expect(completed.taskExecutionHistory?.at(-1)?.phase).toBe('result');
+  });
+
   it('answers by automation token, delivers once into the same session and is idempotent', async () => {
     const { card } = runningCard();
     await ask(card.id);
