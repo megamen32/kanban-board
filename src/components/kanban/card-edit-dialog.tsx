@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -14,6 +14,7 @@ import type { KanbanCard, Priority, KanbanColumn, PlanningType, RoleDefinition }
 import type { HumanReviewAction } from '@/lib/kanban/transition-policy';
 import { CatalogLinkPanel } from './catalog-link-panel';
 import { NoticeQuestionPanel } from './notice-question-panel';
+import { BoardQuestionPanel } from './board-question-panel';
 import { RolePicker } from './role-picker';
 import { fromDateTimeLocalValue, toDateTimeLocalValue } from '@/lib/kanban/date-input';
 import type { KanbanUpdateRequest } from '@/hooks/use-kanban';
@@ -28,6 +29,7 @@ import { CardHierarchyPanel } from './card-hierarchy-panel';
 import { getEligibleParentCards } from './card-hierarchy';
 import { canCompleteDirectly, canTakeOwnReview } from './card-completion';
 import { isTaskActor } from '@/lib/kanban/task-membership';
+import { usesLegacyNoticeQuestion, shouldRefreshExecutionCard } from './card-question-visibility';
 
 const MarkdownEditor = dynamic(() => import('./markdown-editor').then(module => module.MarkdownEditor), {
   ssr: false,
@@ -108,6 +110,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   const [refreshing, setRefreshing] = useState(false);
   const [reviewNote, setReviewNote] = useState('');
   const [baseline, setBaseline] = useState(card);
+  const pollInFlight = useRef(false);
 
   useEffect(() => {
     setTitle(card.title);
@@ -127,6 +130,19 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     setPlanning(initialPlanningMetadata(card));
     // A remote update must not erase unsaved input or silently advance its CAS.
   }, [card.id, open]);
+
+  const watchExecution = shouldRefreshExecutionCard(card);
+  useEffect(() => {
+    if (!open || !onRefresh || !watchExecution) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'hidden' || pollInFlight.current) return;
+      pollInFlight.current = true;
+      void Promise.resolve().then(onRefresh).catch(() => undefined).finally(() => {
+        pollInFlight.current = false;
+      });
+    }, 20_000);
+    return () => window.clearInterval(timer);
+  }, [card.id, onRefresh, open, watchExecution]);
 
   const handleSave = async () => {
     if (!title.trim() || !project.trim() || !onUpdate || saving) return;
@@ -225,8 +241,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   };
 
   const executorAttempt = card.taskExecutionHistory?.at(-1);
-  const hasExecutorConversation = !!card.pendingQuestion || !!executorAttempt?.nativeSessionId
-    && ['created', 'dispatch-unknown', 'running', 'waiting'].includes(executorAttempt.phase);
+  const hasLegacyNoticeQuestion = usesLegacyNoticeQuestion(card);
   const catalogLink = card.catalogLink;
   const reviewAccess = reviewActionAccess(card, username);
   const refreshExecution = async () => {
@@ -305,6 +320,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             {card.blockerReason && <p className="text-sm"><span className="font-medium">Что мешает:</span> {card.blockerReason}</p>}
             {card.column === 'blocked' && <p className="text-sm text-amber-700 dark:text-amber-300">Укажи причину блокировки ниже, чтобы было ясно, что нужно для продолжения.</p>}
             <CardExecutionOverview card={card} refreshing={refreshing} onRefresh={onRefresh ? () => { void refreshExecution(); } : undefined} />
+            {card.pendingQuestion && <BoardQuestionPanel key={card.pendingQuestion.id} card={card} onAnswered={() => onRefresh?.()} />}
             {canTakeOwnReview(card, username) && onUpdate && (
               <div className="space-y-2 rounded-md border p-3">
                 <p className="text-xs text-muted-foreground">
@@ -392,7 +408,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             </div>
               </div>
             </details>
-            {hasExecutorConversation && <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />}
+            {hasLegacyNoticeQuestion && <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />}
             {catalogLink && <details className="min-w-0 rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Источник и ссылки</summary><div className="mt-3"><CatalogLinkPanel link={catalogLink} /></div></details>}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Теги</label>

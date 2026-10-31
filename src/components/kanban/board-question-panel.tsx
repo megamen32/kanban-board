@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Button } from '@/components/ui/button';
+import { Button } from '../ui/button';
 import type { KanbanCard } from '@/lib/kanban/types';
 
 /** Stage 1 board-owned executor question: one button per choice, answered read-only afterwards. */
