@@ -344,7 +344,7 @@ export function KanbanBoard() {
           </TabsContent>
           <TabsContent value="execution" className="order-1 md:order-2 min-h-0 min-w-0 overflow-y-auto">
             {view === 'graph' ? (
-              <CardGraphView cards={visibleCards} onOpen={setSelectedCard} />
+              <CardGraphView cards={visibleCards} onOpen={setSelectedCard} workspaceView={workspaceView} onWorkspaceViewChange={setWorkspaceView} />
             ) : view === 'list' ? (
               <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} authoritativeCards={cards} breadcrumbCards={scopedCards} highlightCardId={highlightCardId} username={username} onRefresh={refresh} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
             ) : (

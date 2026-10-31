@@ -26,7 +26,8 @@ import { CardBriefPanel } from './card-brief-panel';
 import { hasCardHistory } from './card-history';
 import { CardHierarchyPanel } from './card-hierarchy-panel';
 import { getEligibleParentCards } from './card-hierarchy';
-import { canCompleteDirectly } from './card-completion';
+import { canCompleteDirectly, canTakeOwnReview } from './card-completion';
+import { isTaskActor } from '@/lib/kanban/task-membership';
 
 const MarkdownEditor = dynamic(() => import('./markdown-editor').then(module => module.MarkdownEditor), {
   ssr: false,
@@ -155,7 +156,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   };
 
   const handleComplete = async () => {
-    if (!onUpdate || saving || !canCompleteDirectly(baseline)) return;
+    if (!onUpdate || saving || !canCompleteDirectly(baseline, username)) return;
     setSaving(true);
     setError(null);
     try {
@@ -167,8 +168,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
         return;
       }
       const session = await response.json() as { authenticated?: boolean; username?: string; scope?: string };
-      const allowedActor = session.username === (baseline.owner || 'nikita')
-        || baseline.assignees.includes(session.username || '');
+      const allowedActor = isTaskActor(baseline, session.username);
       if (!session.authenticated || session.scope !== 'work' || !allowedActor) {
         setError('Завершить задачу может только её подтверждённый владелец или исполнитель.');
         return;
@@ -179,6 +179,20 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
       if (!saved) { setError('Карточка изменилась. Обновите её перед завершением.'); return; }
       if (saved.column !== 'done') { setError('Завершение не подтверждено сервером.'); return; }
       onOpenChange(false);
+    } catch (failure) { setError(mutationErrorMessage(failure)); }
+    finally { setSaving(false); }
+  };
+
+  const handleTakeReview = async () => {
+    if (!onUpdate || saving || !canTakeOwnReview(baseline, username)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      // Existing owner-only reviewer assignment: never overwrite a result or decide on behalf of another reviewer.
+      const saved = await onUpdate(card.id, { requiresApprovalFrom: ['nikita'] }, baseline.version);
+      if (!saved) { setError('Карточка изменилась. Обновите её перед назначением проверки.'); return; }
+      setBaseline(saved);
+      onSelectCard?.(saved);
     } catch (failure) { setError(mutationErrorMessage(failure)); }
     finally { setSaving(false); }
   };
@@ -235,7 +249,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               {DEFAULT_COLUMNS.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
             </select>
           </label>
-          {canCompleteDirectly(card) && onUpdate && (
+          {canCompleteDirectly(card, username) && onUpdate && (
             <Button type="button" variant="outline" size="sm" disabled={saving}
               className="col-span-2 w-fit border-emerald-600/40 text-emerald-700 dark:text-emerald-300 sm:col-span-1"
               onClick={() => void handleComplete()}>✓ Завершить задачу</Button>
@@ -284,6 +298,16 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             {card.blockerReason && <p className="text-sm"><span className="font-medium">Что мешает:</span> {card.blockerReason}</p>}
             {card.column === 'blocked' && <p className="text-sm text-amber-700 dark:text-amber-300">Укажи причину блокировки ниже, чтобы было ясно, что нужно для продолжения.</p>}
             {reviewAccess !== 'not-awaiting-review' && latestResult && <CardResultPreview result={latestResult} />}
+            {canTakeOwnReview(card, username) && onUpdate && (
+              <div className="space-y-2 rounded-md border p-3">
+                <p className="text-xs text-muted-foreground">
+                  Ты владелец задачи, но проверка назначена другому. Сначала явно возьми проверку на себя, затем прими и закрой задачу.
+                </p>
+                <Button type="button" variant="outline" disabled={saving} onClick={() => void handleTakeReview()}>
+                  Взять проверку
+                </Button>
+              </div>
+            )}
             {reviewAccess !== 'not-awaiting-review' && <ReviewActionGate card={card} verifiedUsername={username}>
               {onReviewDecision && <div className="space-y-2 border-t pt-3">
                 <p className="text-xs text-muted-foreground">{reviewAccess === 'owner-recovery' ? 'Проверяющий не назначен и результата ещё нет. Укажи исправление и верни задачу в работу.' : reviewAccess === 'owner-review' ? 'Проверяющий не назначен. Владелец может принять готовый результат или вернуть его на доработку.' : 'Решение проверяется сервером по текущему списку согласующих.'}</p>

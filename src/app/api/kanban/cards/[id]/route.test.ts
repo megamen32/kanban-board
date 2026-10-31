@@ -85,6 +85,32 @@ describe('PATCH /api/kanban/cards/[id]', () => {
     dispatchCardEvent.mockResolvedValue({ sent: 1, failed: 0, removed: 0, skipped: false });
   });
 
+  it('does not let the owner of the board complete Dmitry’s task', async () => {
+    findCardById.mockReturnValue({ ...existingCard, owner: 'Дмитрий', assignee: 'Дмитрий', assignees: ['Дмитрий'] });
+    const response = await PATCH(new NextRequest('http://localhost/api/kanban/cards/card-1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ column: 'done', expectedVersion: 2 }),
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+    expect(response.status).toBe(403);
+    expect(validateTransition).not.toHaveBeenCalled();
+    expect(updateCard).not.toHaveBeenCalled();
+  });
+
+  it('allows authenticated owners to request completion through existing transition policy', async () => {
+    findCardById.mockReturnValue({ ...existingCard, owner: 'nikita', assignees: [] });
+    validateTransition.mockReturnValue({ kind: 'accepted', patch: { column: 'done' } });
+    updateCard.mockReturnValue({ ...existingCard, owner: 'nikita', column: 'done', version: 3 });
+    const response = await PATCH(new NextRequest('http://localhost/api/kanban/cards/card-1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ column: 'done', expectedVersion: 2 }),
+    }), { params: Promise.resolve({ id: 'card-1' }) });
+    expect(response.status).toBe(200);
+    expect(validateTransition).toHaveBeenCalledOnce();
+    expect(updateCard).toHaveBeenCalledOnce();
+  });
+
   it('rejects an invalid blocker reason before transition or persistence', async () => {
     const response = await PATCH(new NextRequest('http://localhost/api/kanban/cards/card-1', {
       method: 'PATCH',

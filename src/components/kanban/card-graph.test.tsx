@@ -16,6 +16,16 @@ function buttons(element: React.ReactNode): React.ReactElement<React.ComponentPr
 }
 
 describe('filtered card graph', () => {
+  it('renders an always-visible scope switch in the graph when provided', () => {
+    const html = renderToStaticMarkup(<CardGraphView cards={[card('mine')]} onOpen={() => {}}
+      workspaceView="all" onWorkspaceViewChange={() => {}} />);
+    expect(html).toContain('Фильтр задач графа');
+    expect(html).toContain('Моё');
+    expect(html).toContain('Общее');
+    expect(html).toContain('Всё');
+    expect(html).toContain('aria-pressed="true"');
+  });
+
 
   it('clips long task titles within their graph cards', () => {
     const longTask = { ...card('long'), title: 'Очень длинное описание задачи '.repeat(20) };

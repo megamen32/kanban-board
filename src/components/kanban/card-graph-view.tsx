@@ -4,6 +4,7 @@ import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { DndContext, KeyboardSensor, PointerSensor, useDraggable, useSensor, useSensors, type DragEndEvent, type DragMoveEvent } from '@dnd-kit/core';
 import { FolderKanban, GripVertical, Pin } from 'lucide-react';
 import type { KanbanCard } from '@/lib/kanban/types';
+import type { WorkspaceView } from './view-model';
 import type { GraphDirection, GraphPoint } from '@/lib/kanban/graph-layout-preferences';
 import { buildCardGraph, graphBounds, toggleGraphBranch,
   GRAPH_NODE_WIDTH as WIDTH, GRAPH_NODE_HEIGHT as HEIGHT, type CardGraphNode } from './card-graph-model';
@@ -90,7 +91,12 @@ export function CardGraphScene({ nodes, expanded, onToggle, onOpen, direction = 
   </div>;
 }
 
-export function CardGraphView({ cards, onOpen }: { cards: readonly KanbanCard[]; onOpen: (card: KanbanCard) => void }) {
+export function CardGraphView({ cards, onOpen, workspaceView, onWorkspaceViewChange }: {
+  cards: readonly KanbanCard[];
+  onOpen: (card: KanbanCard) => void;
+  workspaceView?: WorkspaceView;
+  onWorkspaceViewChange?: (value: WorkspaceView) => void;
+}) {
   const graph = useMemo(() => buildCardGraph(cards), [cards]);
   const preferences = useGraphLayout();
   const [expansion, setExpansion] = useState<ReadonlySet<string> | null>(null);
@@ -134,6 +140,17 @@ export function CardGraphView({ cards, onOpen }: { cards: readonly KanbanCard[];
   const button = 'rounded border bg-background px-2 py-2 text-xs hover:bg-muted disabled:opacity-40';
   const savedLabel = { loading: 'Загрузка раскладки…', saved: 'Сохранено на сервере', saving: 'Сохранение…', error: 'Раскладка не сохранена', readonly: 'Войдите, чтобы сохранять расположение' }[preferences.status];
   return <section aria-label="Граф задач" className="flex min-h-0 min-w-0 flex-col p-3 sm:p-5" data-layout-direction={direction}>
+    {workspaceView && onWorkspaceViewChange && (
+      <div aria-label="Фильтр задач графа" className="mb-2 flex w-fit flex-wrap items-center gap-1 rounded-md border p-1 text-xs">
+        <span className="px-2 text-muted-foreground">Задачи:</span>
+        {([['mine', 'Моё'], ['shared', 'Общее'], ['all', 'Всё']] as const).map(([value, label]) => (
+          <button key={value} type="button" aria-pressed={workspaceView === value}
+            className={'rounded px-3 py-1.5 ' + (workspaceView === value ? 'bg-secondary font-semibold' : 'hover:bg-muted')}
+            onClick={() => onWorkspaceViewChange(value)}>{label}</button>
+        ))}
+      </div>
+    )}
+
     <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
       <label className="flex items-center gap-1">Направление
         <select aria-label="Направление графа" className={button} value={direction} disabled={!preferences.editable}

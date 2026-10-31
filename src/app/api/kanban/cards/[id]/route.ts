@@ -10,6 +10,7 @@ import { normalizeDueAt } from '@/lib/kanban/due-at';
 import { dispatchCardEvent } from '@/lib/notifications/push';
 import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
 import { validateTransition } from '@/lib/kanban/transition-policy';
+import { isTaskActor } from '../../../../../lib/kanban/task-membership';
 
 const VERIFIED_BOARD_PROJECT = 'Олег и Никита';
 const QA_BOARD_PROJECT = 'ExManager QA';
@@ -149,6 +150,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
     const existing = findCardById(id, tasksDir);
     if (!existing) return NextResponse.json({ error: 'not found' }, { status: 404 });
+    // A supervisor's all-cards view is not permission to complete somebody else's task.
+    if (column === 'done' && authenticatedIdentity
+        && !isTaskActor(existing, authenticatedIdentity.username)) {
+      return NextResponse.json({ error: 'only the task owner or assignee may finish this task' }, { status: 403 });
+    }
+
     const updates: KanbanCardUpdates = {};
     for (const [key, value] of Object.entries({
       title, description, column, priority, tags, order, project, assignees, dueAt,

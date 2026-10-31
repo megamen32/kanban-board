@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { canCompleteDirectly } from './card-completion';
+import { canCompleteDirectly, canTakeOwnReview } from './card-completion';
 import { CardResultPreview } from './card-result-preview';
 import { ReviewActionGate, type ReviewActionCard } from './review-action-gate';
 
@@ -41,16 +41,31 @@ describe('card result review preview', () => {
   });
 });
 
-describe('direct completion of ordinary tasks', () => {
-  it('allows a regular inbox or personal task to be completed', () => {
-    expect(canCompleteDirectly({ column: 'inbox', needsReview: false })).toBe(true);
-    expect(canCompleteDirectly({ column: 'todo', needsReview: false })).toBe(true);
-    expect(canCompleteDirectly({ column: 'blocked', needsReview: false })).toBe(true);
+describe('owner-scoped manual completion', () => {
+  const own = { owner: 'nikita', assignee: 'Никита Розанов', assignees: ['Никита Розанов'] };
+  const other = { owner: 'Дмитрий', assignee: 'Дмитрий', assignees: ['Дмитрий'] };
+  it('shows completion to the verified owner or assigned performer of ordinary tasks', () => {
+    expect(canCompleteDirectly({ ...own, column: 'inbox', needsReview: false }, 'nikita')).toBe(true);
+    expect(canCompleteDirectly({ ...own, column: 'todo', needsReview: false }, 'nikita')).toBe(true);
+    expect(canCompleteDirectly({ ...own, column: 'in-progress', needsReview: false }, 'roomhacker')).toBe(true);
+    expect(canCompleteDirectly({ ...other, column: 'todo', needsReview: false }, 'Дмитрий')).toBe(true);
   });
-  it('keeps existing review and completed tasks in their dedicated workflows', () => {
-    expect(canCompleteDirectly({ column: 'review', needsReview: true })).toBe(false);
-    expect(canCompleteDirectly({ column: 'in-progress', needsReview: true })).toBe(false);
-    expect(canCompleteDirectly({ column: 'done', needsReview: false })).toBe(false);
-    expect(canCompleteDirectly({ column: 'archived', needsReview: false })).toBe(false);
+  it('does not offer completion of someone else’s tasks or to unverified accounts', () => {
+    expect(canCompleteDirectly({ ...other, column: 'todo', needsReview: false }, 'nikita')).toBe(false);
+    expect(canCompleteDirectly({ ...other, column: 'in-progress', needsReview: false }, null)).toBe(false);
+    expect(canCompleteDirectly({ ...own, column: 'todo', needsReview: false }, 'dmitry')).toBe(false);
+  });
+  it('keeps review and completed tasks in their dedicated workflows', () => {
+    expect(canCompleteDirectly({ ...own, column: 'review', needsReview: true }, 'nikita')).toBe(false);
+    expect(canCompleteDirectly({ ...own, column: 'in-progress', needsReview: true }, 'nikita')).toBe(false);
+    expect(canCompleteDirectly({ ...own, column: 'done', needsReview: false }, 'nikita')).toBe(false);
+    expect(canCompleteDirectly({ ...own, column: 'archived', needsReview: false }, 'nikita')).toBe(false);
+  });
+  it('offers to take review only to its actual owner and never to the supervisor of other tasks', () => {
+    const pending = { column: 'review' as const, needsReview: true, owner: 'nikita', requiresApprovalFrom: ['oleg'] };
+    expect(canTakeOwnReview(pending, 'nikita')).toBe(true);
+    expect(canTakeOwnReview(pending, 'oleg')).toBe(false);
+    expect(canTakeOwnReview({ ...pending, owner: 'Дмитрий' }, 'nikita')).toBe(false);
+    expect(canTakeOwnReview({ ...pending, requiresApprovalFrom: ['nikita'] }, 'nikita')).toBe(false);
   });
 });
