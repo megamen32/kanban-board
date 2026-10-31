@@ -327,22 +327,22 @@ export function KanbanBoard() {
             </div>
           </div>
         )}
-        <Tabs value={planningTab} onValueChange={handlePlanningTabChange} className="flex min-h-0 flex-1 flex-col gap-0">
-          <div className="order-2 mt-auto w-full shrink-0 border-t px-1 py-1">
-            <TabsList aria-label="Разделы доски" className="mx-auto h-14 min-h-0 w-full max-w-5xl min-w-0 flex-nowrap justify-between gap-0 rounded-none bg-transparent p-0">
-              <TabsTrigger aria-label="Обзор" title="Обзор" value="dashboard" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs"><LayoutDashboard aria-hidden className="h-4 w-4" /><span>Обзор</span><span className="sr-only">Обзор</span></TabsTrigger>
-              <TabsTrigger aria-label="Активные" title="Активные" value="execution" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs"><ListTodo aria-hidden className="h-4 w-4" /><span>Актив</span><span className="sr-only">Активные</span></TabsTrigger>
-              <TabsTrigger aria-label="Входящие" title="Входящие" value="inbox" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs"><Inbox aria-hidden className="h-4 w-4" /><span>Вход</span><span className="sr-only">Входящие</span></TabsTrigger>
-              <TabsTrigger aria-label="Неделя" title="Неделя" value="week" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs"><CalendarDays aria-hidden className="h-4 w-4" /><span>Неделя</span><span className="sr-only">Неделя</span></TabsTrigger>
-              <TabsTrigger aria-label="Сегодня" title="Сегодня" value="today" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs"><CalendarCheck aria-hidden className="h-4 w-4" /><span>Сегодня</span><span className="sr-only">Сегодня</span></TabsTrigger>
-              {isSuperAdmin && <TabsTrigger aria-label="Баланс ролей" title="Баланс ролей" value="balance" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs"><Users aria-hidden className="h-4 w-4" /><span>Роли</span><span className="sr-only">Баланс ролей</span></TabsTrigger>}
-              <TabsTrigger aria-label={`Закрытые: ${counts.done + counts.archived}`} title={`Закрытые: ${counts.done + counts.archived}`} value="closed" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs"><Archive aria-hidden className="h-4 w-4" /><span>Архив</span><span className="sr-only">Закрытые ({counts.done + counts.archived})</span></TabsTrigger>
+        <Tabs value={planningTab} onValueChange={handlePlanningTabChange} orientation={isMobile ? 'horizontal' : 'vertical'} className="flex min-h-0 flex-1 flex-col gap-0 md:flex-row">
+          <div className="order-2 mt-auto w-full shrink-0 border-t px-1 py-1 md:order-1 md:mt-0 md:h-full md:w-40 md:overflow-y-auto md:border-t-0 md:border-r md:px-2 md:py-3">
+            <TabsList aria-label="Разделы доски" className="mx-auto h-14 min-h-0 w-full max-w-5xl min-w-0 flex-nowrap justify-between gap-0 rounded-none bg-transparent p-0 md:h-auto md:flex-col md:items-stretch md:justify-start md:gap-1">
+              <TabsTrigger aria-label="Обзор" title="Обзор" value="dashboard" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs md:h-10 md:flex-none md:flex-row md:justify-start md:gap-2 md:px-3 md:text-sm"><LayoutDashboard aria-hidden className="h-4 w-4" /><span>Обзор</span><span className="sr-only">Обзор</span></TabsTrigger>
+              <TabsTrigger aria-label="Активные" title="Активные" value="execution" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs md:h-10 md:flex-none md:flex-row md:justify-start md:gap-2 md:px-3 md:text-sm"><ListTodo aria-hidden className="h-4 w-4" /><span className="md:hidden">Актив</span><span className="hidden md:inline">Активные</span><span className="sr-only">Активные</span></TabsTrigger>
+              <TabsTrigger aria-label="Входящие" title="Входящие" value="inbox" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs md:h-10 md:flex-none md:flex-row md:justify-start md:gap-2 md:px-3 md:text-sm"><Inbox aria-hidden className="h-4 w-4" /><span className="md:hidden">Вход</span><span className="hidden md:inline">Входящие</span><span className="sr-only">Входящие</span></TabsTrigger>
+              <TabsTrigger aria-label="Неделя" title="Неделя" value="week" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs md:h-10 md:flex-none md:flex-row md:justify-start md:gap-2 md:px-3 md:text-sm"><CalendarDays aria-hidden className="h-4 w-4" /><span>Неделя</span><span className="sr-only">Неделя</span></TabsTrigger>
+              <TabsTrigger aria-label="Сегодня" title="Сегодня" value="today" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs md:h-10 md:flex-none md:flex-row md:justify-start md:gap-2 md:px-3 md:text-sm"><CalendarCheck aria-hidden className="h-4 w-4" /><span>Сегодня</span><span className="sr-only">Сегодня</span></TabsTrigger>
+              {isSuperAdmin && <TabsTrigger aria-label="Баланс ролей" title="Баланс ролей" value="balance" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs md:h-10 md:flex-none md:flex-row md:justify-start md:gap-2 md:px-3 md:text-sm"><Users aria-hidden className="h-4 w-4" /><span className="md:hidden">Роли</span><span className="hidden md:inline">Баланс ролей</span><span className="sr-only">Баланс ролей</span></TabsTrigger>}
+              <TabsTrigger aria-label={`Закрытые: ${counts.done + counts.archived}`} title={`Закрытые: ${counts.done + counts.archived}`} value="closed" className="h-12 min-w-0 flex-1 flex-col gap-0.5 px-0 text-[10px] sm:text-xs md:h-10 md:flex-none md:flex-row md:justify-start md:gap-2 md:px-3 md:text-sm"><Archive aria-hidden className="h-4 w-4" /><span className="md:hidden">Архив</span><span className="hidden md:inline">Закрытые</span><span className="sr-only">Закрытые ({counts.done + counts.archived})</span></TabsTrigger>
             </TabsList>
           </div>
-          <TabsContent value="dashboard" className="order-1 min-h-0 min-w-0 overflow-y-auto">
+          <TabsContent value="dashboard" className="order-1 md:order-2 min-h-0 min-w-0 overflow-y-auto">
             <IntegratorTaskDashboard cards={derivedCards} onOpen={setSelectedCard} onRefresh={refresh} canAssignReviewer={isSuperAdmin} onAssignReviewer={handleAssignReviewer} />
           </TabsContent>
-          <TabsContent value="execution" className="order-1 min-h-0 min-w-0 overflow-y-auto">
+          <TabsContent value="execution" className="order-1 md:order-2 min-h-0 min-w-0 overflow-y-auto">
             {view === 'graph' ? (
               <CardGraphView cards={visibleCards} onOpen={setSelectedCard} />
             ) : view === 'list' ? (
@@ -362,11 +362,11 @@ export function KanbanBoard() {
           </div>
             )}
           </TabsContent>
-          <TabsContent value="inbox" className="order-1 min-h-0 overflow-y-auto space-y-3 p-3 sm:p-6"><InboxCapture owner={person} onCaptured={refresh} /><PlanningCardList cards={derivedCards} roles={roles} onOpen={setSelectedCard} empty="Входящих задач пока нет" /></TabsContent>
-          <TabsContent value="week" className="order-1 min-h-0 overflow-y-auto p-3 sm:p-6"><WeeklyPlanView cards={visibleCards} roles={roles} draft={weeklyDraft} loading={weeklyLoading} error={weeklyError} canAccept={username === NIKITA_ACTOR} onLoad={() => void fetchWeeklyDraft()} onAccept={ids => acceptWeeklyPlan(ids)} onOpen={setSelectedCard} /></TabsContent>
-          <TabsContent value="today" className="order-1 min-h-0 overflow-y-auto p-3 sm:p-6"><PlanningCardList cards={derivedCards} roles={roles} onOpen={setSelectedCard} empty="На сегодня задач нет" /></TabsContent>
-          <TabsContent value="balance" className="order-1 min-h-0 overflow-y-auto p-3 sm:p-6">{roleError && <p role="alert" className="text-sm text-destructive">{roleError}</p>}<RoleBalanceView balance={roleBalance} roles={roles} /></TabsContent>
-          <TabsContent value="closed" className="order-1 min-h-0 overflow-y-auto">
+          <TabsContent value="inbox" className="order-1 md:order-2 min-h-0 overflow-y-auto space-y-3 p-3 sm:p-6"><InboxCapture owner={person} onCaptured={refresh} /><PlanningCardList cards={derivedCards} roles={roles} onOpen={setSelectedCard} empty="Входящих задач пока нет" /></TabsContent>
+          <TabsContent value="week" className="order-1 md:order-2 min-h-0 overflow-y-auto p-3 sm:p-6"><WeeklyPlanView cards={visibleCards} roles={roles} draft={weeklyDraft} loading={weeklyLoading} error={weeklyError} canAccept={username === NIKITA_ACTOR} onLoad={() => void fetchWeeklyDraft()} onAccept={ids => acceptWeeklyPlan(ids)} onOpen={setSelectedCard} /></TabsContent>
+          <TabsContent value="today" className="order-1 md:order-2 min-h-0 overflow-y-auto p-3 sm:p-6"><PlanningCardList cards={derivedCards} roles={roles} onOpen={setSelectedCard} empty="На сегодня задач нет" /></TabsContent>
+          <TabsContent value="balance" className="order-1 md:order-2 min-h-0 overflow-y-auto p-3 sm:p-6">{roleError && <p role="alert" className="text-sm text-destructive">{roleError}</p>}<RoleBalanceView balance={roleBalance} roles={roles} /></TabsContent>
+          <TabsContent value="closed" className="order-1 md:order-2 min-h-0 overflow-y-auto">
             <div className="flex flex-wrap items-center gap-2 px-3 pt-3 sm:px-6">
               <p className="text-sm text-muted-foreground">Карточки сохранены. Отмена не считается выполнением.</p>
               <select aria-label="Фильтр закрытых задач" value={closedKind} onChange={event => setClosedKind(event.target.value as typeof closedKind)} className="h-9 rounded-md border bg-background px-2 text-sm">

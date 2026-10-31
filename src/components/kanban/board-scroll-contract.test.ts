@@ -54,17 +54,17 @@ describe('board tab panel scroll contract', () => {
     }
   });
 
-  it('shows labeled bottom navigation at narrow and wide viewport sizes', () => {
-    expect(boardSource).toContain('className="flex min-h-0 flex-1 flex-col gap-0"');
-    expect(boardSource).toContain('className="order-2 mt-auto w-full shrink-0 border-t px-1 py-1"');
+  it('keeps narrow navigation below content and wide navigation to its left with labels', () => {
+    expect(boardSource).toContain('className="flex min-h-0 flex-1 flex-col gap-0 md:flex-row"');
+    expect(boardSource).toContain('order-2 mt-auto w-full shrink-0 border-t');
+    expect(boardSource).toContain('md:order-1 md:mt-0 md:h-full md:w-40');
     const strip = boardSource.split('<TabsList aria-label="Разделы доски"')[1]?.split('</TabsList>')[0];
-    expect(strip).toBeTruthy();
-    expect(strip).not.toContain('md:flex-col');
-    expect(strip).not.toContain('md:hidden');
-    expect(strip).toContain('<span>Актив</span>');
-    expect(strip).toContain('<span>Архив</span>');
+    expect(strip).toContain('md:h-auto md:flex-col');
+    expect(strip).toContain('md:justify-start');
+    expect(strip).toContain('>Активные</span>');
+    expect(strip).toContain('>Закрытые</span>');
     for (const panel of tabPanels(boardSource)) {
-      expect(panel.classes, 'tab ' + panel.value + ' must stay above bottom navigation').not.toContain('md:order-2');
+      expect(panel.classes).toContain('order-1 md:order-2');
     }
   });
 
