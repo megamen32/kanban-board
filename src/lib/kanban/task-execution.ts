@@ -50,6 +50,12 @@ export function taskSessionUrl(hostId: string, harness: string, nativeSessionId:
   return `${base}/#/session/${encodeURIComponent(`${harness}:${nativeSessionId}`)}${turnId ? `?turn=${encodeURIComponent(turnId)}` : ''}`;
 }
 
+/** Reuse Agent Herder's existing LHC iframe mode: chat only, no new transcript UI. */
+export function taskSessionEmbedUrl(hostId: string, harness: string, nativeSessionId: string): string | undefined {
+  const directUrl = taskSessionUrl(hostId, harness, nativeSessionId);
+  return directUrl?.replace('/#/session/', '/?from=lhc#/session/');
+}
+
 /** Read the execution-facing view from the existing Board card and result history. */
 export function taskExecutionSnapshot(card: KanbanCard): TaskExecutionSnapshot {
   const latest = card.resultHistory?.at(-1);
