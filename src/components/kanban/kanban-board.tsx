@@ -382,7 +382,7 @@ export function KanbanBoard() {
           <Plus className="h-5 w-5" />
         </Button>
         <AddCardDialog projectOptions={projectOptions} relatedCards={visibleCards} defaultProject={project === 'all' ? '' : project} ownerPreview={identityChecked ? username ?? 'nikita' : null} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
-        {selectedCard && <CardEditDialog projectOptions={projectOptions} relatedCards={visibleCards} breadcrumbCards={scopedCards} roles={roles} card={selectedCard} username={username} onRefresh={refresh} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReviewDecision} onSelectCard={setSelectedCard} />}
+        {selectedCard && <CardEditDialog projectOptions={projectOptions} relatedCards={visibleCards} breadcrumbCards={scopedCards} roles={roles} card={cards.find(card => card.id === selectedCard.id) ?? selectedCard} username={username} onRefresh={refresh} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReviewDecision} onSelectCard={setSelectedCard} />}
         {conflict && <ConflictDialog conflict={conflict} onResolve={resolveConflict} />}
         {isSuperAdmin && <RolesDialog owner={person} open={showRoles} onOpenChange={setShowRoles} onSaved={() => setRoleRefresh(value => value + 1)} />}
       </DndProvider>

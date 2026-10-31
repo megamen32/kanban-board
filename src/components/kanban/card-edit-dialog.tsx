@@ -20,7 +20,7 @@ import type { KanbanUpdateRequest } from '@/hooks/use-kanban';
 import { initialPlanningMetadata } from './initial-planning';
 import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
 import { ReviewActionGate, reviewActionAccess } from './review-action-gate';
-import { CardResultPreview } from './card-result-preview';
+import { CardExecutionOverview } from './card-execution-overview';
 import { MarkdownText } from './markdown-text';
 import { CardBriefPanel } from './card-brief-panel';
 import { hasCardHistory } from './card-history';
@@ -105,6 +105,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   const [tagInput, setTagInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [reviewNote, setReviewNote] = useState('');
   const [baseline, setBaseline] = useState(card);
 
@@ -156,7 +157,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   };
 
   const handleComplete = async () => {
-    if (!onUpdate || saving || !canCompleteDirectly(baseline, username)) return;
+    if (!onUpdate || saving || !canCompleteDirectly(card, username)) return;
     setSaving(true);
     setError(null);
     try {
@@ -168,14 +169,14 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
         return;
       }
       const session = await response.json() as { authenticated?: boolean; username?: string; scope?: string };
-      const allowedActor = isTaskActor(baseline, session.username);
+      const allowedActor = isTaskActor(card, session.username);
       if (!session.authenticated || session.scope !== 'work' || !allowedActor) {
         setError('Завершить задачу может только её подтверждённый владелец или исполнитель.');
         return;
       }
       // Only update the status: do not submit the whole form, reset unsaved fields,
       // change assignees or accidentally request another approval.
-      const saved = await onUpdate(card.id, { column: 'done' }, baseline.version);
+      const saved = await onUpdate(card.id, { column: 'done' }, card.version);
       if (!saved) { setError('Карточка изменилась. Обновите её перед завершением.'); return; }
       if (saved.column !== 'done') { setError('Завершение не подтверждено сервером.'); return; }
       onOpenChange(false);
@@ -184,12 +185,12 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   };
 
   const handleTakeReview = async () => {
-    if (!onUpdate || saving || !canTakeOwnReview(baseline, username)) return;
+    if (!onUpdate || saving || !canTakeOwnReview(card, username)) return;
     setSaving(true);
     setError(null);
     try {
       // Existing owner-only reviewer assignment: never overwrite a result or decide on behalf of another reviewer.
-      const saved = await onUpdate(card.id, { requiresApprovalFrom: ['nikita'] }, baseline.version);
+      const saved = await onUpdate(card.id, { requiresApprovalFrom: ['nikita'] }, card.version);
       if (!saved) { setError('Карточка изменилась. Обновите её перед назначением проверки.'); return; }
       setBaseline(saved);
       onSelectCard?.(saved);
@@ -210,7 +211,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     setSaving(true);
     setError(null);
     try {
-      const saved = await onReviewDecision(card.id, action, reviewNote, baseline.version);
+      const saved = await onReviewDecision(card.id, action, reviewNote, card.version);
       if (!saved) { setError('Карточка изменилась. Обновите её и повторите решение.'); return; }
       onOpenChange(false);
     } catch (failure) { setError(mutationErrorMessage(failure)); }
@@ -228,7 +229,13 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     && ['created', 'dispatch-unknown', 'running', 'waiting'].includes(executorAttempt.phase);
   const catalogLink = card.catalogLink;
   const reviewAccess = reviewActionAccess(card, username);
-  const latestResult = card.resultHistory?.[card.resultHistory.length - 1] ?? null;
+  const refreshExecution = async () => {
+    if (!onRefresh || refreshing) return;
+    setRefreshing(true);
+    try { await onRefresh(); }
+    catch (failure) { setError(mutationErrorMessage(failure)); }
+    finally { setRefreshing(false); }
+  };
   const parentChoices = getEligibleParentCards(card, relatedCards);
   const currentParentIsHidden = !!planning.parent && !parentChoices.some(item => item.id === planning.parent);
 
@@ -297,7 +304,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             {card.nextAction && <p className="text-sm"><span className="font-medium">Следующий шаг:</span> {card.nextAction}</p>}
             {card.blockerReason && <p className="text-sm"><span className="font-medium">Что мешает:</span> {card.blockerReason}</p>}
             {card.column === 'blocked' && <p className="text-sm text-amber-700 dark:text-amber-300">Укажи причину блокировки ниже, чтобы было ясно, что нужно для продолжения.</p>}
-            {reviewAccess !== 'not-awaiting-review' && latestResult && <CardResultPreview result={latestResult} />}
+            <CardExecutionOverview card={card} refreshing={refreshing} onRefresh={onRefresh ? () => { void refreshExecution(); } : undefined} />
             {canTakeOwnReview(card, username) && onUpdate && (
               <div className="space-y-2 rounded-md border p-3">
                 <p className="text-xs text-muted-foreground">
