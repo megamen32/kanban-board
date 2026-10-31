@@ -14,8 +14,8 @@ const STATUS: Record<string, string> = { inbox: 'Входящие', todo: 'К в
   review: 'На приёмке', blocked: 'Заблокировано', done: 'Готово', someday: 'Позже', archived: 'Архив' };
 interface NodeActions { expanded: ReadonlySet<string>; onToggle: (id: string) => void; onOpen: (card: KanbanCard) => void }
 const nodeClass = (node: CardGraphNode) => node.kind === 'project'
-  ? 'absolute flex rounded-xl border-2 border-sky-500 bg-sky-50 text-sky-950 shadow-sm dark:bg-sky-950 dark:text-sky-50'
-  : 'absolute flex rounded-lg border border-slate-300 bg-card text-card-foreground shadow-sm dark:border-slate-600';
+  ? 'absolute flex overflow-hidden rounded-xl border-2 border-sky-500 bg-sky-50 text-sky-950 shadow-sm dark:bg-sky-950 dark:text-sky-50'
+  : 'absolute flex overflow-hidden rounded-lg border border-slate-300 bg-card text-card-foreground shadow-sm dark:border-slate-600';
 
 function nodeBody(node: CardGraphNode, actions: NodeActions, handle?: ReactNode, pinned = false) {
   const { expanded, onToggle, onOpen } = actions;
@@ -25,12 +25,12 @@ function nodeBody(node: CardGraphNode, actions: NodeActions, handle?: ReactNode,
       aria-label={'Проект: ' + node.label} aria-expanded={expanded.has(node.id)}
       className={'min-w-0 flex-1 rounded-l-xl py-2 pr-2 text-left hover:bg-sky-100 dark:hover:bg-sky-900 focus-visible:outline-2 focus-visible:outline-ring ' + (handle ? 'pl-9' : 'pl-3')}>
       <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider"><FolderKanban aria-hidden className="h-3.5 w-3.5" />Проект</span>
-      <span title={node.label} className="mt-1 block line-clamp-2 break-words text-sm font-semibold">{node.label}</span>
+      <span title={node.label} className="mt-1 line-clamp-2 max-h-11 min-w-0 break-words [overflow-wrap:anywhere] text-sm font-semibold">{node.label}</span>
       <span className="mt-1 block text-[11px] opacity-75">Задач: {node.taskCount}</span>
     </button> : <button type="button" onClick={() => node.card && onOpen(node.card)} title={node.label} aria-label={'Открыть задачу: ' + node.label}
       className={'min-w-0 flex-1 rounded-l-lg py-2 pr-2 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ' + (handle ? 'pl-9' : 'pl-3')}>
       <span className="flex items-center gap-1 text-[10px] text-muted-foreground">{pinned && <Pin aria-label="Ручная позиция" className="h-3 w-3" />}{node.card?.type === 'outcome' ? 'Результат' : 'Задача'} · {STATUS[node.card?.column ?? ''] ?? node.card?.column}</span>
-      <span className="mt-1 block line-clamp-2 break-words text-sm font-medium">{node.label}</span>
+      <span className="mt-1 line-clamp-2 max-h-11 min-w-0 break-words [overflow-wrap:anywhere] text-sm font-medium">{node.label}</span>
       <span className="mt-1 block truncate text-[10px] text-muted-foreground">{node.card?.assignees?.join(', ') || node.card?.assignee || node.card?.owner || 'Не назначен'}</span>
     </button>}
     {node.childCount > 0 && <button type="button" aria-expanded={expanded.has(node.id)}

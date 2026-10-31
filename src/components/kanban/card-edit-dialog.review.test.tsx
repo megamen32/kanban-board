@@ -1,6 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { canCompleteDirectly } from './card-completion';
 import { CardResultPreview } from './card-result-preview';
 import { ReviewActionGate, type ReviewActionCard } from './review-action-gate';
 
@@ -37,5 +38,19 @@ describe('card result review preview', () => {
     expect(html).toContain('<strong');
     expect(html).toContain('тестовый файл');
     expect(html).toContain('testlogin');
+  });
+});
+
+describe('direct completion of ordinary tasks', () => {
+  it('allows a regular inbox or personal task to be completed', () => {
+    expect(canCompleteDirectly({ column: 'inbox', needsReview: false })).toBe(true);
+    expect(canCompleteDirectly({ column: 'todo', needsReview: false })).toBe(true);
+    expect(canCompleteDirectly({ column: 'blocked', needsReview: false })).toBe(true);
+  });
+  it('keeps existing review and completed tasks in their dedicated workflows', () => {
+    expect(canCompleteDirectly({ column: 'review', needsReview: true })).toBe(false);
+    expect(canCompleteDirectly({ column: 'in-progress', needsReview: true })).toBe(false);
+    expect(canCompleteDirectly({ column: 'done', needsReview: false })).toBe(false);
+    expect(canCompleteDirectly({ column: 'archived', needsReview: false })).toBe(false);
   });
 });

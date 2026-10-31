@@ -16,6 +16,18 @@ function buttons(element: React.ReactNode): React.ReactElement<React.ComponentPr
 }
 
 describe('filtered card graph', () => {
+
+  it('clips long task titles within their graph cards', () => {
+    const longTask = { ...card('long'), title: 'Очень длинное описание задачи '.repeat(20) };
+    const graph = buildCardGraph([longTask]);
+    const html = renderToStaticMarkup(<CardGraphScene
+      nodes={layoutCardGraph(graph.roots, new Set(graph.branches))}
+      expanded={new Set(graph.branches)} onOpen={() => {}} onToggle={() => {}} />);
+    expect(html).toContain('line-clamp-2');
+    expect(html).toContain('overflow-hidden');
+    expect(html).toContain('aria-label="Открыть задачу: ');
+    expect(html).not.toContain('block line-clamp-2');
+  });
   it('adds a real project parent and membership edges even when tasks have no parent field', () => {
     const alpha = { ...card('a'), project: 'Проект Альфа' };
     const beta = { ...card('b'), project: 'Проект Бета' };

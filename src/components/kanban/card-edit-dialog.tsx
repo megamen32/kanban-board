@@ -26,6 +26,7 @@ import { CardBriefPanel } from './card-brief-panel';
 import { hasCardHistory } from './card-history';
 import { CardHierarchyPanel } from './card-hierarchy-panel';
 import { getEligibleParentCards } from './card-hierarchy';
+import { canCompleteDirectly } from './card-completion';
 
 const MarkdownEditor = dynamic(() => import('./markdown-editor').then(module => module.MarkdownEditor), {
   ssr: false,
@@ -136,7 +137,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     const updates: KanbanUpdateRequest = {
       title: title.trim(),
       description: description.trim(),
-      nextAction: nextAction.trim() || null,
+      ...(nextAction.trim() !== (baseline.nextAction ?? '') ? { nextAction: nextAction.trim() || null } : {}),
       blockerReason: blockerReason.trim() || null,
       column: column as KanbanColumn,
       priority,
@@ -149,6 +150,35 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     const saved = await onUpdate(card.id, updates, baseline.version);
     if (!saved) { setError('Карточка изменилась. Разрешите конфликт версий; ваш текст остался в форме.'); return; }
     onOpenChange(false);
+    } catch (failure) { setError(mutationErrorMessage(failure)); }
+    finally { setSaving(false); }
+  };
+
+  const handleComplete = async () => {
+    if (!onUpdate || saving || !canCompleteDirectly(baseline)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      // Completing a real task is a human action, not a synthetic automation update.
+      // Without verified browser identity, the ordinary API would redirect "done" to review.
+      const response = await fetch('/api/auth/session', { cache: 'no-store', credentials: 'same-origin' });
+      if (!response.ok) {
+        setError('Чтобы завершить задачу, войдите в свой аккаунт доски.');
+        return;
+      }
+      const session = await response.json() as { authenticated?: boolean; username?: string; scope?: string };
+      const allowedActor = session.username === (baseline.owner || 'nikita')
+        || baseline.assignees.includes(session.username || '');
+      if (!session.authenticated || session.scope !== 'work' || !allowedActor) {
+        setError('Завершить задачу может только её подтверждённый владелец или исполнитель.');
+        return;
+      }
+      // Only update the status: do not submit the whole form, reset unsaved fields,
+      // change assignees or accidentally request another approval.
+      const saved = await onUpdate(card.id, { column: 'done' }, baseline.version);
+      if (!saved) { setError('Карточка изменилась. Обновите её перед завершением.'); return; }
+      if (saved.column !== 'done') { setError('Завершение не подтверждено сервером.'); return; }
+      onOpenChange(false);
     } catch (failure) { setError(mutationErrorMessage(failure)); }
     finally { setSaving(false); }
   };
@@ -179,6 +209,9 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     setTagInput('');
   };
 
+  const executorAttempt = card.taskExecutionHistory?.at(-1);
+  const hasExecutorConversation = !!card.pendingQuestion || !!executorAttempt?.nativeSessionId
+    && ['created', 'dispatch-unknown', 'running', 'waiting'].includes(executorAttempt.phase);
   const catalogLink = card.catalogLink;
   const reviewAccess = reviewActionAccess(card, username);
   const latestResult = card.resultHistory?.[card.resultHistory.length - 1] ?? null;
@@ -202,6 +235,11 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               {DEFAULT_COLUMNS.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
             </select>
           </label>
+          {canCompleteDirectly(card) && onUpdate && (
+            <Button type="button" variant="outline" size="sm" disabled={saving}
+              className="col-span-2 w-fit border-emerald-600/40 text-emerald-700 dark:text-emerald-300 sm:col-span-1"
+              onClick={() => void handleComplete()}>✓ Завершить задачу</Button>
+          )}
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Приоритет
             <select aria-label="Приоритет задачи" value={priority} onChange={e => setPriority(e.target.value as Priority)} className="h-10 w-full min-w-0 rounded-md border bg-background px-2 text-sm text-foreground">
               <option value="critical">Срочный</option><option value="high">Высокий</option><option value="medium">Обычный</option><option value="low">Низкий</option>
@@ -323,7 +361,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             </div>
               </div>
             </details>
-            <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />
+            {hasExecutorConversation && <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />}
             {catalogLink && <details className="min-w-0 rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Источник и ссылки</summary><div className="mt-3"><CatalogLinkPanel link={catalogLink} /></div></details>}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Теги</label>
