@@ -21,7 +21,11 @@ export const metadata: Metadata = {
   twitter: { card: "summary_large_image", title: todoPreview.title, description: todoPreview.description, images: [todoPreview.image] },
   manifest: "/manifest.webmanifest",
   icons: {
-    icon: "/logo.svg",
+    icon: [
+      { url: "/favicon.ico?v=20261031", sizes: "any", type: "image/x-icon" },
+      { url: "/icon-192.png?v=20261031", sizes: "192x192", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png?v=20261031", sizes: "180x180", type: "image/png" }],
   },
   openGraph: {
     title: todoPreview.title,
