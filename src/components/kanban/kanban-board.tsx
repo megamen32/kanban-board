@@ -35,7 +35,7 @@ import { NIKITA_ACTOR, type HumanReviewAction } from '@/lib/kanban/transition-po
 import { useIsMobile } from '@/hooks/use-mobile';
 import { CardGraphView } from './card-graph-view';
 import { TaskListView } from './task-list-view';
-import { filterCards, filterWorkspaceCards, getAssigneeOptions, getProjectOptions, getPrimaryBoardLaneCards, searchCards, isClosedCard, getBoardCounts, filterAttentionCards, resolveInitialWorkspaceView, type AttentionFilter, type WorkspaceView } from './view-model';
+import { filterCards, filterWorkspaceCards, getAssigneeOptions, getProjectOptions, getPrimaryBoardLaneCards, searchCards, isClosedCard, getBoardCounts, filterAttentionCards, resolveInitialWorkspaceView, WORKSPACE_HINT, type AttentionFilter, type WorkspaceView } from './view-model';
 import { CardEditDialog } from './card-edit-dialog';
 import { NotificationSettings } from '@/components/notifications/notification-settings';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -216,7 +216,7 @@ export function KanbanBoard() {
   const identityLabel = username ?? 'Локальный просмотр';
   const workspaceSwitcher = (
     <div aria-label="Область задач" className="flex shrink-0 rounded-md border p-0.5">
-      {([['mine', 'Моё', 'Карточки, где вы владелец, исполнитель или указаны в следующем шаге'], ['shared', 'Общее', 'Общие карточки'], ['all', 'Всё', 'Все разрешённые карточки'] ] as const).map(([value, label, title]) => <Button key={value} title={title} aria-label={`${label}: ${title}`} variant={workspaceView === value ? 'secondary' : 'ghost'} size="sm" className="h-6 px-2 text-[11px]" onClick={() => setWorkspaceView(value)}>{label}</Button>)}
+      {([['mine', 'Моё'], ['shared', 'Общее'], ['all', 'Всё']] as const).map(([value, label]) => <Button key={value} title={WORKSPACE_HINT[value]} aria-label={`${label}: ${WORKSPACE_HINT[value]}`} variant={workspaceView === value ? 'secondary' : 'ghost'} size="sm" className="h-6 px-2 text-[11px]" onClick={() => setWorkspaceView(value)}>{label}</Button>)}
     </div>
   );
   const projectFilter = (

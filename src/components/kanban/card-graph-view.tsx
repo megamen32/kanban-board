@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useMemo, useRef, useState, type ReactNode } from 'react';
 import { DndContext, KeyboardSensor, PointerSensor, useDraggable, useSensor, useSensors, type DragEndEvent, type DragMoveEvent } from '@dnd-kit/core';
 import { FolderKanban, GripVertical, Pin } from 'lucide-react';
 import type { KanbanCard } from '@/lib/kanban/types';
@@ -10,9 +10,15 @@ import { buildCardGraph, graphBounds, toggleGraphBranch,
   GRAPH_NODE_WIDTH as WIDTH, GRAPH_NODE_HEIGHT as HEIGHT, type CardGraphNode } from './card-graph-model';
 import { draggedProjectOrder, freeGraphPoint, graphPositionKey, layoutProjectGrid, type ProjectGraphArea } from './project-grid-layout';
 import { useGraphLayout } from './use-graph-layout';
+import { WORKSPACE_HINT } from './view-model';
 
 const STATUS: Record<string, string> = { inbox: 'Входящие', todo: 'К выполнению', 'in-progress': 'В работе',
   review: 'На приёмке', blocked: 'Заблокировано', done: 'Готово', someday: 'Позже', archived: 'Архив' };
+/** Exact-status filter beside direction/density; 'all' shows every allowed card. */
+const STATUS_FILTERS: readonly (readonly [string, string])[] = [['all', 'Все'], ['inbox', 'Входящие'],
+  ['todo', 'К выполнению'], ['in-progress', 'В работе'], ['blocked', 'Заблокировано'],
+  ['review', 'На приёмке'], ['someday', 'Бэклог']];
+export type StatusFilter = (typeof STATUS_FILTERS)[number][0];
 interface NodeActions { expanded: ReadonlySet<string>; onToggle: (id: string) => void; onOpen: (card: KanbanCard) => void }
 const nodeClass = (node: CardGraphNode) => node.kind === 'project'
   ? 'absolute flex overflow-hidden rounded-xl border-2 border-sky-500 bg-sky-50 text-sky-950 shadow-sm dark:bg-sky-950 dark:text-sky-50'
@@ -64,13 +70,22 @@ export function CardGraphScene({ nodes, expanded, onToggle, onOpen, direction = 
   const width = Math.max(bounds.width, ...areas.map(area => area.x + area.width + 28));
   const height = Math.max(bounds.height, ...areas.map(area => area.y + area.height + 28));
   return <div className="relative" style={{ width, height }}>
-    {areas.map(area => <div key={area.id} data-project-area={area.project} aria-hidden className="pointer-events-none absolute rounded-2xl border border-sky-500/20 bg-sky-500/[0.035]"
-      style={{ left: area.x, top: area.y, width: area.width, height: area.height }} />)}
+    {areas.map(area => <Fragment key={area.id}>
+      <div data-project-area={area.project} aria-hidden className="pointer-events-none absolute rounded-2xl border border-sky-500/20 bg-sky-500/[0.035]"
+        style={{ left: area.x, top: area.y, width: area.width, height: area.height }} />
+      {area.zones?.map(zone => <div key={zone.id} data-graph-zone={zone.id} data-graph-zone-label={zone.label} aria-hidden
+        title={`${zone.label}: ${zone.count}`}
+        className="pointer-events-none absolute flex items-start rounded-lg border border-sky-500/15 bg-sky-500/[0.04] p-1 text-[10px] font-medium uppercase tracking-wide text-sky-700/70 dark:text-sky-300/70"
+        style={{ left: zone.x + 8, top: zone.y + 6, maxWidth: zone.width - 16 }}>{zone.label} · {zone.count}</div>)}
+    </Fragment>)}
     <svg aria-hidden="true" width={width} height={height} className="pointer-events-none absolute inset-0">
       <defs><marker id="task-graph-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 Z" fill="context-stroke" /></marker></defs>
       {nodes.map(node => {
         const parent = node.parentId ? byId.get(node.parentId) : undefined;
         if (!parent) return null;
+        // Inside project areas the membership is already obvious from the area;
+        // only real parent-child connectors are drawn there.
+        if (parent.kind === 'project' && areas.length) return null;
         const x = parent.x + (direction === 'vertical' ? WIDTH / 2 : WIDTH);
         const y = parent.y + (direction === 'vertical' ? HEIGHT : HEIGHT / 2);
         const endX = node.x + (direction === 'vertical' ? WIDTH / 2 : -2);
@@ -97,7 +112,11 @@ export function CardGraphView({ cards, onOpen, workspaceView, onWorkspaceViewCha
   workspaceView?: WorkspaceView;
   onWorkspaceViewChange?: (value: WorkspaceView) => void;
 }) {
-  const graph = useMemo(() => buildCardGraph(cards), [cards]);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const filtered = useMemo(() => statusFilter === 'all'
+    ? cards
+    : cards.filter(card => card.column === statusFilter), [cards, statusFilter]);
+  const graph = useMemo(() => buildCardGraph(filtered), [filtered]);
   const preferences = useGraphLayout();
   const [expansion, setExpansion] = useState<ReadonlySet<string> | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -144,7 +163,7 @@ export function CardGraphView({ cards, onOpen, workspaceView, onWorkspaceViewCha
       <div aria-label="Фильтр задач графа" className="mb-2 flex w-fit flex-wrap items-center gap-1 rounded-md border p-1 text-xs">
         <span className="px-2 text-muted-foreground">Задачи:</span>
         {([['mine', 'Моё'], ['shared', 'Общее'], ['all', 'Всё']] as const).map(([value, label]) => (
-          <button key={value} type="button" aria-pressed={workspaceView === value}
+          <button key={value} type="button" title={WORKSPACE_HINT[value]} aria-label={`${label}: ${WORKSPACE_HINT[value]}`} aria-pressed={workspaceView === value}
             className={'rounded px-3 py-1.5 ' + (workspaceView === value ? 'bg-secondary font-semibold' : 'hover:bg-muted')}
             onClick={() => onWorkspaceViewChange(value)}>{label}</button>
         ))}
@@ -156,6 +175,13 @@ export function CardGraphView({ cards, onOpen, workspaceView, onWorkspaceViewCha
         <select aria-label="Направление графа" className={button} value={direction} disabled={!preferences.editable}
           onChange={event => preferences.change({ direction: event.target.value as GraphDirection })}>
           <option value="vertical">Сверху вниз</option><option value="horizontal">Слева направо</option>
+        </select>
+      </label>
+      <label className="flex items-center gap-1">Статус
+        <select aria-label="Фильтр точного статуса задач" className={button} value={statusFilter}
+          title="Показывает задачи одного статуса; скрытые задачи сохраняют свои позиции раскладки"
+          onChange={event => setStatusFilter(event.target.value as StatusFilter)}>
+          {STATUS_FILTERS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
       </label>
       <label className="flex items-center gap-1">{direction === 'vertical' ? 'Столбцов' : 'Рядов'}
@@ -173,11 +199,12 @@ export function CardGraphView({ cards, onOpen, workspaceView, onWorkspaceViewCha
       <button type="button" className={button} onClick={() => setZoom(Math.max(0.25, Math.min(1, (viewport.current?.clientWidth ?? width) / width)))}>По ширине</button>
     </div>
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-      <span>Проектов: {graph.roots.length} · Задач: {tasks.length} из {cards.length}. Перетащите за ⋮⋮: проект меняет порядок, задача — только позицию.</span>
+      <span>Проектов: {graph.roots.length} · Задач: {tasks.length} из {filtered.length}. Перетащите за ⋮⋮: проект меняет порядок, задача — только позицию.</span>
       <span role="status" aria-live="polite" className={preferences.status === 'error' ? 'text-red-600' : ''}>Моя раскладка · {savedLabel}</span>
       {preferences.status === 'error' && <button className={button} onClick={preferences.retry}>Повторить сохранение</button>}
     </div>
     {cards.length === 0 ? <p className="p-6 text-sm text-muted-foreground">По текущим фильтрам задач нет</p>
+      : filtered.length === 0 ? <p className="p-6 text-sm text-muted-foreground">Задач выбранного статуса нет</p>
       : <DndContext id="task-project-graph" sensors={sensors} autoScroll={false} onDragMove={onMove} onDragEnd={onEnd} onDragCancel={() => setDrag(null)}
           accessibility={{ screenReaderInstructions: { draggable: 'Нажмите пробел для перемещения, стрелки для изменения позиции, пробел для сохранения или Escape для отмены.' } }}>
         <div ref={viewport} tabIndex={0} aria-label="Область графа с прокруткой" className="max-h-[70dvh] overflow-auto overscroll-contain rounded-xl border bg-muted/15">

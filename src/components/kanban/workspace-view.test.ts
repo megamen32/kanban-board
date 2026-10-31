@@ -19,6 +19,35 @@ describe('personal and shared workspace views', () => {
     expect(filterWorkspaceCards(cards, 'marina', 'mine').map(item => item.id)).toEqual(['marina-private', 'ee-shared']);
   });
 
+  it('excludes owned cards with another executor from «Моё»', () => {
+    const cards = [
+      card('done-by-dmitry', { owner: 'nikita', assignees: ['Дмитрий'] }),
+      card('mine-empty-execs', { owner: 'nikita' }),
+      card('mine-as-executor', { owner: 'dmitry', assignees: ['Никита'] }),
+    ];
+    expect(filterWorkspaceCards(cards, 'nikita', 'mine').map(item => item.id)).toEqual(['mine-empty-execs', 'mine-as-executor']);
+  });
+
+  it('never counts waiting or approval mentions as personal work', () => {
+    const cards = [
+      card('waiting-only', { owner: 'dmitry', waitingFor: ['Никита'] }),
+      card('approval-only', { owner: 'dmitry', requiresApprovalFrom: ['Никита'] }),
+      card('approver-with-other-executor', { owner: 'dmitry', assignees: ['Дмитрий'], requiresApprovalFrom: ['Никита'] }),
+    ];
+    expect(filterWorkspaceCards(cards, 'nikita', 'mine')).toEqual([]);
+  });
+
+  it('shows multi-participant and explicitly shared cards as «Общее» without relying on a stale flag', () => {
+    const cards = [
+      card('flagged', { owner: 'nikita', shared: true }),
+      card('owner-and-executor', { owner: 'dmitry', assignees: ['григорий'] }),
+      card('owner-only-private', { owner: 'nikita' }),
+      card('waiter-makes-it-common', { owner: 'dmitry', waitingFor: ['григорий'] }),
+      card('same-person-twice', { owner: 'dmitry', assignees: ['dmitry'] }),
+    ];
+    expect(filterWorkspaceCards(cards, 'marina', 'shared').map(item => item.id)).toEqual(['flagged', 'owner-and-executor', 'waiter-makes-it-common']);
+  });
+
   it('keeps common projects visible independently of the card owner', () => {
     expect(filterWorkspaceCards(cards, 'marina', 'shared').map(item => item.id)).toEqual(['ee-shared']);
   });

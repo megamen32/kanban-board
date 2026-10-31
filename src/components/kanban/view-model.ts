@@ -47,15 +47,49 @@ export function sortIncomingCards(cards: KanbanCard[]): KanbanCard[] {
   });
 }
 
+/**
+ * Executor names on a card: the legacy single field plus the list.
+ *
+ * A named executor is the person doing the work. Waiting for someone or
+ * asking for their approval does not move the work to them.
+ */
+function executorsOf(card: KanbanCard): string[] {
+  return [card.assignee ?? '', ...card.assignees].map(value => value.trim()).filter(Boolean);
+}
+
+/** Distinct normalized participants: owner, executors, waiters and approvers. */
+export function getCardParticipants(card: KanbanCard): string[] {
+  return [...new Set([card.owner ?? '', ...executorsOf(card),
+    ...(card.waitingFor ?? []), ...(card.requiresApprovalFrom ?? [])]
+    .map(value => value.trim()).filter(Boolean).map(normalizePerson))];
+}
+
+/** «Моё» means being the executor; the owner counts only when nobody is assigned. */
+export function isPersonalCard(card: KanbanCard, person: string): boolean {
+  const selected = normalizePerson(person);
+  const executors = executorsOf(card).map(normalizePerson);
+  if (executors.length > 0) return executors.some(executor => executor === selected);
+  return Boolean(card.owner?.trim()) && normalizePerson(card.owner!) === selected;
+}
+
+/** «Общее» collects the shared flag and cards with more than one real participant. */
+export function isSharedCard(card: KanbanCard): boolean {
+  return card.shared === true || getCardParticipants(card).length >= 2;
+}
+
 /** Limits the shared Markdown store to the selected person's useful work. */
 export function filterWorkspaceCards(cards: KanbanCard[], person: string, view: WorkspaceView): KanbanCard[] {
   if (view === 'all') return cards;
-  if (view === 'shared') return cards.filter(card => card.shared === true);
-  const selected = normalizePerson(person);
-  return cards.filter(card => [card.owner, card.assignee, ...card.assignees,
-    ...(card.waitingFor ?? []), ...(card.requiresApprovalFrom ?? [])]
-    .some(value => Boolean(value) && normalizePerson(value!) === selected));
+  if (view === 'shared') return cards.filter(isSharedCard);
+  return cards.filter(card => isPersonalCard(card, person));
 }
+
+/** Tooltip copy that keeps the three workspace views unambiguous. */
+export const WORKSPACE_HINT: Record<WorkspaceView, string> = {
+  mine: 'Задачи, где вы исполнитель; если исполнитель не назначен — где вы владелец. Роль владельца без исполнителя, ожидание или согласование задачу вашей не делают',
+  shared: 'Явно общие задачи и задачи с несколькими участниками: владелец, исполнители, согласующие или ожидающие',
+  all: 'Все задачи, разрешённые сервером для этой области',
+};
 
 /** Discovers people already represented by card owners or assignments. */
 export function getPeople(cards: KanbanCard[]): string[] {

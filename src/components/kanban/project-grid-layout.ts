@@ -1,4 +1,5 @@
 import type { GraphDirection, GraphLayoutPreferences, GraphPoint } from '@/lib/kanban/graph-layout-preferences';
+import type { KanbanCard } from '@/lib/kanban/types';
 import { GRAPH_NODE_HEIGHT as H, GRAPH_NODE_WIDTH as W, type CardGraphBranch, type CardGraphNode } from './card-graph-model';
 
 export const PROJECT_PAD = 28;
@@ -6,7 +7,23 @@ const GAP = 32;
 const PROJECT_GAP = 64;
 const HEADER = H + PROJECT_PAD * 2;
 const HORIZONTAL_HEADER = W + PROJECT_PAD * 2;
-export interface ProjectGraphArea { id: string; project: string; x: number; y: number; width: number; height: number }
+const ZONE_GAP = 24;
+const ZONE_PAD = 16;
+const ZONE_HEADER = 32;
+const ZONE_LABEL = 96;
+/** Display-only status subzones inside one project area; dragging never changes a card's status. */
+export const GRAPH_ZONES = [
+  { id: 'queue', label: 'Очередь', columns: new Set<KanbanCard['column']>(['inbox', 'todo', 'someday']) },
+  { id: 'work', label: 'В работе', columns: new Set<KanbanCard['column']>(['in-progress', 'blocked']) },
+  { id: 'review', label: 'На приёмке', columns: new Set<KanbanCard['column']>(['review']) },
+] as const;
+export type GraphZoneId = (typeof GRAPH_ZONES)[number]['id'];
+/** Every active card status belongs to one zone; unknown statuses stay visible in the queue. */
+export function graphZoneIdOf(column: KanbanCard['column']): GraphZoneId {
+  return (GRAPH_ZONES.find(zone => zone.columns.has(column)) ?? GRAPH_ZONES[0]).id;
+}
+export interface GraphZone { id: GraphZoneId; label: string; x: number; y: number; width: number; height: number; count: number }
+export interface ProjectGraphArea { id: string; project: string; x: number; y: number; width: number; height: number; zones: GraphZone[] }
 export interface ProjectGrid { nodes: CardGraphNode[]; areas: ProjectGraphArea[]; width: number; height: number }
 export function graphPositionKey(project: string, id: string): string { return JSON.stringify([project, id]); }
 export function matrixColumns(count: number, preference = 0): number {
@@ -46,7 +63,7 @@ function levels(root: CardGraphBranch, expanded: ReadonlySet<string>): LevelEntr
   return output;
 }
 
-/** Each project owns one vertical area. Wide sibling levels wrap into a matrix. */
+/** Each project owns one vertical area; its tasks are grouped into status subzones. Wide levels wrap into a matrix per zone. */
 export function layoutProjectGrid(roots: readonly CardGraphBranch[], expanded: ReadonlySet<string>, preferences: GraphLayoutPreferences): ProjectGrid {
   const nodes: CardGraphNode[] = [];
   const areas: ProjectGraphArea[] = [];
@@ -54,7 +71,6 @@ export function layoutProjectGrid(roots: readonly CardGraphBranch[], expanded: R
   for (const root of orderedProjects(roots, preferences.projectOrder)) {
     const rows = levels(root, expanded);
     const entries = rows.flat();
-    const columns = matrixColumns(Math.max(0, ...rows.map(row => row.length)), preferences.columns);
     const positions = preferences.positions[preferences.direction];
     const points = new Map<string, GraphPoint>();
     const occupied: GraphPoint[] = [];
@@ -65,25 +81,62 @@ export function layoutProjectGrid(roots: readonly CardGraphBranch[], expanded: R
       const placed = freeGraphPoint(remembered, occupied, preferences.direction);
       points.set(entry.branch.id, placed); occupied.push(placed);
     }
-    let startRow = 0;
-    for (const row of rows) {
-      row.forEach((entry, index) => {
-        if (points.has(entry.branch.id)) return;
-        const lane = index % columns;
-        const rank = startRow + Math.floor(index / columns);
-        const desired = preferences.direction === 'vertical'
-          ? { x: PROJECT_PAD + lane * (W + GAP), y: HEADER + rank * (H + GAP) }
-          : { x: HORIZONTAL_HEADER + rank * (W + GAP), y: PROJECT_PAD + lane * (H + GAP) };
-        const placed = freeGraphPoint(desired, occupied, preferences.direction);
-        points.set(entry.branch.id, placed); occupied.push(placed);
-      });
-      startRow += Math.ceil(row.length / columns);
+    // Status zones keep the saved level order and each get a compact matrix.
+    const zones = GRAPH_ZONES.map(zone => ({
+      zone,
+      rows: rows.map(row => row.filter(entry => graphZoneIdOf(entry.branch.card?.column ?? 'inbox') === zone.id)).filter(row => row.length),
+    })).filter(bucket => bucket.rows.length);
+    const zoneGrids = zones.map(bucket => {
+      const widest = Math.max(0, ...bucket.rows.map(row => row.length));
+      const columns = matrixColumns(widest, preferences.columns);
+      const spans = bucket.rows.reduce((sum, row) => sum + Math.ceil(row.length / columns), 0);
+      const count = bucket.rows.reduce((sum, row) => sum + row.length, 0);
+      const laneStep = preferences.direction === 'vertical' ? W : H;
+      const laneExtent = columns * (laneStep + GAP) - GAP;
+      const lineStep = preferences.direction === 'vertical' ? H : W;
+      const lineExtent = spans * (lineStep + GAP) - GAP;
+      const major = laneExtent + ZONE_PAD * 2;
+      const cross = preferences.direction === 'vertical'
+        ? ZONE_HEADER + lineExtent + ZONE_PAD
+        : ZONE_LABEL + ZONE_PAD + lineExtent + ZONE_PAD;
+      return { ...bucket, zone: bucket.zone, columns, count, major, cross, lines: spans, origin: 0 };
+    });
+    let cursor = PROJECT_PAD;
+    for (const grid of zoneGrids) {
+      grid.origin = cursor;
+      cursor += grid.major + ZONE_GAP;
     }
-    const width = Math.max(W + PROJECT_PAD * 2, ...occupied.map(p => p.x + W + PROJECT_PAD));
-    const height = Math.max(H + PROJECT_PAD * 2, ...occupied.map(p => p.y + H + PROJECT_PAD));
+    for (const grid of zoneGrids) {
+      let startLine = 0;
+      for (const row of grid.rows) {
+        row.forEach((entry, index) => {
+          if (points.has(entry.branch.id)) return;
+          const lane = index % grid.columns;
+          const line = startLine + Math.floor(index / grid.columns);
+          const desired = preferences.direction === 'vertical'
+            ? { x: grid.origin + ZONE_PAD + lane * (W + GAP), y: HEADER + ZONE_HEADER + line * (H + GAP) }
+            : { x: HORIZONTAL_HEADER + ZONE_LABEL + ZONE_PAD + line * (W + GAP), y: grid.origin + ZONE_PAD + lane * (H + GAP) };
+          const placed = freeGraphPoint(desired, occupied, preferences.direction);
+          points.set(entry.branch.id, placed); occupied.push(placed);
+        });
+        startLine += Math.ceil(row.length / grid.columns);
+      }
+    }
+    const zoneRects = zoneGrids.map(grid => ({
+      id: grid.zone.id, label: grid.zone.label, count: grid.count,
+      x: preferences.direction === 'vertical' ? grid.origin : HORIZONTAL_HEADER,
+      y: preferences.direction === 'vertical' ? HEADER : grid.origin,
+      width: preferences.direction === 'vertical' ? grid.major : grid.cross,
+      height: preferences.direction === 'vertical' ? grid.cross : grid.major,
+    }));
+    const widthExtent = Math.max(0, ...zoneRects.map(rect => rect.x + rect.width));
+    const heightExtent = Math.max(0, ...zoneRects.map(rect => rect.y + rect.height));
+    const width = Math.max(W + PROJECT_PAD * 2, widthExtent, ...occupied.map(p => p.x + W + PROJECT_PAD));
+    const height = Math.max(H + PROJECT_PAD * 2, heightExtent, ...occupied.map(p => p.y + H + PROJECT_PAD));
     const x = preferences.direction === 'vertical' ? offset : PROJECT_PAD;
     const y = preferences.direction === 'vertical' ? PROJECT_PAD : offset;
-    areas.push({ id: root.id, project: root.project, x, y, width, height });
+    areas.push({ id: root.id, project: root.project, x, y, width, height,
+      zones: zoneRects.map(rect => ({ ...rect, x: x + rect.x, y: y + rect.y })) });
     const { children, ...projectData } = root;
     nodes.push({ ...projectData, depth: 0, childCount: children.length,
       x: x + (preferences.direction === 'vertical' ? (width - W) / 2 : PROJECT_PAD),

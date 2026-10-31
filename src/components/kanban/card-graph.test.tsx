@@ -26,6 +26,39 @@ describe('filtered card graph', () => {
     expect(html).toContain('aria-pressed="true"');
   });
 
+  it('offers the exact-status filter beside direction controls without dropping layout data', () => {
+    const html = renderToStaticMarkup(<CardGraphView cards={[card('q')]} onOpen={() => {}} />);
+    expect(html).toContain('Фильтр точного статуса');
+    for (const label of ['Все', 'Входящие', 'К выполнению', 'В работе', 'Заблокировано', 'На приёмке', 'Бэклог']) {
+      expect(html).toContain('>' + label + '<');
+    }
+  });
+
+  it('groups tasks into status subzones inside project areas and drops the project membership web there', () => {
+    const queue = card('queue-card');
+    const working = { ...card('work-card'), column: 'in-progress' as const };
+    const reviewing = { ...card('review-card'), column: 'review' as const };
+    const html = renderToStaticMarkup(<CardGraphView cards={[queue, working, reviewing]} onOpen={() => {}} />);
+    expect(html).toContain('data-graph-zone="queue"');
+    expect(html).toContain('data-graph-zone="work"');
+    expect(html).toContain('data-graph-zone="review"');
+    expect(html).toContain('Очередь · 1');
+    expect(html).toContain('В работе · 1');
+    expect(html).toContain('На приёмке · 1');
+    expect(html).not.toContain('data-graph-edge="project-task"');
+    expect(html).not.toContain('data-graph-edge="parent-task"');
+  });
+
+  it('keeps real parent-child connectors inside project areas, without inventing project links', () => {
+    const parent = card('root');
+    parent.column = 'in-progress';
+    const child = card('leaf', 'root');
+    child.column = 'review';
+    const html = renderToStaticMarkup(<CardGraphView cards={[parent, child]} onOpen={() => {}} />);
+    expect(html).toContain('data-graph-edge="parent-task"');
+    expect(html).not.toContain('data-graph-edge="project-task"');
+  });
+
 
   it('clips long task titles within their graph cards', () => {
     const longTask = { ...card('long'), title: 'Очень длинное описание задачи '.repeat(20) };
