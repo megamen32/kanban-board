@@ -1,3 +1,4 @@
+import {mutationReasons,recordDiagnostic,type DiagnosticAction} from './board-diagnostics';
 import type { KanbanCard, RoleDefinition } from './types';
 
 interface MutationReply {
@@ -11,33 +12,32 @@ interface MutationReply {
   text?: string;
 }
 
+const requestIds=new WeakMap<Response,string>();
+/** Correlation only, never authorization; no URL or payload enters diagnostics. */
+export async function boardMutationRequest(url:string,init:RequestInit,action:DiagnosticAction):Promise<Response>{
+  const requestId=globalThis.crypto.randomUUID();
+  const headers=new Headers(init.headers);headers.set('x-board-request-id',requestId);
+  try {const response=await fetch(url,{...init,headers});requestIds.set(response,requestId);return response}
+  catch {recordDiagnostic(action,0,'network_unconfirmed',requestId);throw new BoardMutationError('Ответ не получен. Обновите карточку перед повтором; действие могло сохраниться.')}
+}
 export class BoardMutationError extends Error {}
 
 export function mutationErrorMessage(error: unknown): string {
   return error instanceof BoardMutationError ? error.message
-    : 'Не удалось сохранить изменение. Введённые данные сохранены в форме — попробуйте ещё раз.';
+    : 'Не удалось сохранить изменение. Введённые данные сохранены в форме; попробуйте ещё раз.';
 }
 
 /** HTTP errors and login HTML must not close editors or remove local cards. */
-export async function readMutationResponse(response: Response, allowConflict = false): Promise<MutationReply> {
+export async function readMutationResponse(response: Response, allowConflict = false, action:DiagnosticAction = 'update'): Promise<MutationReply> {
   const data = await response.json().catch(() => null) as MutationReply | null;
-  if (allowConflict && response.status === 409 && data?.conflict && data.serverCard) return data;
+  if (allowConflict && response.status === 409 && data?.conflict && data.serverCard) { recordDiagnostic(action,409,'version_conflict',requestIds.get(response)); return data; }
   if (response.ok && data && typeof data === 'object') return data;
-  const reasons: Record<string, string> = {
-    assignee_change_requires_owner_authorization: 'Подтвердите переназначение ответственных перед сохранением.',
-    reviewer_change_requires_owner_authorization: 'Список принимающих результат меняет только владелец доски.',
-    parent_relation_cycle: 'Такая связь создала бы цикл между родительской задачей и подзадачей.',
-    deadline_change_requires_human_ui: 'Для изменения срока нужен подтверждённый вход. Обновите страницу и войдите снова.',
-    weekly_plan_requires_batch_acceptance: 'План недели принимается отдельно на вкладке «Неделя».',
-    weekly_plan_allows_at_most_six_big_rocks: 'На неделю можно принять не больше шести Big Rocks. Сначала пересмотрите текущий план.',
-    blocked_reason_required: 'Напиши, что блокирует задачу; тогда будет понятно, что нужно для продолжения.',
-    blocker_reason_invalid: 'Причина блокировки слишком длинная или имеет неверный формат.',
-    review_requires_explicit_decision: 'Сначала прими результат или верни задачу на доработку в окне карточки.',
-  };
+
+  recordDiagnostic(action,response.status,data?.error,requestIds.get(response));
   const message = !data || response.status === 401 || response.status === 403
     ? 'Войдите снова и повторите сохранение. Введённые данные не удалены.'
-    : reasons[data.error ?? ''] ?? (response.status >= 500
-      ? 'Сервер временно недоступен. Введённые данные не удалены — попробуйте ещё раз.'
+    : (Object.hasOwn(mutationReasons,data.error ?? '')?mutationReasons[data.error!]:undefined) ?? (response.status >= 500
+      ? 'Сервер временно недоступен. Введённые данные не удалены; попробуйте ещё раз.'
       : 'Изменение не сохранено. Проверьте поля и актуальную версию карточки.');
   throw new BoardMutationError(message);
 }
