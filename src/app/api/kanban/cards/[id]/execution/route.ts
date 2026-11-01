@@ -1,3 +1,4 @@
+import { projectTargetPreview } from '../../../../../../lib/kanban/project-target-preview';
 import { configuredDotTransport, reconcileConfiguredDotReceipt } from '../../../../../../lib/kanban/dot-runtime';
 import { startDotExecution, dotExecutionAvailability } from '../../../../../../lib/kanban/dot-execution';
 import { createHash } from 'node:crypto';
@@ -2107,6 +2108,19 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   catch (error) { return nativeIdentityErrorResponse(error); }
   try {
     const { id } = await params;
+    if (request.nextUrl.searchParams.has('target')) {
+      if(request.nextUrl.searchParams.get('target')!=='preview'||[...request.nextUrl.searchParams.keys()].some(key=>key!=='target'))
+        return NextResponse.json({error:'invalid target preview request'},{status:400});
+      const context=await authorizedTaskCard(request,id,'write',nativeContext,false,true);
+      if('response' in context)return context.response;
+      try {
+        const nodeInfo=jsonFromTool(await callOwnerHerderTool('fleet_node_info',{project:context.card.project}));
+        const binding=scopedProjectReadiness(nodeInfo,context.card.project);
+        if(!binding)return NextResponse.json({error:'Точный маршрут проекта пока не готов'},{status:503});
+        return NextResponse.json(projectTargetPreview(binding,context.actor,id,context.card.version,
+          typeof nodeInfo?.nativeUser==='string'?nodeInfo.nativeUser:undefined),{headers:{'Cache-Control':'no-store'}});
+      }catch{return NextResponse.json({error:'Не удалось прочитать маршрут; запуск не выполнялся'},{status:503});}
+    }
     if (request.nextUrl.searchParams.has('question')) {
       if (request.nextUrl.searchParams.get('question') !== 'latest' || [...request.nextUrl.searchParams.keys()].some(key => key !== 'question')) {
         return NextResponse.json({ error: 'invalid task question read request' }, { status: 400 });
@@ -2166,8 +2180,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       const result = await startDotExecution({...context,commission:{kind:'owner-command',actor:context.actor,sourceRef:'board-action:'+context.card.id+':'+body.operationId}}, { expectedVersion: body.expectedVersion as number, operationId: body.operationId }, configuredDotTransport(context.tasksDir));
       return NextResponse.json(result.body, { status: result.status, headers: { 'Cache-Control': 'no-store' } });
     }
-    if (!isRecord(body) || Object.keys(body).length !== 2
-      || Object.keys(body).some(key => !['expectedVersion', 'operationId'].includes(key))
+    if (!isRecord(body) || ![2,3].includes(Object.keys(body).length)
+      || Object.keys(body).some(key => !['expectedVersion', 'operationId','targetPreviewId'].includes(key))
+      || body.targetPreviewId!==undefined && (typeof body.targetPreviewId!=='string'||!/^[a-f0-9]{64}$/.test(body.targetPreviewId))
       || !Number.isSafeInteger(body.expectedVersion) || typeof body.operationId !== 'string'
       || !/^[A-Za-z0-9_-]{16,128}$/.test(body.operationId)) {
       return NextResponse.json({ error: 'invalid execution request' }, { status: 400 });
@@ -2175,6 +2190,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const operationId = operationIdFor(context.card.id, body.operationId);
     const prior = context.card.taskExecutionHistory?.find(entry => entry.operationId === operationId);
     if (prior) {
+      if(body.targetPreviewId!==undefined && prior.targetPreviewId!==body.targetPreviewId)
+        return NextResponse.json({error:'Selected target differs from saved operation'},{status:409});
       if (context.native && prior.startedBy !== context.actor) {
         return NextResponse.json({ error: 'saved execution receipt owner does not match native identity; do not replay or remap this receipt' }, { status: 409 });
       }
@@ -2290,12 +2307,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!projectBinding) {
       return unavailable('project_scoped_execution_not_ready');
     }
+    if(body.targetPreviewId!==undefined) {
+      const currentTarget=projectTargetPreview(projectBinding,context.actor,context.card.id,context.card.version);
+      if(currentTarget.previewId!==body.targetPreviewId)return unavailable('selected_target_changed_refresh_preview');
+      if(!currentTarget.selectable)return unavailable('codex_quota_not_verified');
+    }
     const hostId = projectBinding.hostId;
     const cwd = projectBinding.cwd;
     const requestHash = taskFingerprint(context.card, context.actor, hostId, cwd, projectBinding);
     const intent: TaskExecutionReceipt = {
       operationId, requestHash, lastBoardVersion: context.card.version + 1, createInputId, messageInputId, phase: 'intent',
       hostId, harness: projectRoute.harness, projectBinding, startedBy: context.actor,
+      ...(typeof body.targetPreviewId==='string'?{targetPreviewId:body.targetPreviewId}:{}),
       ...(context.native ? { requestedBy: context.actor } : {}),
       createdAt: now(), updatedAt: now(),
     };

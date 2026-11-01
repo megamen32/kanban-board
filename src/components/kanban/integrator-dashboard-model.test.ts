@@ -224,3 +224,12 @@ it('persists dot target across reopening and rejects invented providers', () => 
  expect(parseStoredStartOperation(JSON.stringify(saved))).toEqual(saved);
  expect(parseStoredStartOperation(JSON.stringify({...saved,target:'other'}))).toBe('invalid');
 });
+
+it('persists the exact native preview selection and refuses mixing it with dot',()=>{
+ const targetPreviewId='a'.repeat(64),operationId='fixture-operation-12345';
+ const saved={operationId,status:'unknown',targetPreviewId};
+ expect(parseStoredStartOperation(JSON.stringify(saved))).toEqual(saved);
+ expect(executionStartRequest(4,operationId,undefined,targetPreviewId)).toEqual({expectedVersion:4,operationId,targetPreviewId});
+ expect(parseStoredStartOperation(JSON.stringify({...saved,target:'dot'}))).toBe('invalid');
+ expect(parseStoredStartOperation(JSON.stringify({...saved,targetPreviewId:'invalid'}))).toBe('invalid');
+});

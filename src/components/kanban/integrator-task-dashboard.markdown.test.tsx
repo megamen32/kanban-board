@@ -132,3 +132,10 @@ it('shows dot unavailable until authenticated server capability is ready', () =>
  expect(html).toContain('value=\"dot\" disabled=\"\"');
  expect(html).toContain('dot (не подключён)');
 });
+
+it('shows a deliberate project route selection step instead of an unseen default harness',()=>{
+ const html=renderToStaticMarkup(React.createElement(IntegratorTaskDashboard,{cards:[card],onOpen:()=>undefined,onRefresh:()=>undefined,canAssignReviewer:false,onAssignReviewer:async()=>null}));
+ expect(html).toContain('Маршрут проекта (не выбран)');
+ expect(html).toContain('Выбрать точный маршрут проекта');
+ expect(html).not.toContain('Codex Олега');
+});

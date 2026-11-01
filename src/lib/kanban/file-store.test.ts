@@ -161,7 +161,7 @@ describe('filesystem kanban contract', () => {
   test('persists exact execution intent and native receipt in existing Markdown with version CAS', () => {
     const created = store.createCard('Durable execution', 'Research brief', 'todo', 'medium', [], 'alpha');
     const intent = {
-      operationId: 'a'.repeat(64), requestHash: 'b'.repeat(64), lastBoardVersion: created.version + 1, createInputId: 'c'.repeat(64), messageInputId: 'd'.repeat(64),
+      targetPreviewId:'e'.repeat(64), operationId: 'a'.repeat(64), requestHash: 'b'.repeat(64), lastBoardVersion: created.version + 1, createInputId: 'c'.repeat(64), messageInputId: 'd'.repeat(64),
       phase: 'intent' as const, hostId: 'roomhacker-server-100', harness: 'codex' as const,
       startedBy: 'nikita', createdAt: '2026-10-20T12:00:00.000Z', updatedAt: '2026-10-20T12:00:00.000Z',
     };
@@ -174,6 +174,7 @@ describe('filesystem kanban contract', () => {
     if (!savedReceipt || 'conflict' in savedReceipt) throw new Error('execution receipt update failed');
     const reopened = store.readCardFile(path.join(root, created.fileName));
     expect(reopened?.taskExecutionHistory).toEqual([running]);
+    expect(()=>store.updateCard(created.id,{taskExecutionHistory:[{...running,targetPreviewId:'bad'}]},savedReceipt.version)).toThrow();
     expect(fs.readFileSync(path.join(root, created.fileName), 'utf8')).toContain('task_execution_history:');
   });
 

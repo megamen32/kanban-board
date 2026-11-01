@@ -18,6 +18,7 @@ export type StoredStartOperation = {
   operationId: string;
   status: 'pending' | 'admitted' | 'unknown';
   target?: 'dot';
+  targetPreviewId?: string;
 };
 
 export type CatalogLinkDisplay = {
@@ -143,16 +144,17 @@ export function parseStoredStartOperation(value: string | null): StoredStartOper
     const record = parsed as Record<string, unknown>;
     if (typeof record.operationId !== 'string' || !EXECUTION_OPERATION_ID_PATTERN.test(record.operationId)
       || !['pending', 'admitted', 'unknown'].includes(String(record.status))
-      || record.target !== undefined && record.target !== 'dot') return 'invalid';
-    return { operationId: record.operationId, status: record.status as StoredStartOperation['status'], ...(record.target === 'dot' ? {target:'dot' as const}: {}) };
+      || record.target !== undefined && record.target !== 'dot'
+      || record.targetPreviewId!==undefined && (record.target==='dot'||typeof record.targetPreviewId!=='string'||!/^[a-f0-9]{64}$/.test(record.targetPreviewId))) return 'invalid';
+    return { operationId: record.operationId, status: record.status as StoredStartOperation['status'], ...(record.target === 'dot' ? {target:'dot' as const}: {}), ...(typeof record.targetPreviewId==='string'?{targetPreviewId:record.targetPreviewId}:{}) };
   } catch {
     return 'invalid';
   }
 }
 
 /** Keep the browser request limited to the server-owned task/version join and its idempotency key. */
-export function executionStartRequest(expectedVersion: number, operationId: string, target?: 'dot') {
-  return { expectedVersion, operationId, ...(target ? { target } : {}) };
+export function executionStartRequest(expectedVersion: number, operationId: string, target?: 'dot',targetPreviewId?:string) {
+  return { expectedVersion, operationId, ...(target ? { target } : targetPreviewId?{targetPreviewId}:{}) };
 }
 
 /** Retry an uncertain saved key only when the current Board read shows no attempt is recorded. */
@@ -261,4 +263,16 @@ export function isVerifiedSessionUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+export type NativeTargetPreview={previewId:string;cardVersion:number;hostId:string;harness:string;model:string;runtimeInstanceId:string;processUser?:string;selectable:boolean;reason?:string};
+export function parseNativeTargetPreview(value:unknown):NativeTargetPreview|null {
+  if(!value||typeof value!=='object'||Array.isArray(value))return null;
+  const r=value as Record<string,unknown>;
+  if(typeof r.previewId!=='string'||!/^[a-f0-9]{64}$/.test(r.previewId)||!Number.isSafeInteger(r.cardVersion)
+    ||typeof r.hostId!=='string'||!r.hostId||!['codex','zcode','opencode'].includes(String(r.harness))
+    ||typeof r.model!=='string'||!r.model||typeof r.runtimeInstanceId!=='string'||!r.runtimeInstanceId
+    ||typeof r.selectable!=='boolean')return null;
+  return {previewId:r.previewId,cardVersion:r.cardVersion as number,hostId:r.hostId,harness:r.harness as string,model:r.model,runtimeInstanceId:r.runtimeInstanceId,selectable:r.selectable,
+    ...(typeof r.processUser==='string'?{processUser:r.processUser}:{}),...(typeof r.reason==='string'?{reason:r.reason}:{})};
 }
