@@ -558,6 +558,42 @@ describe('shared ExManager MCP write scope', () => {
     expect(findCardById(beta.id, tasksDir)?.title).toBe('Beta task');
   });
 
+  it('preserves the signed canonical blockerReason field and rejects changed or misspelled reasons', async () => {
+    const card = createCard('Blocked fixture', '', 'inbox', 'medium', [], 'alpha', [], tasksDir);
+    const args = { mode: 'edit', cardId: card.id, expectedVersion: card.version,
+      column: 'blocked', blockerReason: 'Waiting for owner approval', waitingFor: ['owner'] };
+    const issuedAtMs = Date.now();
+    const claims: TodoMcpWriteScopeClaims = {
+      v: 1, purpose: 'todo-board-mcp-write', userId: 'manager-a', tool: 'kanban.change',
+      argsSha256: scopedArgsHash(args), projects: ['alpha'], owner: false,
+      issuedAtMs, expiresAtMs: issuedAtMs + 120_000,
+    };
+    const envelope = signTodoWriteScope(privateKey, claims);
+    const tampered = await client.callTool({ name: 'kanban.change', arguments: {
+      ...args, blockerReason: 'Different reason', exmanagerScope: envelope,
+    } });
+    expect(tampered.isError).toBe(true);
+    expect(textFromResult(tampered)).toContain('different arguments');
+    expect(findCardById(card.id, tasksDir)?.version).toBe(card.version);
+
+    const { blockerReason, ...rest } = args;
+    const misspelled = { ...rest, blockedReason: blockerReason };
+    const invalid = await client.callTool({ name: 'kanban.change', arguments: {
+      ...misspelled, exmanagerScope: signTodoWriteScope(privateKey, { ...claims, argsSha256: scopedArgsHash(misspelled) }),
+    } });
+    expect(invalid.isError).toBe(true);
+    expect(findCardById(card.id, tasksDir)?.version).toBe(card.version);
+
+    const result = await client.callTool({ name: 'kanban.change', arguments: {
+      ...args, exmanagerScope: envelope,
+    } });
+    expect(result.isError, textFromResult(result)).not.toBe(true);
+    const saved = findCardById(card.id, tasksDir)!;
+    expect(saved.column).toBe('blocked');
+    expect(saved.blockerReason).toBe(args.blockerReason);
+    expect(saved.waitingFor).toEqual(['owner']);
+  });
+
   it('does not let a signed project-scoped create link to a parent from another project', async () => {
     const alpha = createCard('Alpha parent', '', 'todo', 'medium', [], 'alpha', [], tasksDir);
     const beta = createCard('Beta parent', '', 'todo', 'medium', [], 'beta', [], tasksDir);

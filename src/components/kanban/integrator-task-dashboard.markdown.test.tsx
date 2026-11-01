@@ -125,3 +125,10 @@ describe('integrator task dashboard card brief', () => {
     expect(html).toContain('disabled="" title="Назначить проверяющего может только владелец доски"');
   });
 });
+
+it('shows dot unavailable until authenticated server capability is ready', () => {
+ const html=renderToStaticMarkup(React.createElement(IntegratorTaskDashboard,{cards:[card],onOpen:()=>undefined,onRefresh:()=>undefined,canAssignReviewer:false,onAssignReviewer:async()=>null}));
+ expect(html).toContain('Исполнитель задачи');
+ expect(html).toContain('value=\"dot\" disabled=\"\"');
+ expect(html).toContain('dot (не подключён)');
+});

@@ -42,6 +42,7 @@ COPY --from=ws /ws/index.ts ./ws/
 COPY --from=ws /ws/board-watcher.ts ./ws/
 COPY --from=ws /ws/package.json ./ws/
 COPY gateway.js ./gateway.js
+COPY scripts/dot-board-report.mjs ./scripts/dot-board-report.mjs
 
 RUN mkdir -p /app/data/tasks
 VOLUME /app/data/tasks

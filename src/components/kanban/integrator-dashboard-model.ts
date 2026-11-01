@@ -5,6 +5,8 @@ export type ExecutionSnapshot = {
   cardId: string;
   state: 'not-started' | 'running' | 'waiting' | 'stopped' | 'unknown';
   startAvailable?: boolean;
+  dotStartAvailable?: boolean;
+  dotUnavailableReason?: string;
   unavailableReason?: string;
   lastProgress?: { summary: string; at: string };
   nextAction?: string;
@@ -15,6 +17,7 @@ export type ExecutionSnapshot = {
 export type StoredStartOperation = {
   operationId: string;
   status: 'pending' | 'admitted' | 'unknown';
+  target?: 'dot';
 };
 
 export type CatalogLinkDisplay = {
@@ -83,7 +86,7 @@ export function executionOperationStorageKey(cardId: string): string {
 export function durableExecutionReceiptId(receipt: TaskExecutionReceipt | undefined): string | null {
   if (!receipt || !/^[a-f0-9]{64}$/.test(receipt.operationId)
       || !['dispatch-unknown', 'running', 'waiting'].includes(receipt.phase)
-      || !receipt.nativeSessionId || !receipt.hostId || !receipt.requestHash) return null;
+      || (receipt.provider !== 'dot' && !receipt.nativeSessionId) || !receipt.hostId || !receipt.requestHash) return null;
   return receipt.operationId;
 }
 
@@ -110,7 +113,7 @@ export function hasStopReceiptForCurrentEpoch(receipt: TaskExecutionReceipt | un
 export function hasUnresolvedDurableExecution(receipt: TaskExecutionReceipt | undefined): boolean {
   return Boolean(receipt && /^[a-f0-9]{64}$/.test(receipt.operationId)
     && ['created', 'dispatch-unknown', 'running', 'waiting', 'stopped'].includes(receipt.phase)
-    && receipt.nativeSessionId && receipt.hostId && receipt.requestHash);
+    && (receipt.provider === 'dot' || receipt.nativeSessionId) && receipt.hostId && receipt.requestHash);
 }
 
 export function openCodeControlReceipt(
@@ -139,16 +142,17 @@ export function parseStoredStartOperation(value: string | null): StoredStartOper
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'invalid';
     const record = parsed as Record<string, unknown>;
     if (typeof record.operationId !== 'string' || !EXECUTION_OPERATION_ID_PATTERN.test(record.operationId)
-      || !['pending', 'admitted', 'unknown'].includes(String(record.status))) return 'invalid';
-    return { operationId: record.operationId, status: record.status as StoredStartOperation['status'] };
+      || !['pending', 'admitted', 'unknown'].includes(String(record.status))
+      || record.target !== undefined && record.target !== 'dot') return 'invalid';
+    return { operationId: record.operationId, status: record.status as StoredStartOperation['status'], ...(record.target === 'dot' ? {target:'dot' as const}: {}) };
   } catch {
     return 'invalid';
   }
 }
 
 /** Keep the browser request limited to the server-owned task/version join and its idempotency key. */
-export function executionStartRequest(expectedVersion: number, operationId: string) {
-  return { expectedVersion, operationId };
+export function executionStartRequest(expectedVersion: number, operationId: string, target?: 'dot') {
+  return { expectedVersion, operationId, ...(target ? { target } : {}) };
 }
 
 /** Retry an uncertain saved key only when the current Board read shows no attempt is recorded. */
@@ -214,6 +218,8 @@ export function parseExecutionSnapshot(value: unknown, expectedCardId: string): 
   return {
     cardId: expectedCardId,
     state: candidate.state as ExecutionSnapshot['state'],
+    ...(typeof candidate.dotStartAvailable === 'boolean' ? {dotStartAvailable:candidate.dotStartAvailable}: {}),
+    ...(typeof candidate.dotUnavailableReason === 'string' ? {dotUnavailableReason:candidate.dotUnavailableReason}: {}),
     ...(typeof candidate.startAvailable === 'boolean' ? { startAvailable: candidate.startAvailable } : {}),
     ...(typeof candidate.unavailableReason === 'string' ? { unavailableReason: candidate.unavailableReason } : {}),
     ...(lastProgress ? { lastProgress } : {}),

@@ -1,3 +1,5 @@
+import { configuredDotTransport } from '../../../../../../lib/kanban/dot-runtime';
+import { answerDotQuestion } from '../../../../../../lib/kanban/dot-execution';
 import { NextRequest, NextResponse } from 'next/server';
 import { tasksDirForScope } from '../../../../../../lib/auth/data-scope';
 import { findCardById } from '../../../../../../lib/kanban/file-store';
@@ -18,6 +20,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try { body = await request.json(); } catch { return NextResponse.json({ error: 'invalid json' }, { status: 400 }); }
   const value = body && typeof body === 'object' ? (body as Record<string, unknown>).value : undefined;
   if (typeof value !== 'string') return NextResponse.json({ error: 'value required' }, { status: 400 });
+  if (card.taskExecutionHistory?.at(-1)?.provider === 'dot') {
+    const result=await answerDotQuestion({card,actor,tasksDir},value,configuredDotTransport(tasksDir));
+    return NextResponse.json(result.body,{status:result.status,headers:{'Cache-Control':'no-store'}});
+  }
   const outcome = await applyAnswer(id, tasksDir, value, actor);
   if (outcome.status !== 'ok') {
     if (outcome.status === 'no_question') return NextResponse.json({ error: 'no pending question' }, { status: 404 });

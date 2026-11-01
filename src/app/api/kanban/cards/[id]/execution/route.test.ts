@@ -557,6 +557,14 @@ function observedHerderDelivery(delivery: string, inputId = 'fixture-input', tar
 }
 
 describe('task execution API', () => {
+  it('explicit dot target never falls back to native creation when transport is absent', async () => {
+    const response = await POST(postRequest({operationId, expectedVersion:4, target:'dot'}), {params:Promise.resolve({id:baseCard.id})});
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({delivery:'not_attempted',target:'dot'});
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
+    expect(mocks.updateCard).not.toHaveBeenCalled();
+  });
+
   it('keeps the matched task prompt free of the old human_request protocol and of any executor key', () => {
     const prompt = taskPrompt(baseCard as KanbanCard, {
       operationId: 'op-question-1234567890', harness: 'opencode', sessionId: 'ses_question', cwd: '/srv/excode',
@@ -653,7 +661,7 @@ describe('task execution API', () => {
       params: Promise.resolve({ id: baseCard.id }),
     });
     if (!response) throw new Error('execution response missing');
-    expect(await response.json()).toEqual({ cardId: 'task-1', state: 'not-started', startAvailable: true });
+    expect(await response.json()).toEqual({ cardId: 'task-1', state: 'not-started', startAvailable: true, dotStartAvailable: false, dotUnavailableReason: 'Защищённый канал dot ещё не подключён' });
     expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
   });
 
