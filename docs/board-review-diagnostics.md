@@ -14,3 +14,12 @@
 
 ## Checks
 Cover review versus non-review drag intent, accepted/rejected decisions, version conflicts, repeated failures, unknown/raw secret-bearing errors, journal cap and clearing. Deployment and authenticated browser acceptance remain pending.
+
+## Implemented scope
+- Dragging out of review opens the existing card dialog without sending an invalid generic PATCH. The user still makes an explicit accept/rework decision there.
+- Existing shared mutation response handling owns error classification. Known reasons are allowlisted; unknown provider output is never rendered or retained.
+- The diagnostic panel stores at most 30 records in memory for the current view, clearing on identity change/unmount/reload. No persistent browser storage, server log database or additional authorization.
+- Create/update/delete/reorder/review requests attach a generated x-board-request-id. The journal associates failures with that actual outgoing request ID. This is correlation metadata, not proof of server receipt or a new server-side trace index.
+- Network uncertainty is reported without automatic retry. Version conflicts still use the existing compare-and-retry flow.
+- This first slice does not cover arbitrary executor errors or all external MCP activity. It is not a terminal and cannot execute commands.
+- Authentication, reviewer identity, optimistic version and transition policy are unchanged.

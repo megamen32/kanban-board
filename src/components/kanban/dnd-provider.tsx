@@ -13,10 +13,11 @@ interface Props {
   children: React.ReactNode;
   cards: CardType[];
   onMoveCard: (cardId: string, newColumn: ColType, order?: number) => Promise<CardType | null>;
+  onReviewRequired?: (card:CardType)=>void;
   onReorder: (column: ColType, cardIds: string[]) => Promise<void>;
 }
 
-export function DndProvider({ children, cards, onMoveCard, onReorder }: Props) {
+export function DndProvider({ children, cards, onMoveCard, onReorder, onReviewRequired }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const sensors = useSensors(
@@ -55,6 +56,10 @@ export function DndProvider({ children, cards, onMoveCard, onReorder }: Props) {
     }
 
     setError(null);
+    if (card.column === 'review' && targetCol !== card.column && onReviewRequired) {
+      onReviewRequired(card);
+      return;
+    }
     try {
     if (targetCol !== card.column) {
       const saved = await onMoveCard(cardId, targetCol, targetOrder);
@@ -66,7 +71,7 @@ export function DndProvider({ children, cards, onMoveCard, onReorder }: Props) {
       await onReorder(targetCol, reordered.map(c => c.id));
     }
     } catch (failure) { setError(mutationErrorMessage(failure)); }
-  }, [cards, onMoveCard, onReorder]);
+  }, [cards, onMoveCard, onReorder, onReviewRequired]);
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>

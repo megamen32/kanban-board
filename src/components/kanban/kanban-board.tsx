@@ -1,4 +1,5 @@
 'use client';
+import {BoardDiagnosticsPanel} from './board-diagnostics-panel';
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useKanban } from '@/hooks/use-kanban';
@@ -46,7 +47,7 @@ import { InboxCapture } from './inbox-capture';
 import { IntegratorTaskDashboard } from './integrator-task-dashboard';
 import { parseBoardUrlState, serializeBoardUrlState, resolveBoardLayout, type BoardLayout, type ClosedKind } from './board-url-state';
 import { describePlacement, automaticRevealScope, placeCreatedCard, type BoardScope } from './create-receipt';
-import { mutationErrorMessage, readMutationResponse } from '../../lib/kanban/mutation-response';
+import { mutationErrorMessage, readMutationResponse, boardMutationRequest } from '../../lib/kanban/mutation-response';
 
 const PRIMARY_BOARD_COLUMNS = [
   { ...DEFAULT_COLUMNS.find(column => column.id === 'todo')!, title: 'Входящие' },
@@ -199,11 +200,11 @@ export function KanbanBoard() {
 
   const handleDelete = useCallback(async (id: string) => deleteCard(id), [deleteCard]);
   const handleReviewDecision = useCallback(async (id: string, action: HumanReviewAction, note: string, version: number) => {
-    const response = await fetch(`/api/kanban/cards/${encodeURIComponent(id)}/review`, {
+    const response = await boardMutationRequest(`/api/kanban/cards/${encodeURIComponent(id)}/review`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action, note, expectedVersion: version }),
-    });
-    const data = await readMutationResponse(response, true);
+    }, 'review');
+    const data = await readMutationResponse(response, true, 'review');
     if (data.conflict) return null;
     await refresh();
     return data.card ?? null;
@@ -263,7 +264,8 @@ export function KanbanBoard() {
 
   return (
     <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete, roles, username, refresh, highlightCardId, relatedCards: visibleCards, breadcrumbCards: scopedCards, onSelectCard: setSelectedCard }}>
-      <DndProvider cards={visibleCards} onMoveCard={moveCard} onReorder={reorderColumn}>
+      <DndProvider cards={visibleCards} onMoveCard={moveCard} onReorder={reorderColumn} onReviewRequired={setSelectedCard}>
+      <BoardDiagnosticsPanel identity={username} />
         <div className="relative z-20 shrink-0 border-b px-2 py-1.5 sm:px-4">
           <div className="flex flex-wrap items-center gap-1.5 sm:flex-nowrap">
             <div className="flex shrink-0 items-center gap-1.5">
