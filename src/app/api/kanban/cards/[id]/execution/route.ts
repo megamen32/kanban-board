@@ -1,3 +1,5 @@
+import { configuredDotTransport } from '../../../../../../lib/kanban/dot-runtime';
+import { startDotExecution, dotExecutionAvailability } from '../../../../../../lib/kanban/dot-execution';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
@@ -810,6 +812,7 @@ function expectedModel(attempt: TaskExecutionReceipt): string {
 
 /** The harness the launch route designated. A legacy receipt without a binding keeps its own harness. */
 function expectedHarness(attempt: TaskExecutionReceipt): RouteHarness {
+  if (attempt.harness === 'dot') throw new Error('dot is not a native session harness');
   return attempt.projectBinding?.harness ?? attempt.harness;
 }
 
@@ -2126,7 +2129,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       if (!access.readAllowed) return NextResponse.json({ error: 'not found' }, { status: 404 });
       const availability = access.writeAllowed ? startAvailability(card)
         : { startAvailable: false, unavailableReason: 'Текущие права проекта доступны только для чтения.' };
-      return NextResponse.json({ ...taskExecutionSnapshot(card), ...availability }, { headers: { 'Cache-Control': 'no-store' } });
+      return NextResponse.json({ ...taskExecutionSnapshot(card), ...availability, ...await dotExecutionAvailability(card, nativeContext.userId, access.writeAllowed ? configuredDotTransport(tasksDir) : undefined) }, { headers: { 'Cache-Control': 'no-store' } });
     }
     const identity = automationIdentityFor(request, id) ?? await executionIdentityFromRequest(request);
     const readIdentity = identity ?? boardIdentityFromRequest(request);
@@ -2134,7 +2137,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     if (!found) return NextResponse.json({ error: 'not found' }, { status: 404 });
     // Stage 1 lazy timeout: an overdue unanswered board question gets its timeoutValue now.
     const card = identity ? await sweepQuestionTimeout(found, tasksDirForScope(readIdentity.scope)) : found;
-    return NextResponse.json({ ...taskExecutionSnapshot(card), ...taskStartAvailability(card, identity) }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ ...taskExecutionSnapshot(card), ...taskStartAvailability(card, identity), ...await dotExecutionAvailability(card, identity?.username, configuredDotTransport(tasksDirForScope(readIdentity.scope))) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch {
     return NextResponse.json({ error: 'execution status could not be read' }, { status: 400 });
   }
@@ -2153,6 +2156,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   try {
     const body: unknown = await request.json();
+    if (isRecord(body) && body.target === 'dot') {
+      if (Object.keys(body).some(key => !['target', 'expectedVersion', 'operationId'].includes(key))
+        || !Number.isSafeInteger(body.expectedVersion) || typeof body.operationId !== 'string'
+        || !/^[A-Za-z0-9_-]{16,128}$/.test(body.operationId))
+        return NextResponse.json({ error: 'invalid dot execution request' }, { status: 400 });
+      const result = await startDotExecution({...context,commission:{kind:'owner-command',actor:context.actor,sourceRef:'board-action:'+context.card.id+':'+body.operationId}}, { expectedVersion: body.expectedVersion as number, operationId: body.operationId }, configuredDotTransport(context.tasksDir));
+      return NextResponse.json(result.body, { status: result.status, headers: { 'Cache-Control': 'no-store' } });
+    }
     if (!isRecord(body) || Object.keys(body).length !== 2
       || Object.keys(body).some(key => !['expectedVersion', 'operationId'].includes(key))
       || !Number.isSafeInteger(body.expectedVersion) || typeof body.operationId !== 'string'
@@ -2692,6 +2703,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const allowAutomation = isRecord(body) && ['answer-question', 'sync-result'].includes(String(body.action));
     const context = await authorizedTaskCard(request, id, 'write', undefined, allowAssignedReviewer, allowAutomation);
     if ('response' in context) return context.response;
+    if (context.card.taskExecutionHistory?.at(-1)?.provider === 'dot') {
+      if (isRecord(body) && body.action === 'sync-result')
+        return NextResponse.json({ ...taskExecutionSnapshot(context.card), retryable: false }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+      return NextResponse.json({ error: 'Dot actions require the protected dot callback, not native session control' }, { status: 409 });
+    }
     if (context.native && isRecord(body) && typeof body.operationId === 'string') {
       const receiptId = ['continue-task', 'sync-task-continuation'].includes(String(body.action))
         ? /^[a-f0-9]{64}$/.test(body.operationId) ? body.operationId : undefined

@@ -312,6 +312,8 @@ export interface PendingQuestion {
   deliveryError?: string;
 }
 export interface TaskExecutionReceipt {
+  provider?: 'dot';
+  dot?: { commission: {kind:'owner-command'|'source-intent';actor:string;sourceRef:string}; roomId: string; requestId: string; receiptId?: string; receiptHash?: string; receipts?: Array<{id:string;hash:string}>; delivery: 'reserved' | 'accepted' | 'unknown' | 'not_accepted' };
   /** sha256 hex of the per-attempt executor key; the plain key exists only in the executor prompt. */
   executorKeyHash?: string;
   operationId: string;
@@ -322,7 +324,7 @@ export interface TaskExecutionReceipt {
   messageInputId: string;
   phase: TaskExecutionPhase;
   hostId: string;
-  harness: 'codex' | 'zcode' | 'opencode';
+  harness: 'codex' | 'zcode' | 'opencode' | 'dot';
   /** New scoped launches persist their exact H33 project/root/CWD binding; older receipts remain legacy. */
   projectBinding?: TaskExecutionProjectBinding;
   nativeSessionId?: string;

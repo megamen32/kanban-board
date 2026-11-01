@@ -214,3 +214,13 @@ describe('integrator dashboard model', () => {
     expect(executionSignalLabel('running')).toContain('активная сессия не подтверждена');
   });
 });
+
+it('preserves explicit dot target without choosing a native harness', () => {
+  expect(executionStartRequest(4, 'fixture-operation-12345', 'dot')).toEqual({ expectedVersion: 4, operationId: 'fixture-operation-12345', target: 'dot' });
+});
+
+it('persists dot target across reopening and rejects invented providers', () => {
+ const saved={operationId:'fixture-operation-12345',status:'unknown',target:'dot'};
+ expect(parseStoredStartOperation(JSON.stringify(saved))).toEqual(saved);
+ expect(parseStoredStartOperation(JSON.stringify({...saved,target:'other'}))).toBe('invalid');
+});

@@ -865,7 +865,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       || typeof entry.messageInputId !== 'string' || !/^[a-f0-9]{64}$/.test(entry.messageInputId)
       || !['intent', 'create-unknown', 'created', 'dispatch-unknown', 'running', 'waiting', 'stopped', 'result'].includes(String(entry.phase))
       || typeof entry.hostId !== 'string' || !entry.hostId.trim() || entry.hostId.length > 512
-      || !['codex', 'zcode', 'opencode'].includes(String(entry.harness))
+      || !['codex', 'zcode', 'opencode', 'dot'].includes(String(entry.harness))
       || typeof entry.startedBy !== 'string' || !entry.startedBy.trim() || entry.startedBy.length > 256
       || entry.requestedBy !== undefined && (typeof entry.requestedBy !== 'string' || !entry.requestedBy.trim() || entry.requestedBy.length > 256 || /[\x00-\x1f\x7f]/.test(entry.requestedBy))
       || typeof entry.createdAt !== 'string' || Number.isNaN(Date.parse(entry.createdAt))
@@ -891,6 +891,25 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
         || (entry.taskDecisionRequest.version as number) > (entry.lastBoardVersion as number))) {
       throw invalidPlanningField(field, 'invalid immutable operation identity or receipt state');
     }
+    if (entry.harness === 'dot') {
+      if (entry.provider !== 'dot' || entry.hostId !== 'chatgpt' || !isRecord(entry.dot)
+        || !isRecord(entry.dot.commission) || entry.dot.commission.actor!==entry.startedBy
+        || !['owner-command','source-intent'].includes(String(entry.dot.commission.kind))
+        || typeof entry.dot.commission.sourceRef!=='string' || !entry.dot.commission.sourceRef.trim() || entry.dot.commission.sourceRef.length>512
+        || typeof entry.dot.roomId !== 'string' || !/^[a-f0-9]{32}$/.test(entry.dot.roomId)
+        || entry.dot.requestId !== 'board:' + entry.operationId
+        || entry.dot.receipts !== undefined && (!Array.isArray(entry.dot.receipts) || entry.dot.receipts.length>128 || entry.dot.receipts.some(item=>!isRecord(item)||typeof item.id!=='string'||!/^[A-Za-z0-9:_-]{1,200}$/.test(item.id)||typeof item.hash!=='string'||!/^[a-f0-9]{64}$/.test(item.hash)) || new Set(entry.dot.receipts.map(item=>(item as Record<string,unknown>).id)).size!==entry.dot.receipts.length)
+        || entry.dot.receiptHash !== undefined && (typeof entry.dot.receiptHash !== 'string' || !/^[a-f0-9]{64}$/.test(entry.dot.receiptHash))
+        || entry.dot.receiptId !== undefined && (typeof entry.dot.receiptId !== 'string' || !/^[A-Za-z0-9:_-]{1,200}$/.test(entry.dot.receiptId))
+        || !['reserved', 'accepted', 'unknown', 'not_accepted'].includes(String(entry.dot.delivery))
+        || ['created', 'create-unknown'].includes(String(entry.phase))
+        || entry.nativeSessionId !== undefined || entry.nativeTurnId !== undefined || entry.projectBinding !== undefined
+        || entry.nativeInputMessageId !== undefined || entry.nativeDispatchJobId !== undefined
+        || entry.sessionControls !== undefined || entry.continuations !== undefined)
+        throw invalidPlanningField(field, 'invalid dot provider receipt');
+    } else if (entry.provider !== undefined || entry.dot !== undefined) {
+      throw invalidPlanningField(field, 'dot metadata cannot decorate a native receipt');
+    }
     const executorQuestion = entry.executorQuestion === undefined ? undefined
       : taskExecutionQuestionField(entry.executorQuestion, `${field}.executorQuestion`);
     const taskDecisionProposal = entry.taskDecisionProposal === undefined ? undefined
@@ -904,7 +923,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
         || !executorQuestion.choices.some(choice => choice.value === taskDecisionProposal.value))) {
       throw invalidPlanningField(`${field}.taskDecisionProposal`, 'proposal is not bound to the saved executor question');
     }
-    if (['created', 'dispatch-unknown', 'running', 'waiting', 'stopped', 'result'].includes(String(entry.phase)) && !entry.nativeSessionId) {
+    if (entry.harness !== 'dot' && ['created', 'dispatch-unknown', 'running', 'waiting', 'stopped', 'result'].includes(String(entry.phase)) && !entry.nativeSessionId) {
       throw invalidPlanningField(`${field}.nativeSessionId`, 'required after session creation');
     }
     const exactOpenCodeInputBinding = entry.harness === 'opencode' && entry.projectBinding !== undefined
@@ -913,13 +932,14 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
     // executor key; unlike the legacy transcript path it has no native turn ID.
     const directBoardExecutor = typeof entry.executorKeyHash === 'string'
       && /^[a-f0-9]{64}$/.test(entry.executorKeyHash);
-    if (['running', 'waiting', 'result'].includes(String(entry.phase)) && !entry.nativeTurnId
+    if (entry.harness !== 'dot' && ['running', 'waiting', 'result'].includes(String(entry.phase)) && !entry.nativeTurnId
       && !exactOpenCodeInputBinding && !directBoardExecutor) {
       throw invalidPlanningField(`${field}.nativeTurnId`, 'required after native turn admission');
     }
     const projectBinding = entry.projectBinding === undefined ? undefined : normalizeTaskExecutionProjectBinding(entry.projectBinding);
     seen.add(entry.operationId);
     return {
+      ...(entry.harness === 'dot' ? { provider: 'dot' as const, dot: { ...(Array.isArray((entry.dot as Record<string,unknown>).receipts) ? {receipts: ((entry.dot as Record<string,unknown>).receipts as Array<{id:string;hash:string}>).map(item=>({id:item.id,hash:item.hash}))}: {}), commission: {kind:(entry.dot as {commission:{kind:'owner-command'|'source-intent'}}).commission.kind,actor:(entry.dot as {commission:{actor:string}}).commission.actor,sourceRef:(entry.dot as {commission:{sourceRef:string}}).commission.sourceRef}, ...(typeof (entry.dot as Record<string, unknown>).receiptId === 'string' ? {receiptId: (entry.dot as Record<string, string>).receiptId, ... (typeof (entry.dot as Record<string, unknown>).receiptHash === 'string' ? {receiptHash:(entry.dot as Record<string, string>).receiptHash} : {})} : {}), roomId: (entry.dot as Record<string, string>).roomId, requestId: (entry.dot as Record<string, string>).requestId, delivery: (entry.dot as { delivery: 'reserved' | 'accepted' | 'unknown' | 'not_accepted' }).delivery } } : {}),
       operationId: entry.operationId,
       requestHash: entry.requestHash,
       lastBoardVersion: entry.lastBoardVersion as number,

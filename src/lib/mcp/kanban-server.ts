@@ -45,6 +45,7 @@ const cardInput = {
   source: z.string().optional(),
   needsReview: z.boolean().optional(),
   suggestedAssignee: z.string().optional(),
+  blockerReason: z.string().max(4000).nullable().optional(),
   waitingFor: z.array(z.string()).max(20).optional(),
   requiresApprovalFrom: z.array(z.string()).max(20).optional(),
   completedBy: z.string().optional(),
@@ -81,6 +82,7 @@ type ChangeInput = {
   source?: string;
   needsReview?: boolean;
   suggestedAssignee?: string;
+  blockerReason?: string | null;
   waitingFor?: string[];
   requiresApprovalFrom?: string[];
   completedBy?: string;
