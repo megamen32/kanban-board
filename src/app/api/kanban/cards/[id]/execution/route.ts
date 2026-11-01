@@ -1,4 +1,4 @@
-import { configuredDotTransport } from '../../../../../../lib/kanban/dot-runtime';
+import { configuredDotTransport, reconcileConfiguredDotReceipt } from '../../../../../../lib/kanban/dot-runtime';
 import { startDotExecution, dotExecutionAvailability } from '../../../../../../lib/kanban/dot-execution';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -2129,7 +2129,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       if (!access.readAllowed) return NextResponse.json({ error: 'not found' }, { status: 404 });
       const availability = access.writeAllowed ? startAvailability(card)
         : { startAvailable: false, unavailableReason: 'Текущие права проекта доступны только для чтения.' };
-      return NextResponse.json({ ...taskExecutionSnapshot(card), ...availability, ...await dotExecutionAvailability(card, nativeContext.userId, access.writeAllowed ? configuredDotTransport(tasksDir) : undefined) }, { headers: { 'Cache-Control': 'no-store' } });
+      const refreshed=access.writeAllowed ? await reconcileConfiguredDotReceipt(card,tasksDir,nativeContext.userId) : card;
+      return NextResponse.json({ ...taskExecutionSnapshot(refreshed), ...availability, ...await dotExecutionAvailability(refreshed, nativeContext.userId, access.writeAllowed ? configuredDotTransport(tasksDir) : undefined) }, { headers: { 'Cache-Control': 'no-store' } });
     }
     const identity = automationIdentityFor(request, id) ?? await executionIdentityFromRequest(request);
     const readIdentity = identity ?? boardIdentityFromRequest(request);
@@ -2137,7 +2138,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     if (!found) return NextResponse.json({ error: 'not found' }, { status: 404 });
     // Stage 1 lazy timeout: an overdue unanswered board question gets its timeoutValue now.
     const card = identity ? await sweepQuestionTimeout(found, tasksDirForScope(readIdentity.scope)) : found;
-    return NextResponse.json({ ...taskExecutionSnapshot(card), ...taskStartAvailability(card, identity), ...await dotExecutionAvailability(card, identity?.username, configuredDotTransport(tasksDirForScope(readIdentity.scope))) }, { headers: { 'Cache-Control': 'no-store' } });
+    const refreshed=await reconcileConfiguredDotReceipt(card,tasksDirForScope(readIdentity.scope),identity?.username);
+    return NextResponse.json({ ...taskExecutionSnapshot(refreshed), ...taskStartAvailability(refreshed, identity), ...await dotExecutionAvailability(refreshed, identity?.username, configuredDotTransport(tasksDirForScope(readIdentity.scope))) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch {
     return NextResponse.json({ error: 'execution status could not be read' }, { status: 400 });
   }

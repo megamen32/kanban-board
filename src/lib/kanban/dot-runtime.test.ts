@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {beforeEach,afterEach,it,expect,vi} from 'vitest';
 import {createCard,findCardById,updateCard} from './file-store';
 import {startDotExecution} from './dot-execution';
-import {configuredDotTransport,handleDotCallback,DOT_ROOM} from './dot-runtime';
+import {configuredDotTransport,handleDotCallback,DOT_ROOM,reconcileConfiguredDotReceipt} from './dot-runtime';
 vi.mock('@/lib/kanban/task-execution-client',()=>({callOwnerHerderTool:vi.fn()}));
 let dir:string,state:string;
 beforeEach(()=>{dir=mkdtempSync(join(tmpdir(),'dot-runtime-'));state=mkdtempSync(join(tmpdir(),'dot-grant-'));vi.stubEnv('BOARD_DOT_STATE_DIR',state);});
@@ -96,4 +96,16 @@ it('helper never repeats an unknown POST and does not accept arbitrary callback 
  expect((await reportDotEvent(event,{stateDir:state,fetcher})).status).toBe('unknown');
  expect(verbs).toEqual(['POST','GET']);
  expect((await reportDotEvent({...event,url:'https://other.invalid'},{stateDir:state,fetcher})).status).toBe('invalid_request');
+});
+
+it('query-only admission readback updates accepted metadata without starting work or replaying POST',async()=>{
+ const f=fixture();const failing=vi.fn(async()=>{throw Error('unknown');});
+ await startDotExecution({card:f.card,actor:'nikita',tasksDir:dir,commission:{kind:'owner-command',actor:'nikita',sourceRef:'owner-test'}},
+ {expectedVersion:f.card.version,operationId:'test-operation-123456'},configuredDotTransport(dir,failing as typeof fetch));
+ const card=findCardById(f.card.id,dir)!, op=card.taskExecutionHistory![0].operationId;
+ const get=vi.fn(async(_url:unknown,options?:RequestInit)=>{expect(options?.method).toBeUndefined();return Response.json({requestId:'board:'+op,status:'accepted'});});
+ const refreshed=await reconcileConfiguredDotReceipt(card,dir,'nikita',get as typeof fetch);
+ expect(refreshed.taskExecutionHistory![0].dot!.delivery).toBe('accepted');
+ expect(refreshed.taskExecutionHistory![0].phase).toBe('dispatch-unknown');
+ expect(refreshed.column).toBe('todo');expect(failing).toHaveBeenCalledTimes(1);expect(get).toHaveBeenCalledTimes(1);
 });

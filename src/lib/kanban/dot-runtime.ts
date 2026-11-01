@@ -1,7 +1,7 @@
 import { constants, openSync, closeSync, fstatSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { findCardById } from './file-store';
+import { findCardById, updateCard } from './file-store';
 import { composeDotTransport } from './dot-transport-binding';
 import { recordDotEvent } from './dot-execution';
 import type { KanbanCard } from './types';
@@ -120,4 +120,26 @@ export async function handleDotCallback(request:Request,cardId:string,tasksDir:s
     return {safeSummary:body.summary,safeQuestion:body.question};
   });
   return reply(result.body,result.status);
+}
+
+/** Query-only recovery of an uncertain admission. Never repeats POST or claims task completion. */
+export async function reconcileConfiguredDotReceipt(card:KanbanCard,tasksDir:string,actor:string|undefined,fetcher:typeof fetch=fetch):Promise<KanbanCard> {
+  const g=grant(), attempt=card.taskExecutionHistory?.at(-1);
+  if(!g||!actor||!allowed(g,card,actor)||attempt?.provider!=='dot'||attempt.dot?.delivery!=='unknown'
+    ||['result','stopped'].includes(attempt.phase))return card;
+  let status:string;
+  try {
+    const r=await fetcher(ORIGIN+'/'+encodeURIComponent(attempt.dot.requestId),{headers:{Authorization:'Bearer '+g.token},
+      redirect:'error',signal:AbortSignal.timeout(10000),cache:'no-store'});
+    if(!r.ok)return card;
+    const text=await r.text();if(text.length>2048)return card;
+    const receipt=JSON.parse(text);
+    if(receipt.requestId!==attempt.dot.requestId||receipt.status!=='accepted')return card;
+    status=receipt.status;
+  }catch{return card;}
+  const fresh=findCardById(card.id,tasksDir),currentGrant=grant();
+  if(!fresh||fresh.version!==card.version||!currentGrant||!allowed(currentGrant,fresh,actor)||status!=='accepted')return fresh??card;
+  const saved=updateCard(card.id,{taskExecutionHistory:fresh.taskExecutionHistory!.map(item=>item.operationId===attempt.operationId
+    ?{...item,lastBoardVersion:fresh.version+1,updatedAt:new Date().toISOString(),dot:{...item.dot!,delivery:'accepted'}}:item)},fresh.version,tasksDir);
+  return 'conflict' in saved?findCardById(card.id,tasksDir)??card:saved;
 }
