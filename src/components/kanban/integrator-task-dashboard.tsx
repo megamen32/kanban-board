@@ -1,5 +1,6 @@
 'use client';
 
+import {ExecutionStatusReads,automaticExecutionSyncAllowed} from '@/lib/kanban/execution-status-reads';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUpRight, CircleHelp, Clock3, Pencil, Play, UserRoundCheck } from 'lucide-react';
 import type { KanbanCard, TaskExecutionReceipt, TaskExecutionSessionControlPhase } from '@/lib/kanban/types';
@@ -139,25 +140,38 @@ const AUTO_SYNC_LIMIT_MS = 30 * 60_000;
 const AUTO_SYNC_PHASES: ReadonlySet<string> = new Set(['intent', 'create-unknown', 'created', 'dispatch-unknown', 'running', 'waiting']);
 
 /** Polls the saved start receipt while the attempt is non-terminal; the parent guards against overlapping requests. */
-function ResultAutoSync({ active, phaseKey, onSync }: { active: boolean; phaseKey: string; onSync: () => void }) {
+function ResultAutoSync({ active, phaseKey, onSync }: { active: boolean; phaseKey: string; onSync: () => Promise<boolean | undefined> }) {
   const onSyncRef = useRef(onSync);
+  const marker=useRef<HTMLSpanElement>(null);
+  const visible=useRef(false);
+  useEffect(()=>{const target=marker.current?.closest('article');if(!target||typeof IntersectionObserver==='undefined')return;const observer=new IntersectionObserver(entries=>{visible.current=entries.some(entry=>entry.isIntersecting)});observer.observe(target);return ()=>observer.disconnect()},[]);
   const firstActiveAt = useRef<number | null>(null);
   useEffect(() => { onSyncRef.current = onSync; });
   useEffect(() => {
     if (!active) { firstActiveAt.current = null; return; }
     const started = firstActiveAt.current ?? Date.now();
     firstActiveAt.current = started;
-    const timer = window.setInterval(() => {
+    let busy=false;let failures=0;let nextAt=0;
+    const timer = window.setInterval(async () => {
       if (Date.now() - started >= AUTO_SYNC_LIMIT_MS) { window.clearInterval(timer); return; }
-      onSyncRef.current();
+      if(busy||Date.now()<nextAt||!automaticExecutionSyncAllowed(active,visible.current,document.visibilityState==='visible',Date.now()-started))return;
+      busy=true;
+      try{const ok=await onSyncRef.current();failures=ok?0:failures+1;}
+      catch{failures++;}
+      finally{busy=false;nextAt=Date.now()+Math.min(120000,AUTO_SYNC_INTERVAL_MS*2**failures);}
     }, AUTO_SYNC_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [active, phaseKey]);
-  return null;
+  return <span ref={marker} aria-hidden className="sr-only" />;
 }
 
 export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignReviewer, onAssignReviewer }: Props) {
   const [executions, setExecutions] = useState<Record<string, ExecutionSnapshot | null>>({});
+  const statusReads=useMemo(()=>new ExecutionStatusReads<ExecutionSnapshot>(),[]);
+  const [executionVersions,setExecutionVersions]=useState<Record<string,number>>({});
+  const [statusBusy,setStatusBusy]=useState<Record<string,boolean>>({});
+  const cardsRef=useRef(cards);useEffect(()=>{cardsRef.current=cards},[cards]);
+  useEffect(()=>()=>statusReads.abort(),[statusReads]);
   const [storedOperations, setStoredOperations] = useState<Record<string, StoredOperationState>>({});
   const [safeRetryOperationIds, setSafeRetryOperationIds] = useState<Record<string, string | undefined>>({});
   const [recoverableSessionOperationIds, setRecoverableSessionOperationIds] = useState<Record<string, string | undefined>>({});
@@ -186,6 +200,22 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
   const reviewerOptions = useMemo(() => [...new Set(cards.flatMap(card => [
     card.owner ?? '', card.assignee ?? '', ...card.assignees, ...(card.requiresApprovalFrom ?? []),
   ]).map(person => person.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru')), [cards]);
+
+  async function readExecution(card:KanbanCard){
+    if(statusBusy[card.id])return;
+    setStatusBusy(previous=>({...previous,[card.id]:true}));
+    try{
+      const snapshot=await statusReads.read(card.id,card.version,async signal=>{
+        const response=await fetch('/api/kanban/cards/'+encodeURIComponent(card.id)+'/execution',{cache:'no-store',signal});
+        if(!response.ok)throw Error('status_unavailable');
+        const body:unknown=await response.json();
+        const raw=body&&typeof body==='object'&&'execution' in body?(body as {execution:unknown}).execution:body;
+        const parsed=parseExecutionSnapshot(raw,card.id);if(!parsed)throw Error('status_invalid');return parsed;
+      });
+      if(snapshot){setExecutions(previous=>({...previous,[card.id]:snapshot}));setExecutionVersions(previous=>({...previous,[card.id]:card.version}));}
+      else setStartMessages(previous=>({...previous,[card.id]:'Статус временно недоступен или проверка уже идёт. Автоматического повтора нет; повторите позже.'}));
+    }finally{setStatusBusy(previous=>({...previous,[card.id]:false}));}
+  }
 
   async function assignReviewer(card: KanbanCard) {
     const reviewer = reviewerDraft.trim();
@@ -276,6 +306,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
       const preview=r.ok?parseNativeTargetPreview(body):null;
       if(!preview||preview.cardVersion!==card.version)throw Error();
       setNativeTargets(previous=>({...previous,[card.id]:preview}));
+      await readExecution(card);
       setStartMessages(previous=>({...previous,[card.id]:preview.reason??'Маршрут выбран явно. При его изменении запуск будет отклонён.'}));
     }catch{setStartMessages(previous=>({...previous,[card.id]:'Маршрут не подтверждён. Запуск не выполнялся.'}));}
     finally{setTargetBusy(previous=>({...previous,[card.id]:false}));}
@@ -451,8 +482,10 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
       } else {
         setStartMessages(previous => ({ ...previous, [card.id]: 'Сверка результата не подтверждена. Ключ запуска сохранён; новый запуск отключён.' }));
       }
+      return response.ok;
     } catch {
       setStartMessages(previous => ({ ...previous, [card.id]: 'Ответ сверки не подтверждён. Ключ запуска сохранён; новый запуск отключён.' }));
+      return false;
     } finally {
       await Promise.resolve(onRefresh()).catch(() => undefined);
       inFlightSyncs.current.delete(card.id);
@@ -559,39 +592,14 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
   }
 
   useEffect(() => {
-    let cancelled = false;
-    const candidates = cards.filter(card => !['done', 'archived'].includes(card.column));
     const loaded: Record<string, StoredOperationState> = {};
-    for (const card of cards) {
-      try {
-        loaded[card.id] = parseStoredStartOperation(window.localStorage.getItem(executionOperationStorageKey(card.id)));
-      } catch {
-        loaded[card.id] = 'invalid';
-      }
+    for (const card of cardsRef.current) {
+      try { loaded[card.id] = parseStoredStartOperation(window.localStorage.getItem(executionOperationStorageKey(card.id))); }
+      catch { loaded[card.id] = 'invalid'; }
     }
     setStoredOperations(loaded);
     setStorageLoadedFor(cardIdsKey);
-    setExecutions({});
-    const load = async () => {
-      for (let offset = 0; offset < candidates.length; offset += 4) {
-        const batch = candidates.slice(offset, offset + 4);
-        const results = await Promise.all(batch.map(async card => {
-          try {
-            const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, { cache: 'no-store' });
-            if (!response.ok) return [card.id, null] as const;
-            const body: unknown = await response.json();
-            const data = body && typeof body === 'object' && 'execution' in body
-              ? (body as { execution: unknown }).execution : body;
-            const snapshot = parseExecutionSnapshot(data, card.id);
-            return [card.id, snapshot] as const;
-          } catch { return [card.id, null] as const; }
-        }));
-        if (!cancelled) setExecutions(previous => ({ ...previous, ...Object.fromEntries(results) }));
-      }
-    };
-    void load();
-    return () => { cancelled = true; };
-  }, [cards, cardIdsKey, clearOperation]);
+  }, [cardIdsKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -643,7 +651,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
               const executionReceipt = card.taskExecutionHistory?.at(-1);
               const hasDurableExecution = hasUnresolvedDurableExecution(executionReceipt);
               const selectedPreview=nativeTargets[card.id];
-              const canStart = (executionTargets[card.id]==='dot'||selectedPreview?.selectable===true && selectedPreview.cardVersion===card.version) && storageReady && storedOperation === null && !hasDurableExecution
+              const canStart = executionVersions[card.id]===card.version && (executionTargets[card.id]==='dot'||selectedPreview?.selectable===true && selectedPreview.cardVersion===card.version) && storageReady && storedOperation === null && !hasDurableExecution
                 && (executionTargets[card.id] === 'dot' ? execution?.dotStartAvailable : execution?.startAvailable) === true && !startBusy[card.id];
               const retryOperation = storageReady && canOfferTaskStartRetry(storedOperation, execution, safeRetryOperationIds[card.id])
                 ? storedOperation : null;
@@ -781,6 +789,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                       <Button size="sm" variant="outline" onClick={() => onOpen(card)}>
                         <Pencil aria-hidden className="mr-1 h-3.5 w-3.5" />Изменить
                       </Button>
+                      <Button size="sm" variant="outline" disabled={statusBusy[card.id]} onClick={()=>void readExecution(card)}>{statusBusy[card.id]?'Проверяю…':'Проверить доступность исполнителя'}</Button>
                       <label className="text-sm">Исполнитель
                         <select aria-label="Исполнитель задачи" className="ml-2 rounded border bg-background p-1"
                           value={storedOperation && storedOperation !== 'invalid' ? storedOperation.target ?? 'native' : executionTargets[card.id] ?? 'native'}
@@ -824,7 +833,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                       {storedOperation && storedOperation !== 'invalid' && <Button size="sm" variant="outline" disabled={startBusy[card.id] || syncBusy[card.id]} onClick={() => void syncResult(card, storedOperation)}>
                         {syncBusy[card.id] ? 'Проверяю…' : 'Проверить результат'}
                       </Button>}
-                      {autoSyncActive && autoSyncOperation && <ResultAutoSync active={autoSyncActive} phaseKey={executionReceipt?.phase ?? ''} onSync={() => void syncResult(card, autoSyncOperation)} />}
+                      {autoSyncActive && autoSyncOperation && <ResultAutoSync active={autoSyncActive} phaseKey={executionReceipt?.phase ?? ''} onSync={() => syncResult(card, autoSyncOperation)} />}
                       {canSyncDurableReceipt && durableReceiptId && <>
                         <p role="status" className="text-sm text-muted-foreground">Найдена сохранённая квитанция запуска. Проверка не создаёт новый запуск.</p>
                         <Button size="sm" variant="outline" disabled={startBusy[card.id] || syncBusy[card.id]}
