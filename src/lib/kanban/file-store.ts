@@ -866,6 +866,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       || !['intent', 'create-unknown', 'created', 'dispatch-unknown', 'running', 'waiting', 'stopped', 'result'].includes(String(entry.phase))
       || typeof entry.hostId !== 'string' || !entry.hostId.trim() || entry.hostId.length > 512
       || !['codex', 'zcode', 'opencode', 'dot'].includes(String(entry.harness))
+      || entry.targetPreviewId!==undefined && (typeof entry.targetPreviewId!=='string'||!/^[a-f0-9]{64}$/.test(entry.targetPreviewId))
       || typeof entry.startedBy !== 'string' || !entry.startedBy.trim() || entry.startedBy.length > 256
       || entry.requestedBy !== undefined && (typeof entry.requestedBy !== 'string' || !entry.requestedBy.trim() || entry.requestedBy.length > 256 || /[\x00-\x1f\x7f]/.test(entry.requestedBy))
       || typeof entry.createdAt !== 'string' || Number.isNaN(Date.parse(entry.createdAt))
@@ -971,6 +972,7 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       ...(continuations ? { continuations } : {}),
       ...(sessionControls ? { sessionControls } : {}),
       startedBy: entry.startedBy,
+      ...(typeof entry.targetPreviewId==='string'?{targetPreviewId:entry.targetPreviewId}:{}),
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
     };

@@ -3588,4 +3588,35 @@ describe('task execution API', () => {
     expect(ambiguous.status).toBe(409);
     expect(mocks.callOwnerHerderTool).not.toHaveBeenCalled();
   });
+  it('previews the exact project route without creating a session and disables unverified Codex quota',async()=>{
+    const response=await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution?target=preview'),{params:Promise.resolve({id:'task-1'})});
+    const preview=await response.json();
+    expect(response.status).toBe(200);expect(preview.harness).toBe('codex');expect(preview.selectable).toBe(false);
+    expect(preview.hostId).toBe('roomhacker-server-100');expect(preview.previewId).toMatch(/^[a-f0-9]{64}$/);
+    expect(mocks.callOwnerHerderTool.mock.calls.map(c=>c[0])).toEqual(['fleet_node_info']);
+    const blocked=await POST(postRequest({expectedVersion:4,operationId,targetPreviewId:preview.previewId}),{params:Promise.resolve({id:'task-1'})});
+    expect(blocked.status).toBe(503);expect((await blocked.json()).reason).toBe('codex_quota_not_verified');
+    expect(mocks.callOwnerHerderTool.mock.calls.some(c=>c[0]==='fleet_create_session')).toBe(false);
+  });
+  it('rejects a changed explicit target instead of silently routing elsewhere',async()=>{
+    mocks.projectRouteOverride.value={state:'ready',harness:'opencode',model:'omniroute/minimax-combo-m3.1'};
+    const preview=await (await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution?target=preview'),{params:Promise.resolve({id:'task-1'})})).json();
+    expect(preview.selectable).toBe(true);
+    const changed=scopedReadiness('Demo');changed.projectReadiness.runtimeInstanceId='different-runtime';
+    mocks.projectReadinessOverride.value=changed;
+    const result=await POST(postRequest({expectedVersion:4,operationId,targetPreviewId:preview.previewId}),{params:Promise.resolve({id:'task-1'})});
+    expect(result.status).toBe(503);expect((await result.json()).reason).toBe('selected_target_changed_refresh_preview');
+    expect(mocks.callOwnerHerderTool.mock.calls.some(c=>c[0]==='fleet_create_session')).toBe(false);
+  });
+  it('persists explicit target selection with the exact native project receipt',async()=>{
+    mocks.projectRouteOverride.value={state:'ready',harness:'opencode',model:'omniroute/minimax-combo-m3.1'};
+    const preview=await (await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution?target=preview'),{params:Promise.resolve({id:'task-1'})})).json();
+    const result=await POST(postRequest({expectedVersion:4,operationId,targetPreviewId:preview.previewId}),{params:Promise.resolve({id:'task-1'})});
+    expect([200,201,202]).toContain(result.status);
+    expect(mocks.currentCard.value!.taskExecutionHistory!.at(-1)!.targetPreviewId).toBe(preview.previewId);
+    expect(mocks.currentCard.value!.taskExecutionHistory!.at(-1)!.harness).toBe('opencode');
+    const replay=await POST(postRequest({expectedVersion:4,operationId,targetPreviewId:'f'.repeat(64)}),{params:Promise.resolve({id:'task-1'})});
+    expect(replay.status).toBe(409);
+  });
+
 });

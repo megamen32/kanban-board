@@ -28,6 +28,8 @@ import {
   getLatestResult,
   isVerifiedSessionUrl,
   parseExecutionSnapshot,
+  parseNativeTargetPreview,
+  type NativeTargetPreview,
   parseStoredStartOperation,
   taskFollowUpRequest,
   taskFollowUpSyncRequest,
@@ -160,6 +162,8 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
   const [safeRetryOperationIds, setSafeRetryOperationIds] = useState<Record<string, string | undefined>>({});
   const [recoverableSessionOperationIds, setRecoverableSessionOperationIds] = useState<Record<string, string | undefined>>({});
   const [storageLoadedFor, setStorageLoadedFor] = useState<string | null>(null);
+  const [nativeTargets,setNativeTargets]=useState<Record<string,NativeTargetPreview|undefined>>({});
+  const [targetBusy,setTargetBusy]=useState<Record<string,boolean>>({});
   const [executionTargets, setExecutionTargets] = useState<Record<string, 'dot' | undefined>>({});
   const [startBusy, setStartBusy] = useState<Record<string, boolean>>({});
   const [syncBusy, setSyncBusy] = useState<Record<string, boolean>>({});
@@ -263,9 +267,26 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
     }
   }, [revokeRecoverableSession, revokeSafeRetry]);
 
+  async function previewTarget(card:KanbanCard) {
+    setTargetBusy(previous=>({...previous,[card.id]:true}));
+    setNativeTargets(previous=>({...previous,[card.id]:undefined}));
+    try {
+      const r=await fetch('/api/kanban/cards/'+encodeURIComponent(card.id)+'/execution?target=preview',{cache:'no-store'});
+      const body:unknown=await r.json();
+      const preview=r.ok?parseNativeTargetPreview(body):null;
+      if(!preview||preview.cardVersion!==card.version)throw Error();
+      setNativeTargets(previous=>({...previous,[card.id]:preview}));
+      setStartMessages(previous=>({...previous,[card.id]:preview.reason??'Маршрут выбран явно. При его изменении запуск будет отклонён.'}));
+    }catch{setStartMessages(previous=>({...previous,[card.id]:'Маршрут не подтверждён. Запуск не выполнялся.'}));}
+    finally{setTargetBusy(previous=>({...previous,[card.id]:false}));}
+  }
+
   async function startTask(card: KanbanCard, retryOperation?: StoredStartOperation) {
     if (inFlightStarts.current.has(card.id)) return;
     const target=retryOperation?.target ?? executionTargets[card.id];
+    const preview=nativeTargets[card.id];
+    const targetPreviewId=retryOperation?.targetPreviewId ?? preview?.previewId;
+    if(!retryOperation && target!=='dot' && (!preview?.selectable||preview.cardVersion!==card.version))return;
     const prior = storedOperations[card.id];
     if (retryOperation && (!canOfferTaskStartRetry(prior, executions[card.id], safeRetryOperationIds[card.id])
         || prior.operationId !== retryOperation.operationId)) return;
@@ -284,7 +305,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
       setStartMessages(previous => ({ ...previous, [card.id]: 'Браузер не смог создать ключ операции; запуск не отправлен.' }));
       return;
     }
-    const operation: StoredStartOperation = retryOperation ?? { operationId, status: 'pending', ...(target ? {target}: {}) };
+    const operation: StoredStartOperation = retryOperation ?? { operationId, status: 'pending', ...(target ? {target}: targetPreviewId?{targetPreviewId}:{}) };
     if (!retryOperation && !writeOperation(card.id, operation)) {
       setStartMessages(previous => ({ ...previous, [card.id]: 'Не удалось сохранить ключ операции; запуск не отправлен.' }));
       return;
@@ -300,7 +321,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
       const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/execution`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(executionStartRequest(card.version, operationId, target)),
+        body: JSON.stringify(executionStartRequest(card.version, operationId, target,targetPreviewId)),
       });
       const body: unknown = await response.json().catch(() => null);
       const snapshot = parseExecutionSnapshot(body, card.id);
@@ -308,23 +329,23 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
       const failure = classifyTaskStartFailure(response.status, body, operationId);
 
       if (response.status === 201 || response.status === 200) {
-        writeOperation(card.id, { operationId, status: 'admitted', ...(target ? {target}: {}) });
+        writeOperation(card.id, { operationId, status: 'admitted', ...(target ? {target}: targetPreviewId?{targetPreviewId}:{}) });
         setStartMessages(previous => ({ ...previous, [card.id]: 'Запуск принят. Повторная отправка отключена; результат появится после сохранения сервером.' }));
       } else if (failure) {
-        writeOperation(card.id, {...failure.operation, ...(target ? {target}: {})});
+        writeOperation(card.id, {...failure.operation, ...(target ? {target}: targetPreviewId?{targetPreviewId}:{})});
         if (failure.kind === 'not_attempted' && failure.retryable) {
           setSafeRetryOperationIds(previous => ({ ...previous, [card.id]: operationId }));
         }
         setStartMessages(previous => ({ ...previous, [card.id]: failure.message }));
       } else if (response.status === 409 && body && typeof body === 'object' && 'conflict' in body && body.conflict === true) {
-        writeOperation(card.id, { operationId, status: 'unknown', ...(target ? {target}: {}) });
+        writeOperation(card.id, { operationId, status: 'unknown', ...(target ? {target}: targetPreviewId?{targetPreviewId}:{}) });
         setStartMessages(previous => ({ ...previous, [card.id]: 'Запуск не подтверждён: версия карточки изменилась. Тот же ключ сохранён; новый запуск не создан.' }));
       } else {
-        writeOperation(card.id, { operationId, status: 'unknown', ...(target ? {target}: {}) });
+        writeOperation(card.id, { operationId, status: 'unknown', ...(target ? {target}: targetPreviewId?{targetPreviewId}:{}) });
         setStartMessages(previous => ({ ...previous, [card.id]: 'Исход запроса не подтверждён. Повторный запуск не отправлен.' }));
       }
     } catch {
-      writeOperation(card.id, { operationId, status: 'unknown', ...(target ? {target}: {}) });
+      writeOperation(card.id, { operationId, status: 'unknown', ...(target ? {target}: targetPreviewId?{targetPreviewId}:{}) });
       setStartMessages(previous => ({ ...previous, [card.id]: 'Не удалось подтвердить ответ сервера. Повторный запуск не отправлен.' }));
     } finally {
       inFlightStarts.current.delete(card.id);
@@ -621,7 +642,8 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
               const storageReady = storageLoadedFor === cardIdsKey && Object.hasOwn(storedOperations, card.id);
               const executionReceipt = card.taskExecutionHistory?.at(-1);
               const hasDurableExecution = hasUnresolvedDurableExecution(executionReceipt);
-              const canStart = storageReady && storedOperation === null && !hasDurableExecution
+              const selectedPreview=nativeTargets[card.id];
+              const canStart = (executionTargets[card.id]==='dot'||selectedPreview?.selectable===true && selectedPreview.cardVersion===card.version) && storageReady && storedOperation === null && !hasDurableExecution
                 && (executionTargets[card.id] === 'dot' ? execution?.dotStartAvailable : execution?.startAvailable) === true && !startBusy[card.id];
               const retryOperation = storageReady && canOfferTaskStartRetry(storedOperation, execution, safeRetryOperationIds[card.id])
                 ? storedOperation : null;
@@ -764,10 +786,21 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
                           value={storedOperation && storedOperation !== 'invalid' ? storedOperation.target ?? 'native' : executionTargets[card.id] ?? 'native'}
                           disabled={!!storedOperation || hasDurableExecution || startBusy[card.id]}
                           onChange={event => setExecutionTargets(previous=>({...previous,[card.id]:event.target.value === 'dot' ? 'dot' : undefined}))}>
-                          <option value="native">Маршрут проекта</option>
-                          <option value="dot" disabled={execution?.dotStartAvailable !== true}>dot{execution?.dotStartAvailable === true ? '' : ' (не подключён)'}</option>
+                          <option value="native">{selectedPreview ? selectedPreview.harness+' · '+selectedPreview.hostId : 'Маршрут проекта (не выбран)'}</option>
+                          <option value="dot" disabled={execution?.dotStartAvailable !== true}>Текущий dot{execution?.dotStartAvailable === true ? '' : ' (не подключён)'}</option>
                         </select>
                       </label>
+                      {executionTargets[card.id]!=='dot' && !storedOperation && !hasDurableExecution && <Button size="sm" variant="outline" disabled={targetBusy[card.id]||startBusy[card.id]} onClick={()=>void previewTarget(card)}>
+                        {targetBusy[card.id]?'Читаю маршрут…':'Выбрать точный маршрут проекта'}
+                      </Button>}
+                      {executionTargets[card.id]!=='dot' && selectedPreview && <div className="text-xs text-muted-foreground" aria-label="Выбранный маршрут">
+                        <p>{selectedPreview.harness} · {selectedPreview.hostId} · {selectedPreview.model}</p>
+                        <p>Runtime: {selectedPreview.runtimeInstanceId}{selectedPreview.processUser?' · Пользователь процесса: '+selectedPreview.processUser:''}</p>
+                        <p>Это маршрут текущего авторизованного подключения, не выбор чужого аккаунта.</p>
+                      </div>}
+                      {executionReceipt?.targetPreviewId && executionReceipt.projectBinding && <p className="text-xs text-muted-foreground" aria-label="Сохранённый маршрут запуска">
+                        Сохранённый выбор: {executionReceipt.harness} · {executionReceipt.hostId} · {executionReceipt.projectBinding.model}
+                      </p>}
                       {execution?.dotStartAvailable !== true && <span className="text-xs text-muted-foreground">{execution?.dotUnavailableReason}</span>}
                       <Button size="sm" disabled={!canStart} onClick={() => void startTask(card)}>
                         <Play aria-hidden className="mr-1 h-3.5 w-3.5" />
