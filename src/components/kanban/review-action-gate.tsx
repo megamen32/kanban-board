@@ -1,19 +1,25 @@
 import type { ReactNode } from 'react';
+import { isOwnerReviewRecoveryCandidate } from '../../lib/kanban/transition-policy';
 
 export type ReviewActionCard = {
   column: string;
+  owner?: string;
   needsReview?: boolean;
   requiresApprovalFrom?: string[];
   resultHistory?: unknown[];
   taskExecutionHistory?: unknown[];
+  reviewHistory?: unknown[];
+  completionEvidence?: unknown[];
+  completedBy?: string;
+  completedAt?: string;
+  pendingQuestion?: {answer?: unknown};
 };
 
 export type ReviewActionAccess = 'not-awaiting-review' | 'login-required' | 'reviewer-required' | 'authorized' | 'owner-review' | 'owner-recovery';
 
 /** Decide the UI affordance from server-verified identity, never the selected board persona. */
 export function reviewActionAccess(card: ReviewActionCard, verifiedUsername: string | null | undefined): ReviewActionAccess {
-  const malformedRecovery = card.column === 'in-progress' && card.needsReview === true
-    && !(card.requiresApprovalFrom?.length) && !(card.resultHistory?.length) && !(card.taskExecutionHistory?.length);
+  const malformedRecovery = isOwnerReviewRecoveryCandidate(card);
   if (malformedRecovery) {
     if (!verifiedUsername) return 'login-required';
     return verifiedUsername === 'nikita' ? 'owner-recovery' : 'reviewer-required';

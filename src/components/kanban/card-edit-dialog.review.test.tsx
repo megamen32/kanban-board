@@ -5,15 +5,29 @@ import { canCompleteDirectly, canTakeOwnReview } from './card-completion';
 import { CardResultPreview } from './card-result-preview';
 import { ReviewActionGate, type ReviewActionCard } from './review-action-gate';
 
-const malformed: ReviewActionCard = { column: 'in-progress', needsReview: true, requiresApprovalFrom: [], resultHistory: [] };
+const malformed: ReviewActionCard = { owner:'nikita', column: 'in-progress', needsReview: true, requiresApprovalFrom: [], resultHistory: [] };
 const actions = React.createElement(React.Fragment, null,
   React.createElement('button', null, 'Принять результат'),
   React.createElement('button', null, 'Вернуть на доработку'),
 );
 
+const legacyV7: ReviewActionCard = {
+  owner:'nikita',column:'review',needsReview:false,requiresApprovalFrom:[],
+  resultHistory:[],reviewHistory:[],taskExecutionHistory:[],
+};
+
 describe('malformed review gate recovery affordance', () => {
   it('shows an owner-only recovery action for the malformed empty-reviewer gate', () => {
     expect(renderToStaticMarkup(React.createElement(ReviewActionGate, { card: malformed, verifiedUsername: 'nikita' }, actions))).toContain('Вернуть на доработку');
+  });
+
+  it('makes the stranded v7 review decision accessible only to verified owner', () => {
+    expect(renderToStaticMarkup(React.createElement(ReviewActionGate, {card:legacyV7,verifiedUsername:'nikita'},actions)))
+      .toContain('Вернуть на доработку');
+    expect(renderToStaticMarkup(React.createElement(ReviewActionGate, {card:legacyV7,verifiedUsername:'dot'},actions)))
+      .toContain('Решение доступно только назначенному');
+    expect(renderToStaticMarkup(React.createElement(ReviewActionGate, {card:legacyV7,verifiedUsername:null},actions)))
+      .toContain('Войдите');
   });
 
   it('does not show recovery to Oleg, anonymous users, normal review cards, or cards with results', () => {

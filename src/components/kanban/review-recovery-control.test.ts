@@ -27,6 +27,7 @@ const stuck = (overrides: Partial<KanbanCard> = {}): KanbanCard => ({
   version: 16,
   project: 'UX QA 2026-10-26',
   assignees: [],
+  owner: 'nikita',
   needsReview: true,
   requiresApprovalFrom: [],
   resultHistory: [],
@@ -46,6 +47,22 @@ describe('owner-only rework recovery for a stuck review gate', () => {
     expect(isOwnerRecoveryCandidate(stuck({ requiresApprovalFrom: ['nikita'] }), 'nikita')).toBe(false);
     expect(isOwnerRecoveryCandidate(stuck({ resultHistory: [{ summary: 'result', evidenceRefs: ['source:event:span-1'], submittedBy: 'exmanager-service', submittedAt: '2026-10-26T00:00:00Z' }] }), 'nikita')).toBe(false);
     expect(isOwnerRecoveryCandidate(stuck({ needsReview: false }), 'nikita')).toBe(false);
+  });
+
+  it('renders return-for-rework for the v7 review shape, without offering acceptance', () => {
+    const legacy = stuck({column:'review',needsReview:false,version:7});
+    expect(isOwnerRecoveryCandidate(legacy,'nikita')).toBe(true);
+    expect(isOwnerRecoveryCandidate(legacy,'dot')).toBe(false);
+    const html = renderToStaticMarkup(React.createElement(ReviewRecoveryControl,{
+      card:legacy, username:'nikita',
+    }));
+    expect(html).toContain('Вернуть на доработку');
+    expect(html).toContain('Только подтверждённый владелец');
+    expect(html).not.toContain('Принять');
+    expect(buildRecoveryRequest(legacy,' Logging runtime не установлен; acceptance pending ')).toEqual({
+      action:'recover-rework',expectedVersion:7,note:'Logging runtime не установлен; acceptance pending',
+    });
+    expect(isOwnerRecoveryCandidate(stuck({column:'review',needsReview:false,owner:'oleg'}),'nikita')).toBe(false);
   });
 
   it('sends an explicit owner rework with a note and the expected version', () => {

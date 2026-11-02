@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
 import type { KanbanCard } from '../../lib/kanban/types';
+import { isOwnerReviewRecoveryCandidate } from '../../lib/kanban/transition-policy';
 
 /** The server accepts a recovery decision only from the board owner. */
 export const REVIEW_RECOVERY_OWNER = 'nikita';
@@ -20,12 +21,7 @@ interface RecoveryRequest {
  * stay disabled and the card can never leave the gate on its own.
  */
 export function isOwnerRecoveryCandidate(card: KanbanCard, username: string | null | undefined): boolean {
-  if (username !== REVIEW_RECOVERY_OWNER) return false;
-  if (card.needsReview !== true) return false;
-  if (card.column === 'review') return false;
-  if ((card.requiresApprovalFrom?.length ?? 0) > 0) return false;
-  if ((card.resultHistory?.length ?? 0) > 0) return false;
-  return true;
+  return username === REVIEW_RECOVERY_OWNER && isOwnerReviewRecoveryCandidate(card);
 }
 
 /** A recovery needs a note, so the owner says what has to be fixed. */
@@ -115,7 +111,8 @@ export function ReviewRecoveryControl({ card, username, onDone }: Props) {
       {!expanded ? (
         <>
           <p className="text-xs text-muted-foreground">
-            Приёмка заблокирована: у задачи нет назначенного проверяющего. Владелец может вернуть её на доработку с комментарием.
+            Приёмка заблокирована: нет назначенного проверяющего и результата для принятия.
+            Только подтверждённый владелец может вернуть задачу на доработку, обязательно указав причину.
           </p>
           <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => setExpanded(true)}>
             Вернуть на доработку

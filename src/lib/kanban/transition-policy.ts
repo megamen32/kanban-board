@@ -313,6 +313,37 @@ export function validateTransition(
   };
 }
 
+/**
+ * Legacy cards can be stranded in either of two invalid review states.
+ * Recovery is NOT acceptance: it requires the real owner to submit a reason
+ * via the existing human-only review route with optimistic-version CAS.
+ * No result, reviewer, run, unresolved question or prior decision may exist.
+ */
+export function isOwnerReviewRecoveryCandidate(card: {
+  column: string;
+  owner?: string;
+  needsReview?: boolean;
+  requiresApprovalFrom?: readonly unknown[];
+  resultHistory?: readonly unknown[];
+  taskExecutionHistory?: readonly unknown[];
+  reviewHistory?: readonly unknown[];
+  completionEvidence?: readonly unknown[];
+  completedBy?: string;
+  completedAt?: string;
+  pendingQuestion?: { answer?: unknown };
+}): boolean {
+  const stranded = (card.column === 'in-progress' && card.needsReview === true)
+    || (card.column === 'review' && card.needsReview === false);
+  return card.owner === NIKITA_ACTOR && stranded
+    && !(card.requiresApprovalFrom?.length)
+    && !(card.resultHistory?.length)
+    && !(card.taskExecutionHistory?.length)
+    && !(card.reviewHistory?.length)
+    && !(card.completionEvidence?.length)
+    && !card.completedBy && !card.completedAt
+    && !(card.pendingQuestion && !card.pendingQuestion.answer);
+}
+
 /** Build an explicit human decision only for a currently assigned reviewer. */
 export function decideHumanReview(
   before: KanbanCard,
@@ -321,9 +352,7 @@ export function decideHumanReview(
   note = '',
 ): HumanReviewDecision {
   if (action === 'recover-rework') {
-    if (actor !== NIKITA_ACTOR || before.column !== 'in-progress' || !before.needsReview
-      || (before.requiresApprovalFrom?.length ?? 0) > 0 || (before.resultHistory?.length ?? 0) > 0
-      || (before.taskExecutionHistory?.length ?? 0) > 0) {
+    if (actor !== NIKITA_ACTOR || !isOwnerReviewRecoveryCandidate(before)) {
       return { kind: 'rejected', reason: 'task_not_waiting_for_review' };
     }
     if (!note.trim()) return { kind: 'rejected', reason: 'rework_note_required' };
