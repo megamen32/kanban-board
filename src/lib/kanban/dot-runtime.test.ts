@@ -4,6 +4,7 @@ import {join} from 'node:path';
 import {beforeEach,afterEach,it,expect,vi} from 'vitest';
 import {createCard,findCardById,updateCard} from './file-store';
 import {startDotExecution} from './dot-execution';
+import {taskExecutionSnapshot} from './task-execution';
 import {configuredDotTransport,handleDotCallback,DOT_ROOM,reconcileConfiguredDotReceipt} from './dot-runtime';
 vi.mock('@/lib/kanban/task-execution-client',()=>({callOwnerHerderTool:vi.fn()}));
 let dir:string,state:string;
@@ -108,4 +109,35 @@ it('query-only admission readback updates accepted metadata without starting wor
  expect(refreshed.taskExecutionHistory![0].dot!.delivery).toBe('accepted');
  expect(refreshed.taskExecutionHistory![0].phase).toBe('dispatch-unknown');
  expect(refreshed.column).toBe('todo');expect(failing).toHaveBeenCalledTimes(1);expect(get).toHaveBeenCalledTimes(1);
+});
+
+
+it('persists real running evidence, ETA, linked session and final result without human acceptance',async()=>{
+ const f=await run();
+ const report=async(body:Record<string,unknown>)=>handleDotCallback(
+   new Request('http://localhost/dot-event',{method:'POST',headers:{'x-kanban-executor-key':f.cap.key},
+    body:JSON.stringify({operationId:f.op,requestId:'board:'+f.op,...body})}),f.card.id,dir);
+ const url='https://chatgpt.com/c/00000000-0000-4000-8000-000000000001';
+ const progress=await report({receiptId:'real-progress-1',kind:'running',summary:'Fixture checked',
+   etaAt:'2026-11-03T10:00:00Z',nextAction:'Record result',
+   evidenceRefs:['fixture:read:1'],sessionUrl:url});
+ expect(progress.status).toBe(200);
+ const running=findCardById(f.card.id,dir)!;
+ expect(running).toMatchObject({owner:'nikita',executor:'dot',column:'todo'});
+ expect(running.taskExecutionHistory?.[0]).toMatchObject({phase:'running',lastProgress:'Fixture checked',
+   etaAt:'2026-11-03T10:00:00Z',nextAction:'Record result',evidenceRefs:['fixture:read:1'],sessionUrl:url});
+ const forged=await report({receiptId:'real-progress-bad',kind:'running',summary:'Forged link',
+   sessionUrl:'https://notchatgpt.invalid/c/aaa'});
+ expect(forged.status).toBe(403);
+ const result=await report({receiptId:'real-result-1',kind:'done',summary:'Synthetic result confirmed',
+   evidenceRefs:['fixture:result:2'],nextAction:'Human reviewer checks evidence'});
+ expect(result.status).toBe(200);
+ const reviewed=findCardById(f.card.id,dir)!;
+ expect(reviewed).toMatchObject({owner:'nikita',executor:'dot',column:'review',needsReview:true,
+   resultHistory:[{summary:'Synthetic result confirmed',evidenceRefs:['fixture:result:2']}],
+   requiresApprovalFrom:['nikita']});
+ expect(reviewed.completionEvidence).toEqual([]);
+ expect(taskExecutionSnapshot(reviewed).lastProgress?.summary).toBe('Synthetic result confirmed');
+ expect((await report({receiptId:'real-result-1',kind:'done',summary:'Synthetic result confirmed',
+   evidenceRefs:['fixture:result:2'],nextAction:'Human reviewer checks evidence'})).status).toBe(200);
 });

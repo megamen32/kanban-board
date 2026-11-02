@@ -54,7 +54,7 @@ export type TransitionDecision =
       reason: 'assignee_change_requires_owner_authorization' | 'reviewer_change_requires_owner_authorization'
         | 'deadline_change_requires_human_ui' | 'weekly_plan_requires_batch_acceptance'
         | 'review_requires_explicit_decision' | 'executor_result_requires_non_review_state'
-        | 'blocked_reason_required';
+        | 'blocked_reason_required' | 'executor_change_requires_owner_authorization';
     };
 
 /**
@@ -139,6 +139,12 @@ export function validateTransition(
       kind: 'rejected',
       reason: 'assignee_change_requires_owner_authorization',
     };
+  }
+
+  if (policyRequested.executor !== undefined && policyRequested.executor !== before.executor
+      && !hasOwnerAuthorization(context) && !hasInternalTeamAuthorization(context)
+      && !(context.origin === 'human-ui' && context.actor === NIKITA_ACTOR && before.owner === NIKITA_ACTOR)) {
+    return {kind:'rejected',reason:'executor_change_requires_owner_authorization'};
   }
 
   if (changesReviewers(before, policyRequested) && !hasOwnerAuthorization(context)) {
