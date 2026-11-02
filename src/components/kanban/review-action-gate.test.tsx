@@ -14,6 +14,18 @@ describe('review action access', () => {
     expect(reviewActionAccess({ ...ready, requiresApprovalFrom: ['oleg'] }, 'oleg')).toBe('authorized');
   });
 
+  it('exposes only owner recovery for a stranded v7 legacy review, never dot/reviewer acceptance', () => {
+    const legacy = {column:'review',owner:'nikita',needsReview:false,
+      requiresApprovalFrom:[],resultHistory:[],taskExecutionHistory:[],reviewHistory:[]};
+    expect(reviewActionAccess(legacy,'nikita')).toBe('owner-recovery');
+    expect(reviewActionAccess(legacy,'dot')).toBe('reviewer-required');
+    expect(reviewActionAccess(legacy,'oleg')).toBe('reviewer-required');
+    expect(reviewActionAccess(legacy,null)).toBe('login-required');
+    expect(reviewActionAccess({...legacy, owner:'oleg'},'nikita')).toBe('not-awaiting-review');
+    expect(reviewActionAccess({...legacy,resultHistory:[{summary:'result'}]},'nikita')).toBe('not-awaiting-review');
+    expect(reviewActionAccess({...legacy,taskExecutionHistory:[{phase:'running'}]},'nikita')).toBe('not-awaiting-review');
+  });
+
   it('does not let the owner accept a review card without a result', () => {
     expect(reviewActionAccess({ ...ready, resultHistory: [] }, 'nikita')).toBe('reviewer-required');
   });

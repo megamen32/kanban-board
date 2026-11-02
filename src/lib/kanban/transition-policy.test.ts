@@ -22,7 +22,7 @@ const baseCard: KanbanCard = {
 
 describe('kanban transition policy', () => {
   test('owner recovers only a malformed in-progress review gate without accepting results', () => {
-    const malformed: KanbanCard = { ...baseCard, column: 'in-progress', needsReview: true, requiresApprovalFrom: [], resultHistory: [] };
+    const malformed: KanbanCard = { ...baseCard, owner: 'nikita', column: 'in-progress', needsReview: true, requiresApprovalFrom: [], resultHistory: [] };
     const decision = decideHumanReview(malformed, 'recover-rework', 'nikita', 'Проверить статус и продолжить работу');
     expect(decision).toMatchObject({ kind: 'accepted', patch: {
       column: 'in-progress', needsReview: false, nextAction: 'Проверить статус и продолжить работу',
@@ -35,6 +35,58 @@ describe('kanban transition policy', () => {
     expect(decideHumanReview({ ...malformed, taskExecutionHistory: [{ operationId: 'op', requestHash: 'hash', lastBoardVersion: 1, createInputId: 'create', messageInputId: 'message', phase: 'running', hostId: 'host', harness: 'codex', startedBy: 'nikita', createdAt: '', updatedAt: '' }] }, 'recover-rework', 'nikita', 'Проверить')).toMatchObject({ kind: 'rejected', reason: 'task_not_waiting_for_review' });
     expect(decideHumanReview({ ...malformed, column: 'review' }, 'recover-rework', 'nikita', 'Проверить')).toMatchObject({ kind: 'rejected', reason: 'task_not_waiting_for_review' });
     expect(decideHumanReview(malformed, 'recover-rework', 'nikita', '   ')).toMatchObject({ kind: 'rejected', reason: 'rework_note_required' });
+  });
+
+  test('v7 legacy review without result: only authenticated owner may return it with a reason', () => {
+    const legacy: KanbanCard = {
+      ...baseCard,
+      id: '3e66870b-e11c-4548-a771-c4c753e2e83f',
+      version: 7, owner: 'nikita', column: 'review', needsReview: false,
+      requiresApprovalFrom: [], resultHistory: [], reviewHistory: [], taskExecutionHistory: [],
+    };
+    // A saved column alone is never completion evidence.
+    expect(validateTransition(legacy, { completionEvidence: [{ type: 'inferred' }] },
+      { origin: 'mcp', actor: 'dot' })).toMatchObject({
+      kind: 'rejected', reason: 'review_requires_explicit_decision',
+    });
+    expect(decideHumanReview(legacy, 'accept', 'nikita')).toMatchObject({
+      kind: 'rejected', reason: 'task_not_waiting_for_review',
+    });
+    expect(decideHumanReview(legacy, 'rework', 'nikita', 'Rework')).toMatchObject({
+      kind: 'rejected', reason: 'task_not_waiting_for_review',
+    });
+    expect(decideHumanReview(legacy, 'recover-rework', 'dot', 'Rework')).toMatchObject({
+      kind: 'rejected', reason: 'task_not_waiting_for_review',
+    });
+    expect(decideHumanReview(legacy, 'recover-rework', 'nikita', '  ')).toMatchObject({
+      kind: 'rejected', reason: 'rework_note_required',
+    });
+    const decision = decideHumanReview(legacy, 'recover-rework', 'nikita',
+      'Logging runtime ещё не установлен; acceptance pending');
+    expect(decision).toMatchObject({kind:'accepted',patch:{
+      column:'in-progress',needsReview:false,
+      nextAction:'Logging runtime ещё не установлен; acceptance pending',
+      reviewHistory:[{decision:'rework',actor:'nikita',note:'Logging runtime ещё не установлен; acceptance pending'}],
+    }});
+    if (decision.kind !== 'accepted') throw new Error('Owner recovery unexpectedly rejected');
+    expect(decision.patch).not.toHaveProperty('completedBy');
+    expect(decision.patch).not.toHaveProperty('completionEvidence');
+    expect(decision.patch).not.toHaveProperty('requiresApprovalFrom');
+    expect(decision.patch).not.toHaveProperty('owner');
+    for (const altered of [
+      {owner:'oleg'}, {requiresApprovalFrom:['nikita']},
+      {resultHistory:[{summary:'Already submitted',evidenceRefs:[],submittedBy:'worker',submittedAt:'2026-11-02T15:00:00Z'}]},
+      {reviewHistory:[{decision:'accepted' as const,actor:'nikita',decidedAt:'2026-11-02T15:00:00Z'}]},
+      {completionEvidence:[{type:'manual_confirmation'}]},
+      {completedAt:'2026-11-02T15:00:00Z'},
+      {taskExecutionHistory:[{operationId:'active'} as NonNullable<KanbanCard['taskExecutionHistory']>[number]]},
+      {pendingQuestion:{id:'pending',text:'?',choices:[],askedAt:'2026-11-02T15:00:00Z',attemptOperationId:'active'}},
+      {needsReview:true}, {column:'done' as const},
+    ]) {
+      expect(decideHumanReview({...legacy,...altered},'recover-rework','nikita','Fix')).toMatchObject({
+        kind:'rejected',reason:'task_not_waiting_for_review',
+      });
+    }
   });
 
   test('owner may accept an actual result when no reviewer was assigned, but cannot bypass an explicit reviewer', () => {

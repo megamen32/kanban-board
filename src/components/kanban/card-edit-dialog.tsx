@@ -333,7 +333,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             )}
             {reviewAccess !== 'not-awaiting-review' && <ReviewActionGate card={card} verifiedUsername={username}>
               {onReviewDecision && <div className="space-y-2 border-t pt-3">
-                <p className="text-xs text-muted-foreground">{reviewAccess === 'owner-recovery' ? 'Проверяющий не назначен и результата ещё нет. Укажи исправление и верни задачу в работу.' : reviewAccess === 'owner-review' ? 'Проверяющий не назначен. Владелец может принять готовый результат или вернуть его на доработку.' : 'Решение проверяется сервером по текущему списку согласующих.'}</p>
+                <p className="text-xs text-muted-foreground">{reviewAccess === 'owner-recovery' ? 'Восстановление проверки: результата и назначенного проверяющего нет. Только подтверждённый владелец может вернуть задачу в работу с причиной. Принять результат нельзя.' : reviewAccess === 'owner-review' ? 'Проверяющий не назначен. Владелец может принять готовый результат или вернуть его на доработку.' : 'Решение проверяется сервером по текущему списку согласующих.'}</p>
                 <Textarea aria-label="Комментарий к доработке" placeholder="Что нужно исправить" value={reviewNote} onChange={event => setReviewNote(event.target.value)} rows={2} />
                 <div className="flex flex-wrap gap-2">
                   {(reviewAccess === 'authorized' || reviewAccess === 'owner-review') && <Button disabled={saving} onClick={() => void handleReview('accept')}>Принять и закрыть</Button>}
