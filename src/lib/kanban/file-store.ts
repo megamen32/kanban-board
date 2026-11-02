@@ -12,7 +12,7 @@ import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardU
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
   'id', 'title', 'column', 'priority', 'tags', 'order', 'created', 'updated', 'dueAt',
-  'version', 'project', 'assignees', 'owner', 'blocker_reason', 'shared', 'planning_version', 'type', 'role', 'accountable',
+  'version', 'project', 'assignees', 'owner', 'executor', 'blocker_reason', 'shared', 'planning_version', 'type', 'role', 'accountable',
   'assignee', 'important', 'urgent', 'week', 'big_rock', 'parent', 'scheduled_at',
   'today_rank', 'source', 'needs_review', 'suggested_assignee', 'waiting_for',
   'requires_approval_from', 'completed_by', 'completed_at', 'completion_evidence',
@@ -34,7 +34,7 @@ type RawFrontmatter = Record<string, unknown> & {
   [RAW_UNKNOWN_FRONTMATTER]?: string;
 };
 const PLANNING_UPDATE_KEYS = new Set([
-  'owner', 'blockerReason', 'shared', 'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
+  'owner', 'executor', 'blockerReason', 'shared', 'planningVersion', 'type', 'role', 'accountable', 'assignee', 'important', 'urgent',
   'week', 'bigRock', 'parent', 'scheduledAt', 'todayRank', 'source', 'needsReview',
   'suggestedAssignee', 'waitingFor', 'requiresApprovalFrom', 'completedBy', 'completedAt',
   'completionEvidence', 'approvalEvidence', 'resultHistory', 'reviewHistory', 'nextAction',
@@ -149,6 +149,7 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     project: typeof data.project === 'string' && data.project.trim() ? data.project.trim() : legacyProject,
     assignees: Array.isArray(data.assignees) ? data.assignees.map(String) : [],
     owner: optionalString(data, 'owner') ?? 'nikita',
+    ...(data.executor === 'dot' ? {executor:'dot' as const} : {}),
     blockerReason: optionalString(data, 'blocker_reason'),
     shared: booleanField(data, 'shared', false),
     ...planning,
@@ -249,7 +250,7 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
   const { dueAt: dueAtUpdate, ...otherUpdates } = updates;
   const normalizedUpdates = Object.fromEntries(
     Object.entries(otherUpdates).map(([key, value]) => [key, key === 'nextAction' ? value : value === null ? undefined : value]),
-  ) as Omit<KanbanCardUpdates, 'dueAt' | 'blockerReason'> & { blockerReason?: string };
+  ) as Omit<KanbanCardUpdates, 'dueAt' | 'blockerReason' | 'executor'> & { blockerReason?: string; executor?: 'dot' };
   if (normalizedUpdates.taskExecutionHistory !== undefined) {
     normalizedUpdates.taskExecutionHistory = taskExecutionHistoryField(normalizedUpdates.taskExecutionHistory);
   }
@@ -484,6 +485,7 @@ function buildFrontmatter(card: KanbanCard): string {
     ...(card.catalogLink ? { catalog_task_link: parseCatalogTaskLink(card.catalogLink) } : {}),
     ...(card.catalogLinks?.length ? { catalog_task_links: card.catalogLinks.map(parseCatalogTaskLink) } : {}),
     owner: card.owner ?? 'nikita',
+    ...(card.executor === 'dot' ? {executor:'dot'} : {}),
     shared: card.shared ?? false,
   };
   if (!legacyMarker(card.rawFrontmatter)) {
@@ -881,6 +883,10 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       || entry.dispatchReceiptText !== undefined && (typeof entry.dispatchReceiptText !== 'string' || entry.dispatchReceiptText.length > 4096)
       || entry.lastProgress !== undefined && (typeof entry.lastProgress !== 'string' || entry.lastProgress.length > 4000)
       || entry.lastProgressAt !== undefined && (typeof entry.lastProgressAt !== 'string' || Number.isNaN(Date.parse(entry.lastProgressAt)))
+      || entry.etaAt !== undefined && (typeof entry.etaAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(entry.etaAt) || Number.isNaN(Date.parse(entry.etaAt)))
+      || entry.nextAction !== undefined && (typeof entry.nextAction !== 'string' || entry.nextAction.length>4000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(entry.nextAction))
+      || entry.sessionUrl !== undefined && (typeof entry.sessionUrl !== 'string' || !/^https:\/\/chatgpt\.com\/c\/[a-f0-9]{8}-[a-f0-9-]{27}$/.test(entry.sessionUrl))
+      || entry.evidenceRefs !== undefined && (!Array.isArray(entry.evidenceRefs) || entry.evidenceRefs.length>20 || entry.evidenceRefs.some(x=>typeof x!=='string'||!x.trim()||x.length>2000||/[\x00-\x1f\x7f]/.test(x)) || new Set(entry.evidenceRefs).size!==entry.evidenceRefs.length)
       || entry.projectBinding !== undefined && !isTaskExecutionProjectBinding(entry.projectBinding, entry.hostId)
       || entry.taskDecisionRequest !== undefined && (!isRecord(entry.taskDecisionRequest)
         || Object.keys(entry.taskDecisionRequest).some(key => !['requestId', 'requestHash', 'purpose', 'version'].includes(key))
@@ -969,6 +975,10 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
       ...(typeof entry.dispatchReceiptText === 'string' ? { dispatchReceiptText: entry.dispatchReceiptText } : {}),
       ...(typeof entry.lastProgress === 'string' ? { lastProgress: entry.lastProgress } : {}),
       ...(typeof entry.lastProgressAt === 'string' ? { lastProgressAt: entry.lastProgressAt } : {}),
+      ...(entry.harness==='dot' && typeof entry.etaAt==='string' ? {etaAt:entry.etaAt} : {}),
+      ...(entry.harness==='dot' && typeof entry.nextAction==='string' ? {nextAction:entry.nextAction} : {}),
+      ...(entry.harness==='dot' && typeof entry.sessionUrl==='string' ? {sessionUrl:entry.sessionUrl} : {}),
+      ...(entry.harness==='dot' && Array.isArray(entry.evidenceRefs) ? {evidenceRefs:[...entry.evidenceRefs]} : {}),
       ...(continuations ? { continuations } : {}),
       ...(sessionControls ? { sessionControls } : {}),
       startedBy: entry.startedBy,

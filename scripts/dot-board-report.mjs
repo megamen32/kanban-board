@@ -4,9 +4,13 @@ import {createHash} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 function readProtected(file){let fd;try{fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW);const s=fstatSync(fd);if(!s.isFile()||s.uid!==process.getuid()||(s.mode&0o077)!==0||s.size>65536)throw Error();return JSON.parse(readFileSync(fd,'utf8'));}finally{if(fd!==undefined)closeSync(fd);}}
 export async function reportDotEvent(body,{stateDir=process.env.BOARD_DOT_STATE_DIR,fetcher=fetch}={}) {
- if(!stateDir||!isAbsolute(stateDir)||!body||Object.keys(body).some(k=>!['cardId','operationId','receiptId','kind','summary','question'].includes(k))
+ if(!stateDir||!isAbsolute(stateDir)||!body||Object.keys(body).some(k=>!['cardId','operationId','receiptId','kind','summary','question','evidenceRefs','nextAction','etaAt','sessionUrl'].includes(k))
    ||!/^[A-Za-z0-9_-]+$/.test(body.cardId??'')||!/^[a-f0-9]{64}$/.test(body.operationId??'')
-   ||!/^[A-Za-z0-9:_-]{1,200}$/.test(body.receiptId??'')||!['running','needs_input','done'].includes(body.kind))return {status:'invalid_request'};
+   ||!/^[A-Za-z0-9:_-]{1,200}$/.test(body.receiptId??'')||!['running','needs_input','done'].includes(body.kind)
+   ||body.evidenceRefs!==undefined&&(!Array.isArray(body.evidenceRefs)||body.evidenceRefs.length>20||body.evidenceRefs.some(x=>typeof x!=='string'||!x.trim()||x.length>2000||/[\x00-\x1f\x7f]/.test(x))||new Set(body.evidenceRefs).size!==body.evidenceRefs.length)
+   ||body.nextAction!==undefined&&(typeof body.nextAction!=='string'||body.nextAction.length>4000)
+   ||body.etaAt!==undefined&&(typeof body.etaAt!=='string'||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(body.etaAt)||Number.isNaN(Date.parse(body.etaAt)))
+   ||body.sessionUrl!==undefined&&(typeof body.sessionUrl!=='string'||!/^https:\/\/chatgpt\.com\/c\/[a-f0-9]{8}-[a-f0-9-]{27}$/.test(body.sessionUrl)))return {status:'invalid_request'};
  let cap;try{cap=readProtected(join(stateDir,'attempts',body.operationId+'.json'));}catch{return {status:'capability_unavailable'};}
  if(cap.cardId!==body.cardId||cap.operationId!==body.operationId||cap.roomId!=='6ae67c78b7c0819380955b36a09b88cd'
     ||cap.requestId!=='board:'+body.operationId||cap.expiresAt<=Date.now()||!/^[a-f0-9]{64}$/.test(cap.key??''))return {status:'forbidden'};

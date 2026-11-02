@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ensureProject, listProjects, projectInput } from '../kanban/project-store';
 import { createAdmittedCard, createCard, deleteCard, findCardById, getAllCards, updateCard } from '../kanban/file-store';
 import { taskExecutionSnapshot } from '../kanban/task-execution';
+import { configuredDotTaskAuthorized } from '../kanban/dot-runtime';
 import { admitSourceTask } from '../kanban/source-operation';
 import { commitVerifiedCatalogTaskLink } from '../kanban/catalog-link';
 import { catalogResultDigest, type CatalogLinkClaims, type SignedCatalogLinkEnvelope } from './catalog-link-resolver';
@@ -30,6 +31,7 @@ const cardInput = {
   priority: z.enum(PRIORITIES).optional(),
   tags: z.array(z.string()).max(20).optional(),
   assignees: z.array(z.string()).max(20).optional(),
+  executor: z.enum(['dot']).nullable().optional(),
   dueAt: z.string().nullable().optional(),
   type: z.enum(PLANNING_TYPES).optional(),
   role: z.string().optional(),
@@ -67,6 +69,7 @@ type ChangeInput = {
   priority?: Priority;
   tags?: string[];
   assignees?: string[];
+  executor?: 'dot' | null;
   dueAt?: string | null;
   type?: 'outcome' | 'action';
   role?: string;
@@ -218,6 +221,8 @@ export interface KanbanMcpOptions {
    * attempted mutation are read-only for this identity.
    */
   readOnlyApp?: boolean;
+  /** Exact authenticated owner. Protected grant is checked anew for every task. */
+  dotTaskActor?: string;
 }
 
 function verifyReadScope(
@@ -304,6 +309,63 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     }
     return textResult({ card, execution: taskExecutionSnapshot(card), scope });
   });
+
+  // Owner OAuth identity is not a dot capability. Intersect with the current
+  // protected allowlist so service clients and other tenants cannot read tasks.
+  if (scope === 'work' && options.dotTaskActor === NIKITA_ACTOR && !readOnlyApp
+      && !options.requireExManagerReadScope) {
+    const actor = options.dotTaskActor;
+    const visible = (card: KanbanCard) => card.executor === 'dot' && configuredDotTaskAuthorized(card, actor);
+    const projectTask = (card: KanbanCard) => {
+      const execution = taskExecutionSnapshot(card);
+      const latest = card.resultHistory?.at(-1);
+      return {
+        id: card.id, title: card.title, project: card.project, version: card.version,
+        executor: 'dot' as const, owner: card.owner, reviewers: card.requiresApprovalFrom ?? [],
+        status: card.column,
+        executionState: execution.operationReceipt.status === 'unknown'
+          && execution.operationReceipt.operationCount === 0 ? 'unknown' : execution.state,
+        blocker: card.blockerReason || (card.pendingQuestion && !card.pendingQuestion.answer
+          ? card.pendingQuestion.text : execution.waitReason) || null,
+        nextAction: execution.nextAction ?? (card.pendingQuestion && !card.pendingQuestion.answer
+          ? 'Ответить на вопрос исполнителя' : null), eta: execution.etaAt ?? null,
+        progress: execution.operationReceipt.operationCount === 0 && card.column !== 'review'
+          ? null : execution.lastProgress ?? null,
+        evidence: ['review','done','archived'].includes(card.column)
+          ? latest?.evidenceRefs ?? execution.evidenceRefs ?? [] : execution.evidenceRefs ?? [],
+        sessionUrl: execution.sessionUrl ?? null,
+        needsReview: card.needsReview === true,
+        receipt: execution.operationReceipt,
+      };
+    };
+    server.registerTool('kanban.mine.list', {
+      title:'My dot tasks',description:'List at most 50 dot-assigned existing cards permitted by the protected grant.',
+      inputSchema:{project:z.string().optional(),column:z.enum(COLUMNS).optional(),limit:z.number().int().min(1).max(50).default(20)},
+      annotations:{readOnlyHint:true,openWorldHint:false},
+    },async ({project,column,limit})=>{
+      const cards=getAllCards(tasksDir).filter(card=>visible(card)
+        && (!project||card.project===project) && (!column||card.column===column)).slice(0,limit);
+      return textResult({tasks:cards.map(projectTask),count:cards.length,scope});
+    });
+    server.registerTool('kanban.mine.get', {
+      title:'My dot task',description:'Read one exact permitted card and original description.',
+      inputSchema:{cardId:z.string().min(1).max(256)},
+      annotations:{readOnlyHint:true,openWorldHint:false},
+    },async({cardId})=>{
+      const card=findCardById(cardId,tasksDir);
+      if(!card||!visible(card))throw Error('Card not found');
+      return textResult({task:{...projectTask(card),description:card.description},scope});
+    });
+    server.registerTool('kanban.mine.progress', {
+      title:'My dot task progress',description:'Read persisted progress and human review, no execution or write.',
+      inputSchema:{cardId:z.string().min(1).max(256)},
+      annotations:{readOnlyHint:true,openWorldHint:false},
+    },async({cardId})=>{
+      const card=findCardById(cardId,tasksDir);
+      if(!card||!visible(card))throw Error('Card not found');
+      return textResult({progress:projectTask(card),scope});
+    });
+  }
 
   if (!readOnlyApp) {
     server.registerTool('kanban.capture_inbox', {

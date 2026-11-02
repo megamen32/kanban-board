@@ -54,6 +54,8 @@ export async function POST(request: NextRequest) {
     allowConfirmedOwnerCommands: trustedWorkService,
     allowInternalTeamCommands: trustedWorkService,
     readOnlyApp: readOnlyAppClient,
+    ...(!trustedWorkService && !readOnlyAppClient && identity.scope === 'work'
+      && identity.username === 'nikita' ? {dotTaskActor:identity.username} : {}),
     requireExManagerReadScope,
     ...(verifyExManagerReadScope ? { verifyExManagerReadScope } : {}),
     requireExManagerWriteScope,

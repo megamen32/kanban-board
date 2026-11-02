@@ -37,6 +37,10 @@ function allowed(g:Grant,card:KanbanCard,actor:string) {
   return g.actors.includes(actor) && card.shared!==true
     && g.cards.some(c=>c.id===card.id && c.project===card.project && c.owner===card.owner);
 }
+/** Current exact-card protected grant; never expose the token or receipt key. */
+export function configuredDotTaskAuthorized(card:KanbanCard,actor:string):boolean {
+  const g=grant();return !!g && card.executor==='dot' && allowed(g,card,actor);
+}
 function capability(operationId:string):Capability|null {
   const dir=directory();if(!dir||!/^[a-f0-9]{64}$/.test(operationId))return null;
   const v=protectedJSON(join(dir,'attempts',operationId+'.json')) as Capability|null;
@@ -106,7 +110,7 @@ export async function handleDotCallback(request:Request,cardId:string,tasksDir:s
   const decoder=new TextDecoder();
   try{for(;;){const part=await reader.read();if(part.done)break;bytes+=part.value.length;if(bytes>16000){await reader.cancel();return reply({error:'body_too_large'},413);}text+=decoder.decode(part.value,{stream:true});}text+=decoder.decode();}catch{return reply({error:'invalid_body'},400);}
   let body;try{body=JSON.parse(text);}catch{return reply({error:'invalid_body'},400);}
-  if(!body||Object.keys(body).some(k=>!['operationId','requestId','receiptId','kind','summary','question'].includes(k))
+  if(!body||Object.keys(body).some(k=>!['operationId','requestId','receiptId','kind','summary','question','evidenceRefs','nextAction','etaAt','sessionUrl'].includes(k))
     || !/^[a-f0-9]{64}$/.test(body.operationId??'')||typeof body.receiptId!=='string'
     || !['running','needs_input','done'].includes(body.kind))return reply({error:'invalid_event'},400);
   const cap=capability(body.operationId);
@@ -117,7 +121,18 @@ export async function handleDotCallback(request:Request,cardId:string,tasksDir:s
     const fresh=grant();
     if(!fresh||!allowed(fresh,card,cap.actor)||card.project!==cap.project||card.owner!==cap.owner||!capability(cap.operationId))return null;
     if(body.summary!==undefined&&(typeof body.summary!=='string'||body.summary.length>4000))return null;
-    return {safeSummary:body.summary,safeQuestion:body.question};
+    const refs=body.evidenceRefs;
+    if(refs!==undefined&&(!Array.isArray(refs)||refs.length>20
+      ||refs.some((ref:unknown)=>typeof ref!=='string'||!ref.trim()||ref.length>2000||/[\x00-\x1f\x7f]/.test(ref))
+      ||new Set(refs).size!==refs.length))return null;
+    const nextAction=body.nextAction;
+    if(nextAction!==undefined&&(typeof nextAction!=='string'||nextAction.length>4000||/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(nextAction)))return null;
+    const etaAt=body.etaAt;
+    if(etaAt!==undefined&&(typeof etaAt!=='string'||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(etaAt)||Number.isNaN(Date.parse(etaAt))))return null;
+    const sessionUrl=body.sessionUrl;
+    if(sessionUrl!==undefined&&(typeof sessionUrl!=='string'||!/^https:\/\/chatgpt\.com\/c\/[a-f0-9]{8}-[a-f0-9-]{27}$/.test(sessionUrl)))return null;
+    return {safeSummary:body.summary,safeQuestion:body.question,safeEvidenceRefs:refs,
+      safeNextAction:nextAction,safeEtaAt:etaAt,safeSessionUrl:sessionUrl};
   });
   return reply(result.body,result.status);
 }

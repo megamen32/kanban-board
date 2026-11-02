@@ -15,6 +15,8 @@ export interface KanbanCard {
   assignees: string[];
   /** Person whose personal planning space owns this card. Old cards belong to Nikita. */
   owner?: string;
+  /** Explicit machine executor, separate from human owner/assignees/reviewer. */
+  executor?: 'dot';
   /** Short, durable explanation of what is currently blocking this task. */
   blockerReason?: string;
   /** Shared cards appear in the common-projects view for every selected person. */
@@ -349,6 +351,11 @@ export interface TaskExecutionReceipt {
   dispatchReceiptText?: string;
   lastProgress?: string;
   lastProgressAt?: string;
+  /** References from the existing protected callback, never authority. */
+  etaAt?: string;
+  sessionUrl?: string;
+  nextAction?: string;
+  evidenceRefs?: string[];
   /** Append-only task-scoped follow-up turns; never replaces the initial receipt. */
   continuations?: readonly TaskExecutionContinuation[];
   /** At most one direct and one stop per exact execution receipt; UNKNOWN is terminal. */
@@ -366,6 +373,7 @@ export interface ExecutorResultInput {
 export const PLANNING_VERSION = 1 as const;
 
 export type KanbanCardUpdates = Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'project' | 'assignees' | 'owner' | 'shared' | 'planningVersion' | 'type' | 'role' | 'accountable' | 'assignee' | 'important' | 'urgent' | 'week' | 'bigRock' | 'parent' | 'scheduledAt' | 'todayRank' | 'source' | 'needsReview' | 'suggestedAssignee' | 'waitingFor' | 'requiresApprovalFrom' | 'completedBy' | 'completedAt' | 'completionEvidence' | 'approvalEvidence' | 'resultHistory' | 'reviewHistory' | 'taskExecutionHistory' | 'pendingQuestion'>> & {
+  executor?: 'dot' | null;
   blockerReason?: string | null;
   dueAt?: string | null;
   nextAction?: string | null;

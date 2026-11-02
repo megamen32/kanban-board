@@ -22,6 +22,8 @@ export interface TaskExecutionSnapshot {
   nextAction?: string;
   waitReason?: string;
   sessionUrl?: string;
+  etaAt?: string;
+  evidenceRefs?: string[];
 }
 
 export const QUEUED_OPEN_CODE_ACTIVE_PROGRESS = 'Точное задание видно в связанной активной сессии; ожидаю квитанцию нативного хода. Повтор не выполнялся.';
@@ -62,11 +64,13 @@ export function taskExecutionSnapshot(card: KanbanCard): TaskExecutionSnapshot {
   const operationHistory = card.taskExecutionHistory;
   const attempt = operationHistory?.at(-1);
   const waitingFor = card.waitingFor?.filter(value => value.trim()) ?? [];
-  const sessionUrl = attempt?.nativeSessionId
+  const sessionUrl = attempt?.provider === 'dot' ? attempt.sessionUrl : attempt?.nativeSessionId
     ? taskSessionUrl(attempt.hostId, attempt.harness, attempt.nativeSessionId) : undefined;
-  const progress = attempt?.lastProgress
-    ? { summary: attempt.lastProgress, at: attempt.lastProgressAt ?? attempt.updatedAt }
-    : latest ? { summary: latest.summary, at: latest.submittedAt } : undefined;
+  const progress = attempt?.phase === 'result' && latest
+    ? { summary: latest.summary, at: latest.submittedAt }
+    : attempt?.lastProgress
+      ? { summary: attempt.lastProgress, at: attempt.lastProgressAt ?? attempt.updatedAt }
+      : latest ? { summary: latest.summary, at: latest.submittedAt } : undefined;
   const state: TaskExecutionState = attempt?.phase === 'running' || isObservedActiveQueuedSession(attempt)
     ? 'running'
     : attempt?.phase === 'waiting' || attempt?.phase === 'created'
@@ -104,7 +108,10 @@ export function taskExecutionSnapshot(card: KanbanCard): TaskExecutionSnapshot {
         : { source: 'card.taskExecutionHistory', status: 'unknown', operationCount: 0, reason: 'history-field-absent' },
     ...(progress ? { lastProgress: progress } : {}),
     ...(card.nextAction === null ? {} : card.nextAction?.trim() ? { nextAction: card.nextAction.trim() }
-      : latest?.nextAction?.trim() ? { nextAction: latest.nextAction.trim() } : {}),
+      : latest?.nextAction?.trim() ? { nextAction: latest.nextAction.trim() }
+      : attempt?.nextAction?.trim() ? {nextAction:attempt.nextAction.trim()} : {}),
+    ...(attempt?.etaAt ? {etaAt:attempt.etaAt} : {}),
+    ...(attempt?.evidenceRefs?.length ? {evidenceRefs:attempt.evidenceRefs} : {}),
     ...(sessionUrl ? { sessionUrl } : {}),
     ...(state === 'waiting' ? {
       waitReason: attempt?.phase === 'created'
