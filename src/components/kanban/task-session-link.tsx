@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { ArrowUpRight, X } from 'lucide-react';
 import type { KanbanCard } from '../../lib/kanban/types';
 import { taskSessionEmbedUrl, taskSessionUrl } from '../../lib/kanban/task-execution';
+import type { TaskExecutionPhase } from '../../lib/kanban/types';
 
 const HARNESS_LABELS = { codex: 'Codex', zcode: 'ZCode', opencode: 'OpenCode' } as const;
 
@@ -14,6 +15,18 @@ type LinkedSession = {
   hostId: string;
   href: string;
   embedHref: string;
+  phase: TaskExecutionPhase;
+};
+
+const PHASE_LABELS: Record<TaskExecutionPhase, string> = {
+  intent: 'запрос создан',
+  'create-unknown': 'создание не подтверждено',
+  created: 'сессия создана',
+  'dispatch-unknown': 'доставка не подтверждена',
+  running: 'работает',
+  waiting: 'ждёт ответа',
+  stopped: 'остановлена',
+  result: 'результат готов',
 };
 
 export function linkedTaskSessions(card: KanbanCard): LinkedSession[] {
@@ -33,6 +46,7 @@ export function linkedTaskSessions(card: KanbanCard): LinkedSession[] {
       hostId: receipt.hostId,
       href,
       embedHref,
+      phase: receipt.phase,
     });
   }
   return links;
@@ -75,18 +89,22 @@ export function TaskSessionLink({ card, compact = false }: { card: KanbanCard; c
             onClick={() => setPanelOpen(true)}>
             Показать рядом
           </button>}
-          {!compact && sessions.length > 1 && <details className="w-full text-xs">
-            <summary className="cursor-pointer">Другие сессии задачи ({sessions.length - 1})</summary>
+          {!compact && <details className="w-full text-xs">
+            <summary className="cursor-pointer">Сессии задачи ({sessions.length})</summary>
             <div className="mt-2 flex flex-col gap-2">
-              {sessions.slice(1).map(session => <a key={session.key} href={session.href}
-                target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
-                {session.harness} · {session.sessionId} <ArrowUpRight aria-hidden="true" className="inline h-3 w-3" />
-              </a>)}
+              {sessions.map((session, i) => <div key={session.key} className="flex flex-wrap items-center gap-x-2">
+                <a href={session.href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+                  {i === 0 ? 'Последняя · ' : ''}{session.harness} · {session.sessionId}
+                  <ArrowUpRight aria-hidden="true" className="inline h-3 w-3" />
+                </a>
+                <span className="text-muted-foreground">{PHASE_LABELS[session.phase]}</span>
+              </div>)}
             </div>
           </details>}
         </>
       ) : <span className="text-muted-foreground">
         {latestReceipt?.nativeSessionId ? 'Нет проверенного адреса сессии' : 'Сессия пока не подтверждена'}
+        {latestReceipt && ` · ${PHASE_LABELS[latestReceipt.phase]}`}
       </span>}
       {panelOpen && selected && !compact && (
         <aside role="dialog" aria-label="Сессия исполнителя в Agent Herder"

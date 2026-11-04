@@ -5,13 +5,13 @@ import type { KanbanCard, TaskExecutionReceipt } from '../../lib/kanban/types';
 import { taskSessionEmbedUrl, taskSessionUrl } from '../../lib/kanban/task-execution';
 import { linkedTaskSessions, TaskSessionLink } from './task-session-link';
 
-const receipt = (nativeSessionId?: string): TaskExecutionReceipt => ({
+const receipt = (nativeSessionId?: string, phase: TaskExecutionReceipt['phase'] = nativeSessionId ? 'result' : 'intent'): TaskExecutionReceipt => ({
   operationId: 'qa-' + (nativeSessionId ?? 'pending'),
   requestHash: 'a'.repeat(64),
   lastBoardVersion: 1,
   createInputId: 'c'.repeat(64),
   messageInputId: 'd'.repeat(64),
-  phase: nativeSessionId ? 'result' : 'intent',
+  phase,
   hostId: 'roomhacker-server-100',
   harness: 'opencode',
   ...(nativeSessionId ? { nativeSessionId } : {}),
@@ -39,9 +39,33 @@ describe('Agent Herder task links matching LHC', () => {
     expect(sessions.map(session => session.sessionId)).toEqual(['ses_latest', 'ses_first']);
     const html = renderToStaticMarkup(<TaskSessionLink card={card([receipt('ses_first'), receipt('ses_latest'), receipt()])} />);
     expect(html).toContain('Показать рядом');
-    expect(html).toContain('Другие сессии задачи (1)');
+    expect(html).toContain('Сессии задачи (2)');
     expect(html).toContain('ses_latest');
     expect(html).toContain('ses_first');
+    expect(html).toContain('результат готов');
+  });
+
+  it('counts distinct sessions and shows the latest saved stage for each session', () => {
+    const history = [
+      receipt('ses_a', 'running'), receipt('ses_b', 'waiting'),
+      receipt('ses_a', 'stopped'), receipt('ses_c', 'dispatch-unknown'),
+    ];
+    const sessions = linkedTaskSessions(card(history));
+    expect(sessions.map(session => [session.sessionId, session.phase])).toEqual([
+      ['ses_c', 'dispatch-unknown'], ['ses_a', 'stopped'], ['ses_b', 'waiting'],
+    ]);
+    const html = renderToStaticMarkup(<TaskSessionLink card={card(history)} />);
+    expect(html).toContain('Сессии задачи (3)');
+    expect(html).toContain('доставка не подтверждена');
+    expect(html).toContain('остановлена');
+    expect(html).toContain('ждёт ответа');
+  });
+
+  it('describes pending attempts without claiming that a session exists', () => {
+    const html = renderToStaticMarkup(<TaskSessionLink card={card([receipt(undefined, 'create-unknown')])} />);
+    expect(html).toContain('создание не подтверждено');
+    expect(html).toContain('Сессия пока не подтверждена');
+    expect(html).not.toContain('Сессии задачи (');
   });
 
   it('shows a direct Herder link in a compact task card', () => {
