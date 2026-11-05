@@ -14,7 +14,6 @@ import {
   Archive,
   CalendarCheck,
   CalendarDays,
-  CheckCircle2,
   CircleAlert,
   Columns3,
   FolderSync,
@@ -59,12 +58,12 @@ export function KanbanBoard() {
   const { cards, projects, loading, conflict, createCard, updateCard, deleteCard, moveCard, reorderColumn, resolveConflict, refresh, weeklyDraft, weeklyLoading, weeklyError, fetchWeeklyDraft, acceptWeeklyPlan } = useKanban();
   const [showAdd, setShowAdd] = useState(false);
   const [defaultColumn, setDefaultColumn] = useState('inbox');
-  const [view, setView] = useState<BoardLayout>('list');
+  const [view, setView] = useState<BoardLayout>('kanban');
   const [project, setProject] = useState('all');
   const [assignee, setAssignee] = useState('all');
   const [inboxOnly, setInboxOnly] = useState(false);
   const [selectedCard, setSelectedCard] = useState<KanbanCard | null>(null);
-  const [planningTab, setPlanningTab] = useState<PlanningTab>('dashboard');
+  const [planningTab, setPlanningTab] = useState<PlanningTab>('execution');
   const [username, setUsername] = useState<string | null>(null);
   const [identityChecked, setIdentityChecked] = useState(false);
   const [person, setPerson] = useState('nikita');
@@ -147,8 +146,6 @@ export function KanbanBoard() {
   useEffect(() => {
     if (!loading && assignee !== 'all' && !assigneeOptions.includes(assignee)) setAssignee('all');
   }, [assignee, assigneeOptions, loading]);
-
-  const handleAdd = (column: string) => { setDefaultColumn(column); setShowAdd(true); };
 
   // The scope the board shows right now. A create can resolve after the user
   // changed a filter, so the receipt must read the live scope, not a closure.
@@ -234,9 +231,9 @@ export function KanbanBoard() {
   );
   const renderAttentionFilters = () => planningTab !== 'closed' && (
     <div className="flex items-center gap-1">
-      <Button aria-label={`Активные: ${counts.active}`} title={`Активные: ${counts.active}`} variant={attention === 'all' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setAttention('all')}><Activity aria-hidden className="h-3.5 w-3.5" /><span>{counts.active}</span></Button>
-      <Button aria-label={`Блокеры: ${counts.blocked}`} title={`Блокеры: ${counts.blocked}`} variant={attention === 'blocked' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => { setAttention('blocked'); setInboxOnly(false); setPlanningTab('execution'); }}><CircleAlert aria-hidden className="h-3.5 w-3.5" /><span>{counts.blocked}</span></Button>
-      <Button aria-label={`Без ответственного: ${counts.unassigned}`} title={`Без ответственного: ${counts.unassigned}`} variant={attention === 'unassigned' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => { setAttention('unassigned'); setInboxOnly(false); setPlanningTab('execution'); }}><UserX aria-hidden className="h-3.5 w-3.5" /><span>{counts.unassigned}</span></Button>
+      <Button aria-label={`Активные: ${counts.active}`} title={`Активные: ${counts.active}`} variant={attention === 'all' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setAttention('all')}><Activity aria-hidden className="h-3.5 w-3.5" /><span>Активные {counts.active}</span></Button>
+      <Button aria-label={`Блокеры: ${counts.blocked}`} title={`Блокеры: ${counts.blocked}`} variant={attention === 'blocked' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => { setAttention('blocked'); setInboxOnly(false); setPlanningTab('execution'); }}><CircleAlert aria-hidden className="h-3.5 w-3.5" /><span>Блокеры {counts.blocked}</span></Button>
+      <Button aria-label={`Без ответственного: ${counts.unassigned}`} title={`Без ответственного: ${counts.unassigned}`} variant={attention === 'unassigned' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => { setAttention('unassigned'); setInboxOnly(false); setPlanningTab('execution'); }}><UserX aria-hidden className="h-3.5 w-3.5" /><span>Без ответственного {counts.unassigned}</span></Button>
     </div>
   );
 
@@ -270,8 +267,8 @@ export function KanbanBoard() {
           <div className="flex flex-wrap items-center gap-1.5 sm:flex-nowrap">
             <div className="flex shrink-0 items-center gap-1.5">
               <FolderSync aria-hidden className="h-4 w-4 text-muted-foreground" />
-              <h1 className="text-sm font-semibold">Задачи</h1>
-              <span className="hidden text-[11px] text-muted-foreground sm:inline" aria-live="polite">{planningTab === 'closed' ? closedCards.length : visibleCards.length}</span>
+              <h1 className="text-lg font-semibold tracking-tight">Доска задач</h1>
+              <span className="text-[11px] text-muted-foreground" aria-live="polite">Задач: {planningTab === 'closed' ? closedCards.length : visibleCards.length}</span>
             </div>
             <label className="relative order-last w-full min-w-0 sm:order-none sm:flex-1">
               <Search aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -285,11 +282,12 @@ export function KanbanBoard() {
                 </Button>
               )}
               {planningTab === 'execution' && <div className="flex items-center gap-0.5 rounded-md border p-0.5">
-                {!isMobile && <Button aria-label="Канбан" title="Канбан" aria-pressed={view === 'kanban'} variant={view === 'kanban' ? 'secondary' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setView('kanban')}><Columns3 aria-hidden className="h-4 w-4" /></Button>}
-                <Button aria-label="Список" title="Список" aria-pressed={view === 'list'} variant={view === 'list' ? 'secondary' : 'ghost'} size="sm" className="h-7 w-7 p-0" onClick={() => setView('list')}><ListTodo aria-hidden className="h-4 w-4" /></Button>
+                {!isMobile && <Button aria-label="Канбан" title="Канбан" aria-pressed={view === 'kanban'} variant={view === 'kanban' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setView('kanban')}><Columns3 aria-hidden className="h-4 w-4" /><span>Канбан</span></Button>}
+                <Button aria-label="Список" title="Список" aria-pressed={view === 'list'} variant={view === 'list' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setView('list')}><ListTodo aria-hidden className="h-4 w-4" /><span>Список</span></Button>
                 <Button aria-label="Граф" title="Граф" aria-pressed={view === 'graph'} variant={view === 'graph' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setView('graph')}><GitFork aria-hidden className="h-4 w-4" />Граф</Button>
               </div>}
               <Button aria-label="Обновить" title="Обновить" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={refresh}><RotateCw aria-hidden className="h-3.5 w-3.5" /></Button>
+              <Button size="sm" className="h-8 gap-1" onClick={() => { setDefaultColumn('todo'); setShowAdd(true); }}><Plus aria-hidden className="h-4 w-4" />Задача</Button>
             </div>
           </div>
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
@@ -302,7 +300,7 @@ export function KanbanBoard() {
             </div>
             <div className="relative shrink-0">
               <Button aria-label="Дополнительные фильтры" aria-controls="board-additional-filters" aria-expanded={filtersOpen} title="Фильтры" variant="ghost" size="sm" className="h-7 gap-1 border px-2 text-xs" onClick={() => setFiltersOpen(value => !value)}>
-                <SlidersHorizontal aria-hidden className="h-3.5 w-3.5" /><span className="sm:hidden">Фильтры</span>
+                <SlidersHorizontal aria-hidden className="h-3.5 w-3.5" /><span>Фильтры</span>
               </Button>
               {filtersOpen && <div id="board-additional-filters" role="region" aria-label="Дополнительные фильтры" className="absolute left-0 top-full z-50 mt-1 grid max-h-[70vh] w-72 max-w-[calc(100vw-1rem)] gap-2 overflow-y-auto rounded-md border bg-popover p-3 text-popover-foreground shadow-lg">
                 <div className="grid gap-2 sm:hidden">{projectFilter}</div>
@@ -321,11 +319,10 @@ export function KanbanBoard() {
         </div>
         {receipt && (
           <div role="status" className="flex flex-wrap items-center gap-2 border-b border-emerald-600/30 bg-emerald-600/10 px-3 py-2 text-sm sm:px-6">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-400" />
             <p className="min-w-0 flex-1">{receipt.text}</p>
             <div className="flex shrink-0 items-center gap-1">
               <Button size="sm" variant="outline" onClick={() => setSelectedCard(receipt.card)}>Открыть</Button>
-              <Button size="sm" variant="ghost" onClick={() => setReceipt(null)}>Понятно</Button>
+              <Button size="sm" variant="ghost" aria-label="Закрыть уведомление" onClick={() => setReceipt(null)}>Закрыть</Button>
             </div>
           </div>
         )}
@@ -358,7 +355,6 @@ export function KanbanBoard() {
                 title={col.title}
                 color={col.color}
                   cards={getPrimaryBoardLaneCards(visibleCards, index === 0 ? 'incoming' : index === 1 ? 'in-progress' : 'review')}
-                  onAddCard={index === 2 ? undefined : () => handleAdd(col.id)}
               />
             ))}
           </div>
@@ -380,9 +376,6 @@ export function KanbanBoard() {
             <TaskListView cards={closedCards} authoritativeCards={cards} breadcrumbCards={scopedCards} highlightCardId={highlightCardId} username={username} onRefresh={refresh} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />
           </TabsContent>
         </Tabs>
-        <Button className="fixed bottom-20 right-4 z-50 h-12 w-12 rounded-full shadow-lg md:bottom-6 md:right-6" aria-label="Новая задача" title="Новая задача" onClick={() => { setDefaultColumn('todo'); setShowAdd(true); }}>
-          <Plus className="h-5 w-5" />
-        </Button>
         <AddCardDialog projectOptions={projectOptions} relatedCards={visibleCards} defaultProject={project === 'all' ? '' : project} ownerPreview={identityChecked ? username ?? 'nikita' : null} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
         {selectedCard && <CardEditDialog projectOptions={projectOptions} relatedCards={visibleCards} breadcrumbCards={scopedCards} roles={roles} card={cards.find(card => card.id === selectedCard.id) ?? selectedCard} username={username} onRefresh={refresh} open onOpenChange={open => { if (!open) setSelectedCard(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReviewDecision} onSelectCard={setSelectedCard} />}
         {conflict && <ConflictDialog conflict={conflict} onResolve={resolveConflict} />}

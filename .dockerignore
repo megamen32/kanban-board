@@ -1,10 +1,14 @@
 node_modules
 .next
 data/tasks/*.md
+data/
+.agents/
 git
 .git
 *.log
 .env*
+**/.env*
+**/runtime.env*
 .DS_Store
 **/*.test.*
 **/*.spec.*

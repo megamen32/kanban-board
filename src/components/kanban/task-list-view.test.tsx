@@ -34,13 +34,13 @@ const stuckCard: KanbanCard = {
 describe('task list recovery layout', () => {
   it('keeps the title in the main column and places the recovery notice underneath it', () => {
     const html = renderToStaticMarkup(React.createElement(TaskListView, {
-      cards: [stuckCard],
+      cards: [{ ...stuckCard, owner: 'nikita' }],
       username: 'nikita',
       onStatusChange: async () => ({}),
       onOpen: () => {},
     }));
 
-    expect(html).toContain('grid-cols-[1.25rem_minmax(0,1fr)]');
+    expect(html).toContain('grid-cols-[1.5rem_minmax(0,1fr)]');
     expect(html.indexOf(stuckCard.title)).toBeGreaterThan(-1);
     expect(html.indexOf('Приёмка заблокирована')).toBeGreaterThan(html.indexOf(stuckCard.title));
   });
@@ -60,5 +60,32 @@ describe('task list recovery layout', () => {
     expect(filtered).toContain(child.title);
     expect(filtered).toContain('родитель вне текущей выборки');
     expect(filtered).not.toContain(parent.id);
+  });
+
+  it('separates task status from the last known AI session state and reports no session data without a receipt', () => {
+    const empty = renderToStaticMarkup(React.createElement(TaskListView, {
+      cards: [stuckCard], onStatusChange: async () => ({}), onOpen: () => {},
+    }));
+    expect(empty).toContain('AI-сессии · 0');
+    expect(empty).toContain('В работе');
+    expect(empty).toContain('AI-сессия не прикреплена');
+
+    const withSession = {
+      ...stuckCard,
+      taskExecutionHistory: [{
+        operationId: 'op', requestHash: 'hash', lastBoardVersion: 17, createInputId: 'in-create',
+        messageInputId: 'in-message', phase: 'running', hostId: 'roomhacker-server-100', harness: 'opencode',
+        nativeSessionId: 'session-1', startedBy: 'agent', createdAt: '2026-11-04T00:00:00Z', updatedAt: '2026-11-04T00:01:00Z',
+        lastProgress: 'Проверяю входные данные',
+      }],
+    } as unknown as KanbanCard;
+    const html = renderToStaticMarkup(React.createElement(TaskListView, {
+      cards: [withSession], onStatusChange: async () => ({}), onOpen: () => {},
+    }));
+    expect(html).toContain('Последнее состояние: в работе');
+    expect(html).toContain('AI-сессии · 1');
+    expect(html).toContain('Проверяю входные данные');
+    expect(html).toContain('Открыть сессию');
+    expect(html).not.toContain('receipt');
   });
 });

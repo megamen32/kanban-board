@@ -124,13 +124,13 @@ describe('created card placement', () => {
     const placement = placeCreatedCard(card(), scope());
     const automatic = automaticRevealScope(card(), scope(), placement);
     const visible = describePlacement(card(), placeCreatedCard(card(), automatic), { from: 'shared', to: 'mine' });
-    expect(visible).toContain('создана и показана в режиме «Моё»');
-    expect(visible).toContain('Режим переключён с «Общее» на «Моё»');
-    expect(visible).toContain('Владелец: nikita');
+    expect(visible).toContain('создана · «Моё» · «Активные»');
+    expect(visible).toContain('режим изменён с «Общее»');
+    expect(visible).not.toContain('Владелец: nikita');
 
     const hidden = describePlacement(card(), placement);
-    expect(hidden).toContain('Сейчас её скрывает: режим «Общее»');
-    expect(hidden).toContain('доска не расширяет видимость');
+    expect(hidden).toContain('скрыта фильтрами: режим «Общее»');
+    expect(hidden).toContain('измените фильтры');
     expect(hidden).not.toContain('Показать в режиме «Всё»');
   });
 });

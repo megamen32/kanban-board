@@ -170,10 +170,10 @@ export function describePlacement(
 ): string {
   const title = card.title;
   if (placement.visibleNow && placement.matchingView) {
-    const base = `Задача «${title}» создана и показана в режиме «${WORKSPACE_LABEL[placement.matchingView]}», вкладке «${TAB_LABEL[placement.tab]}». ${placement.location}.`;
-    if (!viewChange) return base;
-    return `${base} Режим переключён с «${WORKSPACE_LABEL[viewChange.from]}» на «${WORKSPACE_LABEL[viewChange.to]}», чтобы карточка была видна.`;
+    const location = `«${WORKSPACE_LABEL[placement.matchingView]}» · «${TAB_LABEL[placement.tab]}»`;
+    if (!viewChange) return `Задача «${title}» создана · ${location}.`;
+    return `Задача «${title}» создана · ${location} (режим изменён с «${WORKSPACE_LABEL[viewChange.from]}»).`;
   }
   const reasons = placement.issues.map(issue => issue.label).join(', ');
-  return `Задача «${title}» создана. ${placement.location}. Сейчас её скрывает: ${reasons}. Откройте карточку или снимите фильтр — доска не расширяет видимость.`;
+  return `Задача «${title}» создана, но скрыта фильтрами: ${reasons}. Откройте её или измените фильтры.`;
 }
