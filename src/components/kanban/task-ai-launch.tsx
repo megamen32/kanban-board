@@ -31,6 +31,8 @@ export function TaskAiLaunch({ card, onRefresh }: { card: KanbanCard; onRefresh:
   const [target, setTarget] = useState<NativeTargetPreview | null>(null);
   const [available, setAvailable] = useState(false);
   const [message, setMessage] = useState('Проверяем маршрут…');
+  const [retry, setRetry] = useState(0);
+  const [canRetryCheck, setCanRetryCheck] = useState(false);
   const [busy, setBusy] = useState(false);
   const marker = useRef<HTMLDivElement>(null);
   const inFlight = useRef(false);
@@ -41,6 +43,8 @@ export function TaskAiLaunch({ card, onRefresh }: { card: KanbanCard; onRefresh:
     async function load() {
       if (started) return;
       started = true;
+      setCanRetryCheck(false);
+      setMessage('Проверяем доступ к AI…');
       try {
         const key = executionOperationStorageKey(card.id);
         if (window.localStorage.getItem(key)) { setMessage('Запуск уже был запрошен. Откройте задачу, чтобы проверить состояние.'); return; }
@@ -55,14 +59,14 @@ export function TaskAiLaunch({ card, onRefresh }: { card: KanbanCard; onRefresh:
         setTarget(preview);
         setAvailable(preview.selectable && snapshot.startAvailable === true);
         setMessage(preview.selectable && snapshot.startAvailable === true ? '' : (snapshot.unavailableReason || preview.reason || 'Запуск сейчас недоступен'));
-      } catch { if (!controller.signal.aborted) setMessage('Маршрут запуска не удалось проверить.'); }
+      } catch { if (!controller.signal.aborted) { setMessage('Не удалось проверить доступ к AI. Запуск не выполнялся.'); setCanRetryCheck(true); } }
     }
     const node = marker.current;
     if (!node || typeof IntersectionObserver === 'undefined') { void load(); return () => controller.abort(); }
     const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) void load(); }, { rootMargin: '100px' });
     observer.observe(node);
     return () => { observer.disconnect(); controller.abort(); };
-  }, [card.id, card.version]);
+  }, [card.id, card.version, retry]);
 
   async function start() {
     if (inFlight.current || busy || !available || !target || target.cardVersion !== card.version) return;
@@ -82,6 +86,7 @@ export function TaskAiLaunch({ card, onRefresh }: { card: KanbanCard; onRefresh:
   return <div ref={marker} className="mt-2 text-xs" onPointerDown={event => event.stopPropagation()} onPointerUp={event => event.stopPropagation()} onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
     {target && <p className="text-muted-foreground">{target.harness} / {target.model}<br />{target.hostId}</p>}
     {message && <p role="status" className="mt-1 text-muted-foreground">{message}</p>}
+    {canRetryCheck && <button type="button" onClick={() => setRetry(value => value + 1)} className="mt-1 block font-medium text-primary underline">Проверить ещё раз</button>}
     <button type="button" disabled={!available || busy} onClick={() => void start()} className="mt-1 rounded-md bg-primary px-3 py-1.5 font-semibold text-primary-foreground disabled:opacity-50">{busy ? 'Запускаю…' : 'Запустить AI'}</button>
   </div>;
 }

@@ -9,6 +9,7 @@ import { taskPersonLabel } from '../../lib/kanban/task-membership';
 import { statusSaveError } from './status-result';
 import { ReviewRecoveryControl } from './review-recovery-control';
 import { TaskSessionLink } from './task-session-link';
+import { TaskAiLaunch } from './task-ai-launch';
 import { getCardAncestorChain, groupVisibleCardHierarchy, type VisibleCardHierarchyGroup } from './card-hierarchy';
 
 interface Props {
@@ -157,6 +158,7 @@ export function TaskListView({ cards, authoritativeCards = cards, breadcrumbCard
                       <span className="mt-1 block">{latestReceipt ? `Последнее состояние: ${receiptPhase[latestReceipt.phase] ?? 'неизвестно'}` : 'AI-сессия не прикреплена'}</span>
                       {latestReceipt?.lastProgress?.trim() && <p className="mt-1 break-words">{latestReceipt.lastProgress.trim()}</p>}
                       {receipts.length > 0 && <TaskSessionLink card={displayCard} compact />}
+                      {receipts.length === 0 && <TaskAiLaunch card={displayCard} onRefresh={() => onRefresh?.()} />}
                     </section>
                     <span className={`mt-2 inline-flex w-fit rounded-full border px-2 py-1 text-xs font-semibold lg:mt-0 ${STATUS_TONE[card.column] ?? STATUS_TONE.todo}`}>{status}{needsReview ? ' · ждёт решения' : ''}</span>
                     <button type="button" onClick={() => onOpen(displayCard)} className="mt-2 block text-left text-xs font-semibold text-primary hover:underline lg:mt-1">Открыть →</button>

@@ -154,6 +154,7 @@ export function KanbanCard({ card, columnId }: Props) {
               {dueLabel && <span className="inline-flex items-center gap-1 rounded-md bg-muted/70 px-2 py-1 text-xs text-muted-foreground"><CalendarClock className="h-3.5 w-3.5" />{dueLabel}</span>}
             </div>
             <div className="mt-3 border-t border-border/60 pt-2 text-xs text-muted-foreground">Обновлена {timeAgo(card.updated)}</div>
+            <button type="button" className="mt-2 text-xs font-semibold text-primary hover:underline" onPointerDown={event => event.stopPropagation()} onPointerUp={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); setEditing(true); }} onKeyDown={event => event.stopPropagation()}>Открыть задачу →</button>
           </div>
         </div>
       </div>
