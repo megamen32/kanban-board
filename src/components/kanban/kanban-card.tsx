@@ -13,7 +13,7 @@ import { shouldOpenCardAfterPointer, type PointerCoordinates } from './card-inte
 import { PRIORITY_COLORS } from '@/lib/kanban/types';
 import type { KanbanCard as CardType, KanbanCardUpdates, RoleDefinition } from '@/lib/kanban/types';
 import * as React from 'react';
-import { useCallback, useEffect, useState, createContext, useContext, useRef } from 'react';
+import { useState, createContext, useContext, useRef } from 'react';
 
 // Context for update/delete without prop drilling
 interface CardActionsCtx {
@@ -46,16 +46,6 @@ export function KanbanCard({ card, columnId }: Props) {
   });
   const highlighted = highlightCardId === card.id;
   const hierarchyTrail = card.parent ? getCardAncestorChain(card, breadcrumbCards) : [];
-  const highlightedRef = useRef<HTMLDivElement | null>(null);
-  const attachRefs = useCallback((node: HTMLDivElement | null) => {
-    setNodeRef(node);
-    highlightedRef.current = node;
-  }, [setNodeRef]);
-  useEffect(() => {
-    // A freshly created card has to reach the eye without a manual hunt.
-    if (!highlighted) return;
-    highlightedRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-  }, [highlighted]);
 
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
 
@@ -95,7 +85,7 @@ export function KanbanCard({ card, columnId }: Props) {
   return (
     <>
       <div
-        ref={attachRefs}
+        ref={setNodeRef}
         style={style}
         {...attributes}
         {...listeners}
