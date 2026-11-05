@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test, vi } from 'vitest';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-store-'));
 const isolatedDirs: string[] = [];
@@ -14,6 +14,34 @@ afterAll(() => {
 });
 
 describe('filesystem kanban contract', () => {
+  test('closes a legacy card whose multibyte filename is close to the filesystem byte limit', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-legacy-name-'));
+    isolatedDirs.push(dir);
+    const title = 'Длинная задача — сохранить полный заголовок и содержимое';
+    const card = store.createCard(title, 'Исходное содержимое', 'todo', 'medium', ['тест'], 'QA', [], dir);
+    const legacyName = `${'я'.repeat(115)}-${card.id.slice(0, 8)}.md`;
+    expect(Buffer.byteLength(legacyName, 'utf8')).toBeLessThanOrEqual(255);
+    expect(Buffer.byteLength(`${legacyName}.${process.pid}.${'0'.repeat(36)}.tmp`, 'utf8')).toBeGreaterThan(255);
+    fs.renameSync(path.join(dir, card.fileName), path.join(dir, legacyName));
+    const saved = store.updateCard(card.id, { column: 'done' }, card.version, dir);
+    expect(saved).toMatchObject({ title, description: 'Исходное содержимое', column: 'done', fileName: legacyName });
+    expect(store.findCardById(card.id, dir)).toMatchObject({ title, description: 'Исходное содержимое', column: 'done', tags: ['тест'] });
+    expect(fs.readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  test('a failed atomic rename preserves the original card and removes the temporary file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-atomic-failure-'));
+    isolatedDirs.push(dir);
+    const card = store.createCard('Задача', 'Сохранить текст', 'todo', 'medium', [], 'QA', [], dir);
+    const before = fs.readFileSync(path.join(dir, card.fileName), 'utf8');
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw new Error('simulated rename failure'); });
+    try {
+      expect(() => store.updateCard(card.id, { column: 'done' }, card.version, dir)).toThrow('simulated rename failure');
+    } finally { rename.mockRestore(); }
+    expect(fs.readFileSync(path.join(dir, card.fileName), 'utf8')).toBe(before);
+    expect(store.findCardById(card.id, dir)).toMatchObject({ column: 'todo', description: 'Сохранить текст', version: card.version });
+    expect(fs.readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
   test('persists nested parents atomically and rejects missing, cross-scope, and cyclic relations without overwriting cards', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-parent-relations-'));
     isolatedDirs.push(dir);

@@ -56,8 +56,8 @@ function sanitizeFileName(name: string): string {
 
 function slugify(title: string, id: string): string {
   const suffix = `-${id.split('-')[0]}.md`;
-  // writeCard appends .<pid>.<uuid>.tmp before rename; reserve its maximum
-  // byte budget so long UTF-8 titles work on filesystems with NAME_MAX=255.
+  // Retain the existing byte budget for compatibility with older runtimes
+  // that append a temporary suffix to the destination name.
   const budget = MAX_FILENAME_COMPONENT_BYTES - MAX_TEMP_SUFFIX_BYTES - Buffer.byteLength(suffix, 'utf8');
   let slug = '', bytes = 0;
   for (const char of sanitizeFileName(title)) {
@@ -535,13 +535,19 @@ function writeCard(card: KanbanCard, tasksDir = TASKS_DIR): void {
   const filePath = path.join(tasksDir, card.fileName);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const frontmatter = buildFrontmatter(card);
-  const tmp = `${filePath}.${process.pid}.${uuidv4()}.tmp`;
+  // Keep the temporary component independent of the destination name: legacy
+  // names can already occupy nearly the entire filesystem byte limit.
+  const tmp = path.join(path.dirname(filePath), `.kanban-${uuidv4()}.tmp`);
   const fd = fs.openSync(tmp, 'wx', 0o600);
   try {
-    fs.writeFileSync(fd, frontmatter + (card.description ? '\n' + card.description : ''));
-    fs.fsyncSync(fd);
-  } finally { fs.closeSync(fd); }
-  fs.renameSync(tmp, filePath);
+    try {
+      fs.writeFileSync(fd, frontmatter + (card.description ? '\n' + card.description : ''));
+      fs.fsyncSync(fd);
+    } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, filePath);
+  } finally {
+    if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  }
   fsyncDirectory(path.dirname(filePath));
 }
 
