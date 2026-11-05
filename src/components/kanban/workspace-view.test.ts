@@ -53,7 +53,7 @@ describe('personal and shared workspace views', () => {
   });
 
   it('discovers people from owners and assignments for the first-entry picker', () => {
-    expect(getPeople([...cards, card('cyrillic-nikita', { assignees: ['Никита'] })])).toEqual(['Никита Розанов', 'marina']);
+    expect(getPeople([...cards, card('cyrillic-nikita', { assignees: ['Никита'] })])).toEqual(['marina', 'nikita']);
   });
 
   it('shows Nikita aliases as one person and filters them through the stable identity', () => {
@@ -63,7 +63,7 @@ describe('personal and shared workspace views', () => {
       card('full-name', { owner: 'Никита Розанов' }),
     ];
 
-    expect(getPeople(aliases)).toEqual(['Никита Розанов']);
+    expect(getPeople(aliases)).toEqual(['nikita']);
     for (const alias of ['nikita', 'Никита', 'Никита Розанов']) {
       expect(filterWorkspaceCards(aliases, alias, 'mine').map(item => item.id)).toEqual([
         'latin-name', 'cyrillic-name', 'full-name',

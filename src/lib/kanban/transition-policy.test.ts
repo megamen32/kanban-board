@@ -21,6 +21,17 @@ const baseCard: KanbanCard = {
 };
 
 describe('kanban transition policy', () => {
+  test('matches the owner display name to their verified reviewer identity without granting another reviewer', () => {
+    const card: KanbanCard = { ...baseCard, owner: 'nikita', column: 'review', needsReview: true, requiresApprovalFrom: ['Никита Розанов'] };
+    expect(decideHumanReview(card, 'accept', 'nikita')).toMatchObject({ kind: 'accepted', patch: { column: 'done', completedBy: 'nikita' } });
+    expect(decideHumanReview({ ...card, requiresApprovalFrom: ['Олег'] }, 'accept', 'nikita')).toMatchObject({ kind: 'rejected', reason: 'reviewer_not_authorized' });
+  });
+  test('allows the verified owner to manually close their own unassigned review without inventing a result', () => {
+    const card: KanbanCard = { ...baseCard, owner: 'nikita', column: 'review', needsReview: false, requiresApprovalFrom: [] };
+    expect(decideHumanReview(card, 'accept', 'nikita')).toMatchObject({kind: 'accepted', patch: {column: 'done', completedBy: 'nikita'}});
+    expect(decideHumanReview({ ...card, needsReview: true, requiresApprovalFrom: ['oleg'] }, 'accept', 'nikita')).toMatchObject({kind: 'rejected', reason: 'reviewer_not_authorized'});
+    expect(decideHumanReview(card, 'accept', 'oleg')).toMatchObject({kind: 'rejected'});
+  });
   test('owner recovers only a malformed in-progress review gate without accepting results', () => {
     const malformed: KanbanCard = { ...baseCard, owner: 'nikita', column: 'in-progress', needsReview: true, requiresApprovalFrom: [], resultHistory: [] };
     const decision = decideHumanReview(malformed, 'recover-rework', 'nikita', 'Проверить статус и продолжить работу');
@@ -50,7 +61,7 @@ describe('kanban transition policy', () => {
       kind: 'rejected', reason: 'review_requires_explicit_decision',
     });
     expect(decideHumanReview(legacy, 'accept', 'nikita')).toMatchObject({
-      kind: 'rejected', reason: 'task_not_waiting_for_review',
+      kind: 'accepted', patch: {column: 'done', completedBy: 'nikita'},
     });
     expect(decideHumanReview(legacy, 'rework', 'nikita', 'Rework')).toMatchObject({
       kind: 'rejected', reason: 'task_not_waiting_for_review',

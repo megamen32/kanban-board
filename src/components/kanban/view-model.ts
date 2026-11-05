@@ -111,7 +111,7 @@ function normalizePerson(value: string): string {
 
 /** Keep the canonical visible name separate from the stable identity key. */
 function personLabel(value: string): string {
-  return normalizePerson(value) === 'nikita' ? 'Никита Розанов' : value.trim();
+  return normalizePerson(value) === 'nikita' ? 'nikita' : value.trim();
 }
 
 /** Returns the cards shown by one planning tab, using the shared deterministic predicates. */
@@ -146,7 +146,7 @@ export function getProjectOptions(cards: KanbanCard[], registered: { name: strin
 
 export function getAssigneeOptions(cards: KanbanCard[]): string[] {
   const assignees = new Set(
-    cards.flatMap(card => card.assignees.map(assignee => assignee.trim()).filter(Boolean)),
+    cards.flatMap(card => card.assignees.map(assignee => personLabel(assignee)).filter(Boolean)),
   );
   return [...assignees].sort((a, b) => a.localeCompare(b, 'ru'));
 }
@@ -158,7 +158,7 @@ export function filterCards(cards: KanbanCard[], project: string, assignee = 'al
     const matchesProject = project === 'all'
       || (project === 'Без проекта' ? !card.project.trim() : card.project === project);
     const matchesAssignee = assignee === 'all'
-      || card.assignees.some(value => value.trim() === assignee);
+      || card.assignees.some(value => normalizePerson(value) === normalizePerson(assignee));
 
     return matchesProject && matchesAssignee;
   });

@@ -5,6 +5,7 @@ import type {
   ExecutorResultInput,
   TaskReviewRecord,
 } from './types';
+import { sameTaskPerson } from './task-membership';
 
 export const NIKITA_ACTOR = 'nikita' as const;
 export const MANUAL_CONFIRMATION = 'manual_confirmation' as const;
@@ -368,14 +369,18 @@ export function decideHumanReview(
       },
     };
   }
-  if (before.column !== 'review' || !before.needsReview) {
+  const ownerManualReview = before.column === 'review' && actor === NIKITA_ACTOR
+    && sameTaskPerson(before.owner, actor)
+    && !(before.requiresApprovalFrom ?? []).some(person => !sameTaskPerson(person, actor))
+    && !(before.pendingQuestion && !before.pendingQuestion.answer);
+  if (before.column !== 'review' || (!before.needsReview && !(ownerManualReview && action === 'accept'))) {
     return { kind: 'rejected', reason: 'task_not_waiting_for_review' };
   }
-  const designatedReviewer = Boolean(actor && (before.requiresApprovalFrom ?? []).includes(actor));
+  const designatedReviewer = Boolean(actor && (before.requiresApprovalFrom ?? []).some(person => sameTaskPerson(person, actor)));
   const ownerReviewWithoutReviewer = actor === NIKITA_ACTOR
     && (before.requiresApprovalFrom?.length ?? 0) === 0
     && (before.resultHistory?.length ?? 0) > 0;
-  if (!designatedReviewer && !ownerReviewWithoutReviewer) {
+  if (!designatedReviewer && !ownerReviewWithoutReviewer && !ownerManualReview) {
     return { kind: 'rejected', reason: 'reviewer_not_authorized' };
   }
   if (action === 'rework' && !note.trim()) {

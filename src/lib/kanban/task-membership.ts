@@ -9,6 +9,15 @@ function actorKey(value: string | null | undefined): string {
   return normalized;
 }
 
+export function sameTaskPerson(left: string | null | undefined, right: string | null | undefined): boolean {
+  const key = actorKey(left);
+  return !!key && key === actorKey(right);
+}
+
+export function taskPersonLabel(value: string | null | undefined): string {
+  return actorKey(value) === 'nikita' ? 'nikita' : (value ?? '');
+}
+
 /** Reading all cards does not grant permission to complete someone else's work. */
 export function isTaskActor(card: TaskActors, verifiedUsername: string | null | undefined): boolean {
   const actor = actorKey(verifiedUsername);

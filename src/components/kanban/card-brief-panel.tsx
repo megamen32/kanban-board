@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { KanbanCard } from '@/lib/kanban/types';
+import { taskPersonLabel } from '../../lib/kanban/task-membership';
 import {
   CARD_BRIEF_MIN_DESCRIPTION_RUNES,
   CARD_BRIEF_MAX_SOURCE_RUNES,
@@ -80,8 +81,8 @@ export function CardBriefPanel({ card, compact = false, autoSummarize = false }:
       {summaryFailure === 'unavailable' && <p role="status" className="text-xs text-muted-foreground">ИИ-сводка сейчас недоступна; поля карточки и полный исходник доступны ниже.</p>}
       {summaryFailure === 'oversize' && <p role="status" className="text-xs text-muted-foreground">Описание слишком длинное для автоматической сводки; полный исходник доступен ниже.</p>}
       <dl className={compact ? 'space-y-0.5 text-muted-foreground' : 'grid gap-2 text-sm sm:grid-cols-2'}>
-        <div><dt className="inline font-medium text-foreground">Действие: </dt><dd className="inline">{facts.action}</dd></div>
-        <div><dt className="inline font-medium text-foreground">Исполнитель: </dt><dd className="inline">{facts.executor}</dd></div>
+        {facts.action.trim() !== card.title.trim() && <div><dt className="inline font-medium text-foreground">Действие: </dt><dd className="inline">{facts.action}</dd></div>}
+        <div><dt className="inline font-medium text-foreground">Исполнитель: </dt><dd className="inline">{taskPersonLabel(facts.executor)}</dd></div>
         <div><dt className="inline font-medium text-foreground">Срок: </dt><dd className="inline">{facts.deadline}</dd></div>
         {facts.nextStep && <div><dt className="inline font-medium text-foreground">Следующий шаг: </dt><dd className="inline">{facts.nextStep}</dd></div>}
       </dl>

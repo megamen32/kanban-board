@@ -1,5 +1,5 @@
 import type { KanbanCard } from '@/lib/kanban/types';
-import { isTaskActor } from '../../lib/kanban/task-membership';
+import { isTaskActor, sameTaskPerson } from '../../lib/kanban/task-membership';
 
 /** Show completion only to the actual owner or assignee of an ordinary card. */
 export function canCompleteDirectly(
@@ -17,5 +17,6 @@ export function canTakeOwnReview(
 ): boolean {
   return card.column === 'review' && card.needsReview === true
     && card.owner === 'nikita' && verifiedUsername === 'nikita'
-    && !(card.requiresApprovalFrom ?? []).includes('nikita');
+    && (card.requiresApprovalFrom ?? []).length > 0
+    && !(card.requiresApprovalFrom ?? []).some(person => sameTaskPerson(person, verifiedUsername));
 }

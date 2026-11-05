@@ -28,7 +28,7 @@ import { hasCardHistory } from './card-history';
 import { CardHierarchyPanel } from './card-hierarchy-panel';
 import { getEligibleParentCards } from './card-hierarchy';
 import { canCompleteDirectly, canTakeOwnReview } from './card-completion';
-import { isTaskActor } from '@/lib/kanban/task-membership';
+import { isTaskActor, taskPersonLabel } from '@/lib/kanban/task-membership';
 import { usesLegacyNoticeQuestion, shouldRefreshExecutionCard } from './card-question-visibility';
 
 const MarkdownEditor = dynamic(() => import('./markdown-editor').then(module => module.MarkdownEditor), {
@@ -94,6 +94,7 @@ export function buildPlanningMetadataUpdates(card: KanbanCard, form: PlanningMet
 export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, onReviewDecision, onSelectCard, roles, projectOptions = [], relatedCards = [], breadcrumbCards = relatedCards, username, onRefresh }: Props) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
+  const [editingDescription, setEditingDescription] = useState(false);
   const [nextAction, setNextAction] = useState(card.nextAction ?? '');
   const [blockerReason, setBlockerReason] = useState(card.blockerReason ?? '');
   const [column, setColumn] = useState(card.column);
@@ -115,6 +116,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   useEffect(() => {
     setTitle(card.title);
     setDescription(card.description);
+    setEditingDescription(false);
     setNextAction(card.nextAction ?? '');
     setBlockerReason(card.blockerReason ?? '');
     setColumn(card.column);
@@ -271,18 +273,13 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               {DEFAULT_COLUMNS.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
             </select>
           </label>
-          {canCompleteDirectly(card, username) && onUpdate && (
-            <Button type="button" variant="outline" size="sm" disabled={saving}
-              className="col-span-2 w-fit border-emerald-600/40 text-emerald-700 dark:text-emerald-300 sm:col-span-1"
-              onClick={() => void handleComplete()}>✓ Завершить задачу</Button>
-          )}
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Приоритет
             <select aria-label="Приоритет задачи" value={priority} onChange={e => setPriority(e.target.value as Priority)} className="h-10 w-full min-w-0 rounded-md border bg-background px-2 text-sm text-foreground">
               <option value="critical">Срочный</option><option value="high">Высокий</option><option value="medium">Обычный</option><option value="low">Низкий</option>
             </select>
           </label>
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Владелец
-            <Input aria-label="Владелец карточки" value={card.owner ?? 'nikita'} readOnly className="w-full min-w-0 bg-muted/40" />
+            <Input aria-label="Владелец карточки" value={taskPersonLabel(card.owner ?? 'nikita')} readOnly className="w-full min-w-0 bg-muted/40" />
           </label>
           <div className="min-w-0 space-y-1 text-xs text-muted-foreground">Исполнитель(и)
             <Input aria-label="Исполнители" value={assignees} onChange={e => setAssignees(e.target.value)} placeholder="Не назначен" className="w-full min-w-0" />
@@ -314,7 +311,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               <span className="text-xs text-muted-foreground">Состояние</span>
               <Badge variant="outline">{DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column}</Badge>
               {card.needsReview && <Badge>Требуется приёмка</Badge>}
-              <span className="text-xs text-muted-foreground">Владелец: {card.owner ?? 'nikita'} · Версия {card.version}</span>
+              <span className="text-xs text-muted-foreground">Владелец: {taskPersonLabel(card.owner ?? 'nikita')}</span>
             </div>
             {card.nextAction && <p className="text-sm"><span className="font-medium">Следующий шаг:</span> {card.nextAction}</p>}
             {card.blockerReason && <p className="text-sm"><span className="font-medium">Что мешает:</span> {card.blockerReason}</p>}
@@ -333,7 +330,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             )}
             {reviewAccess !== 'not-awaiting-review' && <ReviewActionGate card={card} verifiedUsername={username}>
               {onReviewDecision && <div className="space-y-2 border-t pt-3">
-                <p className="text-xs text-muted-foreground">{reviewAccess === 'owner-recovery' ? 'Восстановление проверки: результата и назначенного проверяющего нет. Только подтверждённый владелец может вернуть задачу в работу с причиной. Принять результат нельзя.' : reviewAccess === 'owner-review' ? 'Проверяющий не назначен. Владелец может принять готовый результат или вернуть его на доработку.' : 'Решение проверяется сервером по текущему списку согласующих.'}</p>
+                <p className="text-xs text-muted-foreground">{reviewAccess === 'owner-recovery' ? 'Укажите, что нужно исправить, чтобы вернуть задачу в работу.' : reviewAccess === 'owner-review' ? 'Вы можете принять и закрыть свою задачу или вернуть её в работу.' : 'Решение доступно назначенному проверяющему.'}</p>
                 <Textarea aria-label="Комментарий к доработке" placeholder="Что нужно исправить" value={reviewNote} onChange={event => setReviewNote(event.target.value)} rows={2} />
                 <div className="flex flex-wrap gap-2">
                   {(reviewAccess === 'authorized' || reviewAccess === 'owner-review') && <Button disabled={saving} onClick={() => void handleReview('accept')}>Принять и закрыть</Button>}
@@ -378,12 +375,10 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               column: column === card.column ? card.column : column,
             }} />
             <details className="min-w-0 rounded-md border p-3">
-              <summary className="cursor-pointer text-sm font-medium">Полное описание</summary>
-              <div className="mt-3"><MarkdownText text={description} /></div>
-            </details>
-            <details className="min-w-0 rounded-md border p-3">
-              <summary className="cursor-pointer text-sm font-medium">Редактировать описание и ожидаемый результат</summary>
-              <div className="mt-3"><MarkdownEditor value={description} onChange={setDescription} /></div>
+              <summary className="cursor-pointer text-sm font-medium">Описание и ожидаемый результат</summary>
+              <div className="mt-3 space-y-3">{editingDescription ? <MarkdownEditor value={description} onChange={setDescription} /> : <MarkdownText text={description} />}
+                <Button type="button" size="sm" variant="outline" onClick={() => setEditingDescription(value => !value)}>{editingDescription ? 'Готово' : 'Редактировать описание'}</Button>
+              </div>
             </details>
             <details className="min-w-0 rounded-md border p-3">
               <summary className="cursor-pointer text-sm font-medium">Планирование и дополнительные настройки</summary>
@@ -449,6 +444,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               </Button>
             ) : <span />}
             <div className="flex gap-2">
+              {canCompleteDirectly(card, username) && onUpdate && <Button type="button" variant="outline" disabled={saving}
+                className="border-emerald-600/40 text-emerald-700 dark:text-emerald-300" onClick={() => void handleComplete()}>Завершить задачу</Button>}
               <Button variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
               <Button onClick={handleSave} disabled={!title.trim() || !project.trim() || saving}>Сохранить</Button>
             </div>

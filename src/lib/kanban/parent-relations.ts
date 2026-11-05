@@ -1,4 +1,5 @@
 import type { KanbanCard } from './types';
+import { sameTaskPerson } from './task-membership';
 
 type ParentCard = Pick<KanbanCard, 'id' | 'parent' | 'project' | 'owner'>;
 
@@ -16,7 +17,7 @@ export function validateParentRelation(
   const byId = new Map(cards.map(card => [card.id, card]));
   const parent = byId.get(parentId);
   if (!parent) throw new Error('parent_relation_missing');
-  if (parent.project.trim() !== childProject.trim() || (parent.owner ?? 'nikita') !== (childOwner ?? 'nikita')) {
+  if (parent.project.trim() !== childProject.trim() || !sameTaskPerson(parent.owner ?? 'nikita', childOwner ?? 'nikita')) {
     throw new Error('parent_relation_scope_mismatch');
   }
 

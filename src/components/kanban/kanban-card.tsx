@@ -9,9 +9,12 @@ import { MarkdownCardPreview } from './markdown-card-preview';
 import { getCardAncestorChain } from './card-hierarchy';
 import { ReviewRecoveryControl } from './review-recovery-control';
 import { linkedTaskSessions, TaskSessionLink } from './task-session-link';
+import { TaskAiLaunch } from './task-ai-launch';
 import { shouldOpenCardAfterPointer, type PointerCoordinates } from './card-interaction';
 import { PRIORITY_COLORS } from '@/lib/kanban/types';
 import type { KanbanCard as CardType, KanbanCardUpdates, RoleDefinition } from '@/lib/kanban/types';
+import type { HumanReviewAction } from '@/lib/kanban/transition-policy';
+import { taskPersonLabel } from '@/lib/kanban/task-membership';
 import * as React from 'react';
 import { useState, createContext, useContext, useRef } from 'react';
 
@@ -26,6 +29,7 @@ interface CardActionsCtx {
   onSelectCard: (card: CardType) => void;
   onUpdate: (id: string, updates: KanbanCardUpdates, version?: number) => Promise<CardType | null>;
   onDelete: (id: string) => Promise<unknown>;
+  onReviewDecision: (id: string, action: HumanReviewAction, note: string, version: number) => Promise<CardType | null>;
 }
 export const CardActionsContext: React.Context<CardActionsCtx> = createContext<CardActionsCtx>(null!);
 export const useCardActions = () => useContext(CardActionsContext);
@@ -39,7 +43,7 @@ export function KanbanCard({ card, columnId }: Props) {
   const [editing, setEditing] = useState(false);
   const pointerStart = useRef<{ x: number; y: number } | null>(null);
   const suppressClick = useRef(false);
-  const { onUpdate, onDelete, roles, username, refresh, highlightCardId, relatedCards, breadcrumbCards, onSelectCard } = useCardActions();
+  const { onUpdate, onDelete, onReviewDecision, roles, username, refresh, highlightCardId, relatedCards, breadcrumbCards, onSelectCard } = useCardActions();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
     data: { card, columnId },
@@ -122,7 +126,7 @@ export function KanbanCard({ card, columnId }: Props) {
           <div className="flex-1 min-w-0">
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
               <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${accent.status}`}>{card.column === 'blocked' && card.blockerReason ? 'Заблокирована' : card.column === 'review' && card.needsReview ? 'Ждёт проверки' : card.column === 'in-progress' ? 'В работе' : card.column === 'done' ? 'Готово' : card.column === 'todo' ? 'Входящие' : 'Задача'}</span>
-              <Badge variant="outline" className={`text-[11px] px-2 py-0.5 ${PRIORITY_COLORS[card.priority]}`}><Flag className="mr-1 h-3 w-3" />{card.priority}</Badge>
+              <Badge variant="outline" className={`text-[11px] px-2 py-0.5 ${PRIORITY_COLORS[card.priority]}`}><Flag className="mr-1 h-3 w-3" />{{critical:'Срочный',high:'Высокий',medium:'Обычный',low:'Низкий'}[card.priority]}</Badge>
             </div>
             <div className="mb-2 font-semibold text-base leading-snug tracking-tight sm:text-[17px]">{card.title}</div>
             {card.parent && <p className="mb-2 truncate text-xs text-muted-foreground">Подзадача · {hierarchyTrail.length ? hierarchyTrail.map(item => item.title).join(' › ') : 'родитель скрыт текущей выборкой'}</p>}
@@ -135,25 +139,25 @@ export function KanbanCard({ card, columnId }: Props) {
                 <span>AI-сессии</span>
                 <span className="ml-auto rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">{linkedSessionCount} {linkedSessionCount === 1 ? 'сессия' : linkedSessionCount > 1 && linkedSessionCount < 5 ? 'сессии' : 'сессий'}</span>
               </div>
-              <div className="mt-2 flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
+              {latestReceipt && <div className="mt-2 flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
                 <Clock3 aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <span>{latestReceipt ? (phaseLabels[latestReceipt.phase] ?? 'Последнее состояние неизвестно') : 'AI-сессия не прикреплена · откройте задачу для подробностей'}</span>
-              </div>
+                <span>{phaseLabels[latestReceipt.phase] ?? 'Последнее состояние неизвестно'}</span>
+              </div>}
               {latestReceipt?.lastProgress && <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-foreground/80"><span className="font-medium">Последнее сообщение:</span> {latestReceipt.lastProgress}{latestReceipt.lastProgressAt ? ` · ${timeAgo(latestReceipt.lastProgressAt)}` : ''}</p>}
-              {latestReceipt ? <div className="mt-2"><TaskSessionLink card={card} compact /></div> : <span className="mt-2 inline-block text-xs font-semibold text-primary">Открыть задачу →</span>}
+              {latestReceipt ? <div className="mt-2"><TaskSessionLink card={card} compact /></div> : <TaskAiLaunch card={card} onRefresh={refresh} />}
             </section>
             <div className="flex items-center gap-1.5 flex-wrap">
               <Badge variant="secondary" className="rounded-md px-2 py-1 text-xs">{card.project || 'Без проекта'}</Badge>
               {card.tags.slice(0, 3).map(t => <Badge key={t} variant="secondary" className="rounded-md px-2 py-1 text-xs">{t}</Badge>)}
               {card.tags.length > 3 && <span className="text-xs text-muted-foreground">+{card.tags.length - 3}</span>}
-              {card.assignees.length > 0 && <span className="text-xs text-muted-foreground">↗ {card.assignees.join(', ')}</span>}
+              {card.assignees.length > 0 && <span className="text-xs text-muted-foreground">↗ {[...new Set(card.assignees.map(taskPersonLabel))].join(', ')}</span>}
               {dueLabel && <span className="inline-flex items-center gap-1 rounded-md bg-muted/70 px-2 py-1 text-xs text-muted-foreground"><CalendarClock className="h-3.5 w-3.5" />{dueLabel}</span>}
             </div>
             <div className="mt-3 border-t border-border/60 pt-2 text-xs text-muted-foreground">Обновлена {timeAgo(card.updated)}</div>
           </div>
         </div>
       </div>
-      {editing && <CardEditDialog card={card} relatedCards={relatedCards} breadcrumbCards={breadcrumbCards} onSelectCard={related => { setEditing(false); onSelectCard(related); }} roles={roles} username={username} onRefresh={refresh} open={editing} onOpenChange={setEditing} onUpdate={onUpdate} onDelete={() => onDelete(card.id)} />}
+      {editing && <CardEditDialog card={card} relatedCards={relatedCards} breadcrumbCards={breadcrumbCards} onSelectCard={related => { setEditing(false); onSelectCard(related); }} roles={roles} username={username} onRefresh={refresh} open={editing} onOpenChange={setEditing} onUpdate={onUpdate} onReviewDecision={onReviewDecision} onDelete={() => onDelete(card.id)} />}
     </>
   );
 }

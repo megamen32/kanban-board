@@ -5,6 +5,7 @@ import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 import { DEFAULT_COLUMNS, type KanbanCard, type KanbanColumn } from '@/lib/kanban/types';
+import { taskPersonLabel } from '../../lib/kanban/task-membership';
 import { statusSaveError } from './status-result';
 import { ReviewRecoveryControl } from './review-recovery-control';
 import { TaskSessionLink } from './task-session-link';
@@ -146,7 +147,7 @@ export function TaskListView({ cards, authoritativeCards = cards, breadcrumbCard
                     <button type="button" className="min-w-0 text-left" onClick={() => onOpen(displayCard)}>
                       <span className={`block break-words text-sm font-semibold ${done ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{card.title}</span>
                       {card.nextAction && <span className="mt-1 block text-xs text-muted-foreground">{card.nextAction}</span>}
-                      {card.assignees.length > 0 && <span className="mt-1 block text-xs text-muted-foreground">Ответственные: {card.assignees.join(', ')}</span>}
+                      <span className="mt-1 block text-xs text-muted-foreground">Исполнитель: {card.assignees.length > 0 ? [...new Set(card.assignees.map(taskPersonLabel))].join(', ') : 'Не назначен'}</span>
                       {card.parent && <span className="mt-1 block text-xs text-muted-foreground">Подзадача · {getCardAncestorChain(card, [...breadcrumbById.values()]).at(-1)?.title ?? 'родитель вне текущей выборки'}</span>}
                       {card.column === 'blocked' && card.blockerReason && <span className="mt-1 block text-xs text-rose-700 dark:text-rose-300">Что мешает: {card.blockerReason}</span>}
                     </button>

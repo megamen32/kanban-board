@@ -260,7 +260,7 @@ export function KanbanBoard() {
   }
 
   return (
-    <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete, roles, username, refresh, highlightCardId, relatedCards: visibleCards, breadcrumbCards: scopedCards, onSelectCard: setSelectedCard }}>
+    <CardActionsContext.Provider value={{ onUpdate: handleUpdate, onDelete: handleDelete, onReviewDecision: handleReviewDecision, roles, username, refresh, highlightCardId, relatedCards: visibleCards, breadcrumbCards: scopedCards, onSelectCard: setSelectedCard }}>
       <DndProvider cards={visibleCards} onMoveCard={moveCard} onReorder={reorderColumn} onReviewRequired={setSelectedCard}>
       <BoardDiagnosticsPanel identity={username} />
         <div className="relative z-20 shrink-0 border-b px-2 py-1.5 sm:px-4">

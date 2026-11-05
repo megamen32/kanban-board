@@ -14,6 +14,11 @@ describe('parent relation validation', () => {
     expect(() => validateParentRelation('pilot', 'tender', 'ForEnergo', 'nikita', cards)).not.toThrow();
   });
 
+  it('keeps links between the verified owner and their old display alias', () => {
+    expect(() => validateParentRelation('child', 'parent', 'ForEnergo', 'Никита Розанов', [card('parent')])).not.toThrow();
+    expect(() => validateParentRelation('child', 'parent', 'ForEnergo', 'Олег', [card('parent')])).toThrow('parent_relation_scope_mismatch');
+  });
+
   it.each([
     ['self', 'child', 'ForEnergo', 'nikita', [card('child')], 'parent_relation_self'],
     ['missing', 'absent', 'ForEnergo', 'nikita', [card('other')], 'parent_relation_missing'],

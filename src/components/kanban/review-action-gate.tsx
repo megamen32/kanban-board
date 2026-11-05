@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { isOwnerReviewRecoveryCandidate } from '../../lib/kanban/transition-policy';
+import { sameTaskPerson } from '../../lib/kanban/task-membership';
 
 export type ReviewActionCard = {
   column: string;
@@ -19,6 +20,9 @@ export type ReviewActionAccess = 'not-awaiting-review' | 'login-required' | 'rev
 
 /** Decide the UI affordance from server-verified identity, never the selected board persona. */
 export function reviewActionAccess(card: ReviewActionCard, verifiedUsername: string | null | undefined): ReviewActionAccess {
+  if (card.column === 'review' && card.owner && verifiedUsername && sameTaskPerson(card.owner, verifiedUsername)
+      && !(card.requiresApprovalFrom ?? []).length
+      && !(card.pendingQuestion && !card.pendingQuestion.answer)) return 'owner-review';
   const malformedRecovery = isOwnerReviewRecoveryCandidate(card);
   if (malformedRecovery) {
     if (!verifiedUsername) return 'login-required';
@@ -29,7 +33,7 @@ export function reviewActionAccess(card: ReviewActionCard, verifiedUsername: str
   if (!(card.requiresApprovalFrom?.length) && (card.resultHistory?.length ?? 0) > 0) {
     return verifiedUsername === 'nikita' ? 'owner-review' : 'reviewer-required';
   }
-  return (card.requiresApprovalFrom ?? []).includes(verifiedUsername) ? 'authorized' : 'reviewer-required';
+  return (card.requiresApprovalFrom ?? []).some(person => sameTaskPerson(person, verifiedUsername)) ? 'authorized' : 'reviewer-required';
 }
 
 export function ReviewActionGate({
