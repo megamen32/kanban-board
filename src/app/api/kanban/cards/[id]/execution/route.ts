@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
 import { boardHumanIdentityFromRequest } from '../../../../../../lib/auth/board-human';
+import { ownerBrowserReadAllowed } from '../../../../../../lib/auth/owner-browser-read';
 import { automationTokenValid, boardIdentityFromRequest, identityFromRequest, nativeProjectAccessContextFromRequest, type RequestIdentity } from '@/lib/auth/request';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { findCardById, updateCard } from '@/lib/kanban/file-store';
@@ -312,7 +313,7 @@ async function authorizedTaskCard(
 ): Promise<AuthorizedTaskCardResult> {
   let nativeContext = verifiedNativeContext;
   if (nativeContext === undefined) {
-    try { nativeContext = await nativeProjectAccessContextFromRequest(request); }
+    try { nativeContext = await ownerBrowserReadAllowed(request) ? null : await nativeProjectAccessContextFromRequest(request); }
     catch (error) { return { response: nativeIdentityErrorResponse(error) }; }
   }
   if (nativeContext) {
@@ -2104,7 +2105,7 @@ async function createTaskQuestion(
 /** Read the execution-facing snapshot from the authenticated caller's existing Board scope. */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let nativeContext: NativeProjectAccessContext | null;
-  try { nativeContext = await nativeProjectAccessContextFromRequest(request); }
+  try { nativeContext = await ownerBrowserReadAllowed(request) ? null : await nativeProjectAccessContextFromRequest(request); }
   catch (error) { return nativeIdentityErrorResponse(error); }
   try {
     const { id } = await params;

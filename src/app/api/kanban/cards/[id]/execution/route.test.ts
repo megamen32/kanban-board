@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   identity: { value: { username: 'nikita', scope: 'work' as const } as { username: string; scope: 'work' } | null },
   humanIdentity: { value: undefined as { username: string; scope: 'work' } | null | undefined },
   boardHumanIdentityFromRequest: vi.fn(),
+  ownerBrowserReadAllowed: vi.fn(async () => false),
   nativeProjectAccess: { value: null as NativeProjectAccessContext | null },
   nativeProjectAccessContextFromRequest: vi.fn(async (_request: Request) => null as NativeProjectAccessContext | null),
   callOwnerHerderTool: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock('@/lib/auth/request', () => ({
 vi.mock('../../../../../../lib/auth/board-human', () => ({
   boardHumanIdentityFromRequest: mocks.boardHumanIdentityFromRequest,
 }));
+vi.mock('../../../../../../lib/auth/owner-browser-read', () => ({ ownerBrowserReadAllowed: mocks.ownerBrowserReadAllowed }));
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope: mocks.tasksDirForScope }));
 vi.mock('@/lib/kanban/task-execution', () => ({ taskExecutionSnapshot: mocks.taskExecutionSnapshot }));
 vi.mock('@/lib/kanban/task-execution-client', () => ({
@@ -614,6 +616,7 @@ describe('task execution API', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.ownerBrowserReadAllowed.mockResolvedValue(false);
     mocks.humanIdentity.value = undefined;
     mocks.boardHumanIdentityFromRequest.mockImplementation(async () =>
       mocks.humanIdentity.value === undefined ? mocks.identity.value : mocks.humanIdentity.value);
@@ -697,6 +700,20 @@ describe('task execution API', () => {
     expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('fleet_create_session', expect.objectContaining({ cwd: scopedProjectRoot, model: 'gpt-6-luna', project: baseCard.project }));
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.startedBy).toBe('nikita');
     expect(mocks.currentCard.value?.taskExecutionHistory?.[0]).not.toHaveProperty('requestedBy');
+  });
+
+  it('uses the verified owner browser for status and start when project access is unavailable', async () => {
+    mocks.ownerBrowserReadAllowed.mockResolvedValue(true);
+    mocks.identity.value = null;
+    mocks.humanIdentity.value = { username: 'nikita', scope: 'work' };
+    mocks.nativeProjectAccess.value = { userId: 'owner-id', forProject: vi.fn(async () => { throw new Error('native_project_access_unavailable'); }) };
+    const headers = { 'X-Airlock-Todo-Native-Identity': 'signed-owner' };
+    const status = await GET(new NextRequest('https://todo.example.test/api/kanban/cards/task-1/execution', { headers }), { params: Promise.resolve({ id: baseCard.id }) });
+    expect(status.status).toBe(200);
+    const started = await POST(postRequest(undefined, headers), { params: Promise.resolve({ id: baseCard.id }) });
+    expect(started.status).toBe(201);
+    expect(mocks.nativeProjectAccessContextFromRequest).not.toHaveBeenCalled();
+    expect(mocks.currentCard.value?.taskExecutionHistory?.[0]?.startedBy).toBe('nikita');
   });
 
   it('uses current native project read membership for execution status without inventing a board username', async () => {
