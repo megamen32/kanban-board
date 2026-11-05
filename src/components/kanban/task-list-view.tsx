@@ -100,7 +100,8 @@ export function TaskListView({ cards, authoritativeCards = cards, breadcrumbCard
             <p className="mt-2 text-sm text-muted-foreground">Проверь поиск и выбранные фильтры.</p>
           </div>
         )}
-        <div className="space-y-3">
+        {sorted.length > 0 && <div aria-hidden="true" className="hidden grid-cols-[1.5rem_minmax(0,2fr)_minmax(6rem,1fr)_minmax(9rem,1.3fr)_minmax(7rem,1fr)_5rem] gap-3 border-b px-4 py-2 text-xs font-medium text-muted-foreground lg:grid"><span /><span>Задача</span><span>Проект</span><span>AI-сессии</span><span>Статус</span><span>Действия</span></div>}
+        <div className="space-y-2 lg:space-y-0">
           {groups.map(group => renderGroup(group, 0))}
         </div>
       </div>
@@ -130,7 +131,7 @@ export function TaskListView({ cards, authoritativeCards = cards, breadcrumbCard
               <div key={card.id} className={depth ? 'ml-3 border-l-2 border-border pl-3 sm:ml-5 sm:pl-4' : ''}>
                 <div
                   ref={card.id === highlightCardId ? highlightedRef : undefined}
-                  className={`group grid min-h-28 grid-cols-[1.5rem_minmax(0,1fr)] items-start gap-x-3 gap-y-2 rounded-2xl border border-l-4 border-border/70 p-3.5 shadow-sm transition hover:shadow-md sm:p-5 ${ROW_TONE[card.column] ?? ROW_TONE.todo} ${card.id === highlightCardId ? 'ring-2 ring-primary/60' : ''}`}
+                  className={`group grid grid-cols-[1.5rem_minmax(0,1fr)] items-start gap-x-3 gap-y-2 rounded-xl border border-l-4 border-border/70 p-3 transition hover:shadow-sm lg:rounded-none lg:border-x-0 lg:border-t-0 lg:px-4 ${ROW_TONE[card.column] ?? ROW_TONE.todo} ${card.id === highlightCardId ? 'ring-2 ring-primary/60' : ''}`}
                 >
                   <button
                     type="button"
@@ -141,37 +142,30 @@ export function TaskListView({ cards, authoritativeCards = cards, breadcrumbCard
                   >
                     {done && <Check className="h-3.5 w-3.5" />}
                   </button>
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 items-start gap-3">
-                      <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(displayCard)}>
-                        <span className={`mb-2 inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${STATUS_TONE[card.column] ?? STATUS_TONE.todo}`}>{status}{needsReview ? ' · ждёт решения' : ''}</span>
-                        <span className={`block text-base font-semibold leading-snug tracking-tight sm:text-lg ${done ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{card.title}</span>
-                        <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                          <span className="rounded-md border border-border/60 bg-background/70 px-2 py-1">{card.project || 'Без проекта'}</span>
-                          {card.assignees.length > 0 && <span>Ответственные: {card.assignees.join(', ')}</span>}
-                          {card.parent && <span>Подзадача · {getCardAncestorChain(card, [...breadcrumbById.values()]).at(-1)?.title ?? 'родитель вне текущей выборки'}</span>}
-                        </span>
-                        {card.nextAction && <span className="mt-2 block text-sm text-foreground/80">Следующий шаг: {card.nextAction}</span>}
-                        {card.column === 'blocked' && card.blockerReason && <span className="mt-2 block rounded-lg border border-rose-200 bg-rose-50/70 px-3 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">Что мешает: {card.blockerReason}</span>}
-                      </button>
-                      <span className="hidden max-w-40 shrink-0 text-right text-xs text-muted-foreground lg:block">Обновлена<br />{new Date(card.updated).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}</span>
-                    </div>
-                    <section aria-label="AI-сессии задачи" className="mt-3 rounded-xl border border-indigo-200/70 bg-indigo-50/70 px-3 py-2.5 text-muted-foreground dark:border-indigo-900 dark:bg-indigo-950/30 sm:px-4">
-                      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
-                        <span className="text-xs font-semibold text-foreground">AI-сессии · {knownSessionCount}</span>
-                        <span className="rounded-full bg-background/75 px-2.5 py-1 text-xs text-muted-foreground">
-                          {latestReceipt ? `Последнее состояние: ${receiptPhase[latestReceipt.phase] ?? 'неизвестно'}` : 'AI-сессия не прикреплена · откройте задачу для подробностей'}
-                        </span>
-                      </div>
-                      {latestReceipt?.lastProgress?.trim() && <p className="mt-2 break-words text-sm leading-relaxed text-foreground/80">Последнее сообщение: {latestReceipt.lastProgress.trim()}</p>}
+                  <div className="min-w-0 lg:grid lg:grid-cols-[minmax(0,2fr)_minmax(6rem,1fr)_minmax(9rem,1.3fr)_minmax(7rem,1fr)_5rem] lg:items-start lg:gap-3">
+                    <button type="button" className="min-w-0 text-left" onClick={() => onOpen(displayCard)}>
+                      <span className={`block break-words text-sm font-semibold ${done ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{card.title}</span>
+                      {card.nextAction && <span className="mt-1 block text-xs text-muted-foreground">{card.nextAction}</span>}
+                      {card.assignees.length > 0 && <span className="mt-1 block text-xs text-muted-foreground">Ответственные: {card.assignees.join(', ')}</span>}
+                      {card.parent && <span className="mt-1 block text-xs text-muted-foreground">Подзадача · {getCardAncestorChain(card, [...breadcrumbById.values()]).at(-1)?.title ?? 'родитель вне текущей выборки'}</span>}
+                      {card.column === 'blocked' && card.blockerReason && <span className="mt-1 block text-xs text-rose-700 dark:text-rose-300">Что мешает: {card.blockerReason}</span>}
+                    </button>
+                    <span className="mt-2 block text-xs text-muted-foreground lg:mt-0">{card.project || 'Без проекта'}</span>
+                    <section aria-label="AI-сессии задачи" className="mt-2 text-xs text-muted-foreground lg:mt-0">
+                      <span className="font-medium text-foreground">AI-сессии · {knownSessionCount}</span>
+                      <span className="mt-1 block">{latestReceipt ? `Последнее состояние: ${receiptPhase[latestReceipt.phase] ?? 'неизвестно'}` : 'AI-сессия не прикреплена'}</span>
+                      {latestReceipt?.lastProgress?.trim() && <p className="mt-1 break-words">{latestReceipt.lastProgress.trim()}</p>}
                       {receipts.length > 0 && <TaskSessionLink card={displayCard} compact />}
-                      {receipts.length === 0 && <button type="button" className="mt-2 text-xs font-semibold text-primary hover:underline" onClick={() => onOpen(displayCard)}>Открыть задачу →</button>}
                     </section>
+                    <span className={`mt-2 inline-flex w-fit rounded-full border px-2 py-1 text-xs font-semibold lg:mt-0 ${STATUS_TONE[card.column] ?? STATUS_TONE.todo}`}>{status}{needsReview ? ' · ждёт решения' : ''}</span>
+                    <button type="button" onClick={() => onOpen(displayCard)} className="mt-2 block text-left text-xs font-semibold text-primary hover:underline lg:mt-1">Открыть →</button>
+                    <div className="lg:col-span-5">
                     <ReviewRecoveryControl card={displayCard} username={username} onDone={onRefresh} />
                     {group.children.length > 0 && <details className="mt-3">
                       <summary className="cursor-pointer text-sm font-medium text-muted-foreground">Подзадачи · {group.children.length}</summary>
                       <div className="mt-3 space-y-2">{group.children.map(child => renderGroup(child, depth + 1))}</div>
                     </details>}
+                    </div>
                   </div>
                 </div>
               </div>
