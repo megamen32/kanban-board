@@ -41,6 +41,7 @@ interface AccessTokenRecord {
   clientId: string;
   scope: BoardScope;
   expiresAt: number;
+  permanent?: boolean;
 }
 
 interface AuthState {
@@ -206,8 +207,23 @@ export class AuthStore {
   validateAccessToken(raw: string): OAuthAccess | null {
     const state = this.load();
     const record = state.accessTokens[tokenHash(raw)];
-    if (!record || record.expiresAt <= this.now()) return null;
+    if (!record) return null;
+    const permanentService = record.permanent === true && record.clientId === 'exmanager-airlock-service'
+      && record.username === 'exmanager-service' && record.scope === 'work';
+    if (!permanentService && record.expiresAt <= this.now()) return null;
     return record;
+  }
+
+  /** Promote one explicitly identified, unexpired service token; it remains revocable. */
+  makeExManagerTokenPermanent(expectedExpiresAt: number): boolean {
+    const state = this.load();
+    const matches = Object.values(state.accessTokens).filter(record => record.clientId === 'exmanager-airlock-service'
+      && record.username === 'exmanager-service' && record.scope === 'work'
+      && record.expiresAt === expectedExpiresAt && record.expiresAt > this.now());
+    if (matches.length !== 1) return false;
+    matches[0]!.permanent = true;
+    this.save(state);
+    return true;
   }
 
   revokeAccessToken(raw: string): void {

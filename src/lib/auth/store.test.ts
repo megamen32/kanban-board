@@ -29,6 +29,19 @@ describe('AuthStore', () => {
     expect(token && store.validateAccessToken(token.accessToken)).toBeNull();
   });
 
+  it('keeps only the selected ExManager service key valid without a deadline and allows revocation', () => {
+    let now = 1_700_000_000;
+    const store = new AuthStore({ rootDir: mkdtempSync(path.join(tmpdir(), 'kanban-auth-')), now: () => now });
+    const code = store.createAuthorizationCode('exmanager-service', 'exmanager-airlock-service', 'urn:test', 'kanban:work');
+    const issued = store.exchangeAuthorizationCode(code, 'exmanager-airlock-service', 'urn:test')!;
+    expect(store.makeExManagerTokenPermanent(now + issued.expiresIn + 1)).toBe(false);
+    expect(store.makeExManagerTokenPermanent(now + issued.expiresIn)).toBe(true);
+    now += 366 * 24 * 60 * 60;
+    expect(store.validateAccessToken(issued.accessToken)?.username).toBe('exmanager-service');
+    store.revokeAccessToken(issued.accessToken);
+    expect(store.validateAccessToken(issued.accessToken)).toBeNull();
+  });
+
   it('revokes every access token of one client identity and keeps the others', () => {
     const store = new AuthStore({ rootDir: mkdtempSync(path.join(tmpdir(), 'kanban-auth-')), encryptionKey: 'a'.repeat(32) });
     const appCode = store.createAuthorizationCode('airlock-todo-board-app', 'airlock-todo-board-app', 'urn:airlock:app', 'kanban:work');
