@@ -1,0 +1,52 @@
+{
+  "created_at": "2026-11-06T23:26:28+00:00",
+  "details": "Equivalent instants with different offsets created duplicate markers and sorted incorrectly; use epoch comparison for timestamps and preserve date-only semantics.",
+  "events": [
+    {
+      "action": "register",
+      "actor": "/root/implement_board_calendar",
+      "at": "2026-11-06T23:26:28+00:00",
+      "changes": {
+        "details": "Equivalent instants with different offsets created duplicate markers and sorted incorrectly; use epoch comparison for timestamps and preserve date-only semantics.",
+        "source": "Independent calendar review",
+        "status": "open",
+        "title": "RFC3339 offsets sorted lexically"
+      }
+    },
+    {
+      "action": "resolve",
+      "actor": "/root/implement_board_calendar",
+      "at": "2026-11-06T23:30:14+00:00",
+      "changes": {
+        "resolution": {
+          "evidence": {
+            "proof_path": "proof/focused-tests.log",
+            "result": "passed",
+            "sha256": "199b28b06731901296dd7d13166c84f99b54b25f20c16b5e2e4d046cdbd9dd76",
+            "test_command": "npx vitest run calendar model/view/feed/URL/events tests"
+          },
+          "kind": "fixed",
+          "reason": ""
+        },
+        "status": "fixed"
+      }
+    }
+  ],
+  "id": "B40d417ede23341a1ae00",
+  "owner": "/root/implement_board_calendar",
+  "reporter": "/root/implement_board_calendar",
+  "resolution": {
+    "evidence": {
+      "proof_path": "proof/focused-tests.log",
+      "result": "passed",
+      "sha256": "199b28b06731901296dd7d13166c84f99b54b25f20c16b5e2e4d046cdbd9dd76",
+      "test_command": "npx vitest run calendar model/view/feed/URL/events tests"
+    },
+    "kind": "fixed",
+    "reason": ""
+  },
+  "source": "Independent calendar review",
+  "status": "fixed",
+  "title": "RFC3339 offsets sorted lexically",
+  "updated_at": "2026-11-06T23:30:14+00:00"
+}

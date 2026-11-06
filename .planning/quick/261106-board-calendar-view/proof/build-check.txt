@@ -1,0 +1,1 @@
+passed: next build --webpack completed, BUILD_ID exists, route /api/kanban/calendar/events included; TypeScript stage passed. See build.log.

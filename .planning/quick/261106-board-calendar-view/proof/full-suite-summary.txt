@@ -1,0 +1,1 @@
+Full applicable suite executed after review fixes: 29 failed / 877 passed (906 total), 9 failed files / 118 passed. All 29 failures match the existing eeb10ad baseline independently reproduced by the card-write-ownership task. This is NOT a green full-suite gate.
