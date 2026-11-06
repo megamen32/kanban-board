@@ -1,0 +1,43 @@
+{
+  "label": "Серверный bridge роут карточки",
+  "description": "POST/DELETE /api/kanban/cards/[id]/calendar: только human identity из cookie (401 без неё, 403 при Authorization bearer), 503 keeper_disabled без env, 409 keeper_not_connected без креда, 400 без dueAt; POST идемпотентен (повтор — тот же eventId без вызова Keeper; изменённое время — PATCH), DELETE идемпотентен; привязка пишется через updateCard.",
+  "acceptance": "Route-тесты: все перечисленные статусы, идемпотентность create/update/delete, карточка читается после записи привязки.",
+  "affected_files": [
+    "src/app/api/kanban/cards/[id]/calendar/route.ts"
+  ],
+  "estimate_minutes": {
+    "minimum": 10,
+    "maximum": 15
+  },
+  "depends_on": [
+    "L02"
+  ],
+  "id": "L03",
+  "model": "glm-5.3-flash-minimax-m3.1",
+  "created_at": "2026-11-06T17:50:09+03:00",
+  "updated_at": "2026-11-06T17:50:09+03:00",
+  "progress_events": [
+    {
+      "at": "2026-11-06T17:50:09+03:00",
+      "note": "",
+      "changes": {
+        "label": "Серверный bridge роут карточки",
+        "description": "POST/DELETE /api/kanban/cards/[id]/calendar: только human identity из cookie (401 без неё, 403 при Authorization bearer), 503 keeper_disabled без env, 409 keeper_not_connected без креда, 400 без dueAt; POST идемпотентен (повтор — тот же eventId без вызова Keeper; изменённое время — PATCH), DELETE идемпотентен; привязка пишется через updateCard.",
+        "acceptance": "Route-тесты: все перечисленные статусы, идемпотентность create/update/delete, карточка читается после записи привязки.",
+        "affected_files": [
+          "src/app/api/kanban/cards/[id]/calendar/route.ts"
+        ],
+        "estimate_minutes": {
+          "minimum": 10,
+          "maximum": 15
+        },
+        "depends_on": [
+          "L02"
+        ],
+        "model": "glm-5.3-flash-minimax-m3.1"
+      },
+      "session": "unknown",
+      "harness": "unknown"
+    }
+  ]
+}

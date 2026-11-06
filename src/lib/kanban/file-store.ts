@@ -7,7 +7,7 @@ import { DEFAULT_COLUMNS, parseCatalogTaskLink, PLANNING_VERSION } from './types
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
 import { approvalListForProject } from './project-reviewers';
 import { validateCardParentRelations, validateParentRelation } from './parent-relations';
-import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskDecisionAnswerProposal, TaskExecutionContinuation, TaskExecutionQuestionProof, TaskExecutionQuestionContinuation, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls, TaskExecutionQuestionChoice, TaskResult, TaskReviewRecord, PendingQuestion } from './types';
+import type { CatalogTaskLink, CalendarEventBinding, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskDecisionAnswerProposal, TaskExecutionContinuation, TaskExecutionQuestionProof, TaskExecutionQuestionContinuation, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls, TaskExecutionQuestionChoice, TaskResult, TaskReviewRecord, PendingQuestion } from './types';
 
 const TASKS_DIR = process.env.TASKS_DIR || path.join(process.cwd(), 'data', 'tasks');
 const KNOWN_FRONTMATTER_KEYS = new Set([
@@ -17,7 +17,7 @@ const KNOWN_FRONTMATTER_KEYS = new Set([
   'today_rank', 'source', 'needs_review', 'suggested_assignee', 'waiting_for',
   'requires_approval_from', 'completed_by', 'completed_at', 'completion_evidence',
   'approval_evidence', 'result_history', 'review_history', 'next_action',
-  'source_admission', 'catalog_task_link', 'catalog_task_links', 'task_execution_history', 'pending_question',
+  'source_admission', 'catalog_task_link', 'catalog_task_links', 'task_execution_history', 'pending_question', 'calendar_event',
 ]);
 const PLANNING_FRONTMATTER_KEYS = new Set([
   'planning_version', 'type', 'role', 'accountable', 'assignee', 'blocker_reason', 'important', 'urgent',
@@ -158,6 +158,7 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     ...(catalogLinks.length ? { catalogLinks } : {}),
     ...(data.task_execution_history !== undefined ? { taskExecutionHistory: taskExecutionHistoryField(data.task_execution_history) } : {}),
     ...(isRecord(data.pending_question) ? { pendingQuestion: data.pending_question as unknown as PendingQuestion } : {}),
+    ...(data.calendar_event !== undefined ? { calendarEvent: calendarEventBindingField(data.calendar_event) } : {}),
     rawFrontmatter,
   };
 }
@@ -247,9 +248,12 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
     return { conflict: true, serverCard: card };
   }
 
-  const { dueAt: dueAtUpdate, ...otherUpdates } = updates;
+  const { dueAt: dueAtUpdate, calendarEvent: calendarEventUpdate, ...otherUpdates } = updates;
+  const mergedUpdates: KanbanCardUpdates = calendarEventUpdate !== undefined && calendarEventUpdate !== null
+    ? { ...otherUpdates, calendarEvent: calendarEventBindingField(calendarEventUpdate) }
+    : otherUpdates;
   const normalizedUpdates = Object.fromEntries(
-    Object.entries(otherUpdates).map(([key, value]) => [key, key === 'nextAction' ? value : value === null ? undefined : value]),
+    Object.entries(mergedUpdates).map(([key, value]) => [key, key === 'nextAction' ? value : value === null ? undefined : value]),
   ) as Omit<KanbanCardUpdates, 'dueAt' | 'blockerReason' | 'executor'> & { blockerReason?: string; executor?: 'dot' };
   if (normalizedUpdates.taskExecutionHistory !== undefined) {
     normalizedUpdates.taskExecutionHistory = taskExecutionHistoryField(normalizedUpdates.taskExecutionHistory);
@@ -279,6 +283,7 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
     version: card.version + 1,
   };
   if (dueAtUpdate === null) delete updated.dueAt;
+  if (calendarEventUpdate === null) delete updated.calendarEvent;
 
   // Validate before removing a renamed file so malformed planning updates are atomic.
   buildFrontmatter(updated);
@@ -506,6 +511,7 @@ function buildFrontmatter(card: KanbanCard): string {
   data.review_history = card.reviewHistory ?? [];
   if (card.taskExecutionHistory?.length) data.task_execution_history = card.taskExecutionHistory;
   if (card.pendingQuestion) data.pending_question = card.pendingQuestion;
+  if (card.calendarEvent) data.calendar_event = card.calendarEvent;
   if (card.dueAt) data.dueAt = card.dueAt;
   if (card.role !== undefined) data.role = card.role;
   if (card.accountable !== undefined) data.accountable = card.accountable;
@@ -853,6 +859,25 @@ function taskDecisionQuestionContinuationField(value: unknown, field: string, en
     requestId: value.requestId as string, resultRef: value.resultRef, idempotencyKey: value.idempotencyKey,
     receipt: value.receipt, inputId: value.inputId, nativeInputMessageId: value.nativeInputMessageId, nativeTurnId: value.nativeTurnId,
     assistantMessageId: value.assistantMessageId, updatedAt: value.updatedAt,
+  };
+}
+
+/** Validate and normalize a stored calendar sync receipt. Never accepts credentials. */
+function calendarEventBindingField(value: unknown): CalendarEventBinding {
+  const validDate = (input: unknown): input is string =>
+    typeof input === 'string' && input.trim().length > 0 && input.length <= 64 && Number.isFinite(new Date(input).getTime());
+  if (!isRecord(value)
+    || typeof value.eventId !== 'string' || !value.eventId.trim() || value.eventId.length > 256 || /[\u0000-\u001f\u007f]/.test(value.eventId)
+    || !validDate(value.startTime)
+    || !validDate(value.endTime)
+    || !validDate(value.syncedAt)) {
+    throw new Error('calendar_event must be a valid calendar sync receipt');
+  }
+  return {
+    eventId: value.eventId,
+    startTime: new Date(value.startTime).toISOString(),
+    endTime: new Date(value.endTime).toISOString(),
+    syncedAt: new Date(value.syncedAt).toISOString(),
   };
 }
 
