@@ -1,0 +1,606 @@
+{
+  "created_at": "2026-11-06T14:51:23+00:00",
+  "document": {
+    "acceptance_scenarios": [
+      "Запускаем vitest для новых keeper-тестов и полный npm test + lint: видно 401 без cookie, 403 с bearer, 503 keeper_disabled без env, 409 keeper_not_connected без креда, 400 без dueAt; повторный POST отдаёт тот же eventId без второго вызова Keeper; PATCH вместо дубля при изменённом времени; идемпотентный DELETE; в UI кнопка В календарь disabled с подписью Календарь не подключён и рабочей ссылкой на Keeper. Прод-деплой не делаем до сообщения координатора и реального OAuth владельца.",
+      "Тесты моста: без cookie — 401; с Authorization [скрыто] 403; без KEEPER_API_URL — 503 keeper_disabled; без креда пользователя — 409 keeper_not_connected; без dueAt — 400.",
+      "Идемпотентность: повторный POST с теми же start/end/title возвращает тот же eventId без второго вызова Keeper; изменение времени делает PATCH, а не новое событие; повторный DELETE без привязки — идемпотентный 200 без вызова Keeper.",
+      "UI: в карточке с dueAt видна секция Календарь с длительностью и отключённой кнопкой + ссылкой на Keeper publicUrl; без dueAt секции нет; ни один [скрыто] попадает в frontend или Markdown.",
+      "npm test и npm run lint зелёные; merge в main и push выполнены; прод-деплой не делается до сообщения координатора и реального OAuth владельца."
+    ],
+    "business_result": "В карточке с дедлайном появляется секция «Календарь»: длительность, отключённая кнопка «В календарь» с честным состоянием «Календарь не подключён» и ссылкой на Keeper; серверный мост и хранение event_id готовы включиться сразу после реального OAuth владельца без повторных доработок.",
+    "business_results": [
+      "В карточке с дедлайном появляется секция «Календарь»: длительность, отключённая кнопка «В календарь» с честным состоянием «Календарь не подключён» и ссылкой на Keeper; серверный мост и хранение event_id готовы включиться сразу после реального OAuth владельца без повторных доработок."
+    ],
+    "current_progress": "Исследование кода доски, auth-механики и контракта Keeper завершено; план создан, исполнение начинается с L01.",
+    "external_waits": "Реальный OAuth владельца Keeper и выдача per-user кредов — координирующий ассистент; без этого интеграция не считается завершённой. Прод-деплой заблокирован владельцем до готовности Keeper endpoint и сообщения координатора.",
+    "goal": "Владелец хочет отправлять карточку доски с датой/временем в календарь Keeper кнопкой «В календарь»; v1 строит безопасный серверный мост, UI и тесты в состоянии «не подключено» — без токенов и выдуманных записей.",
+    "leaf_count": 7,
+    "plan_origin": {
+      "at": "2026-11-06T17:50:09+03:00",
+      "leaf_id": "L01",
+      "recorded_at": "2026-11-06T14:50:09.522847+00:00",
+      "source": "leaf_created_at"
+    },
+    "schema_version": 2,
+    "slots": 1,
+    "tasks": [
+      {
+        "acceptance": "Тест file-store: карточка с calendarEvent сериализует calendar_event и читается обратно; без привязки поле не пишется; unknown frontmatter сохраняется.",
+        "created_at": "2026-11-06T17:50:09+03:00",
+        "depends_on": [],
+        "description": "CalendarEventBinding {eventId, startTime, endTime, syncedAt} в KanbanCard, сериализация calendar_event в buildFrontmatter только при наличии, поле в KanbanCardUpdates. Без токенов и имён аккаунтов в карточке.",
+        "estimate_minutes": {
+          "maximum": 15.0,
+          "minimum": 10.0
+        },
+        "id": "L01",
+        "label": "Метаданные привязки события в карточке",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:09+03:00",
+            "changes": {
+              "acceptance": "Тест file-store: карточка с calendarEvent сериализует calendar_event и читается обратно; без привязки поле не пишется; unknown frontmatter сохраняется.",
+              "depends_on": [],
+              "description": "CalendarEventBinding {eventId, startTime, endTime, syncedAt} в KanbanCard, сериализация calendar_event в buildFrontmatter только при наличии, поле в KanbanCardUpdates. Без токенов и имён аккаунтов в карточке.",
+              "estimate_minutes": {
+                "maximum": 15,
+                "minimum": 10
+              },
+              "label": "Метаданные привязки события в карточке",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      },
+      {
+        "acceptance": "Юнит-тесты с mock fetch: маппинг payload, ответ Keeper 401/500 превращается в понятную ошибку, таблица решений идемпотентности, provider null — not_connected.",
+        "created_at": "2026-11-06T17:50:09+03:00",
+        "depends_on": [
+          "L01"
+        ],
+        "description": "keeper-config.ts (KEEPER_API_URL/KEEPER_PUBLIC_URL, enabled без секретов) и keeper-calendar.ts: клиент create/update/delete события на официальный REST, per-user credential provider v1 всегда null (никаких хранилищ секретов), helper идемпотентности: тот же payload — переиспользовать eventId, изменённый — PATCH.",
+        "estimate_minutes": {
+          "maximum": 15.0,
+          "minimum": 10.0
+        },
+        "id": "L02",
+        "label": "Keeper конфиг и адаптер API",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:09+03:00",
+            "changes": {
+              "acceptance": "Юнит-тесты с mock fetch: маппинг payload, ответ Keeper 401/500 превращается в понятную ошибку, таблица решений идемпотентности, provider null — not_connected.",
+              "depends_on": [
+                "L01"
+              ],
+              "description": "keeper-config.ts (KEEPER_API_URL/KEEPER_PUBLIC_URL, enabled без секретов) и keeper-calendar.ts: клиент create/update/delete события на официальный REST, per-user credential provider v1 всегда null (никаких хранилищ секретов), helper идемпотентности: тот же payload — переиспользовать eventId, изменённый — PATCH.",
+              "estimate_minutes": {
+                "maximum": 15,
+                "minimum": 10
+              },
+              "label": "Keeper конфиг и адаптер API",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      },
+      {
+        "acceptance": "Route-тесты: все перечисленные статусы, идемпотентность create/update/delete, карточка читается после записи привязки.",
+        "created_at": "2026-11-06T17:50:09+03:00",
+        "depends_on": [
+          "L02"
+        ],
+        "description": "POST/DELETE [локальный путь]/[id][локальный путь]: только human identity из cookie (401 без неё, 403 при Authorization bearer), 503 keeper_disabled без env, 409 keeper_not_connected без креда, 400 без dueAt; POST идемпотентен (повтор — тот же eventId без вызова Keeper; изменённое время — PATCH), DELETE идемпотентен; привязка пишется через updateCard.",
+        "estimate_minutes": {
+          "maximum": 15.0,
+          "minimum": 10.0
+        },
+        "id": "L03",
+        "label": "Серверный bridge роут карточки",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:09+03:00",
+            "changes": {
+              "acceptance": "Route-тесты: все перечисленные статусы, идемпотентность create/update/delete, карточка читается после записи привязки.",
+              "depends_on": [
+                "L02"
+              ],
+              "description": "POST/DELETE [локальный путь]/[id][локальный путь]: только human identity из cookie (401 без неё, 403 при Authorization bearer), 503 keeper_disabled без env, 409 keeper_not_connected без креда, 400 без dueAt; POST идемпотентен (повтор — тот же eventId без вызова Keeper; изменённое время — PATCH), DELETE идемпотентен; привязка пишется через updateCard.",
+              "estimate_minutes": {
+                "maximum": 15,
+                "minimum": 10
+              },
+              "label": "Серверный bridge роут карточки",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      },
+      {
+        "acceptance": "Тесты: статусы 401/403/200, форма ответа не содержит токенов.",
+        "created_at": "2026-11-06T17:50:09+03:00",
+        "depends_on": [
+          "L02"
+        ],
+        "description": "GET [локальный путь] возвращает {enabled, connected:false, publicUrl} без секретов; 401 без identity, 403 при bearer.",
+        "estimate_minutes": {
+          "maximum": 10.0,
+          "minimum": 5.0
+        },
+        "id": "L04",
+        "label": "Status роут календаря для UI",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:09+03:00",
+            "changes": {
+              "acceptance": "Тесты: статусы 401/403/200, форма ответа не содержит токенов.",
+              "depends_on": [
+                "L02"
+              ],
+              "description": "GET [локальный путь] возвращает {enabled, connected:false, publicUrl} без секретов; 401 без identity, 403 при bearer.",
+              "estimate_minutes": {
+                "maximum": 10,
+                "minimum": 5
+              },
+              "label": "Status роут календаря для UI",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      },
+      {
+        "acceptance": "Component-тест: с dueAt секция видна, кнопка disabled, ссылка на publicUrl; без dueAt секции нет; [скрыто] не хранится.",
+        "created_at": "2026-11-06T17:50:10+03:00",
+        "depends_on": [
+          "L03",
+          "L04"
+        ],
+        "description": "В card-edit-dialog секция Календарь при заданном dueAt: длительность в минутах (дефолт 60), кнопка В календарь disabled с честным состоянием Календарь не подключён и ссылкой на Keeper publicUrl из status-роута; POST в v1 не вызывается, выдуманных успехов нет.",
+        "estimate_minutes": {
+          "maximum": 15.0,
+          "minimum": 10.0
+        },
+        "id": "L05",
+        "label": "UI В календарь в карточке",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:10+03:00",
+            "changes": {
+              "acceptance": "Component-тест: с dueAt секция видна, кнопка disabled, ссылка на publicUrl; без dueAt секции нет; [скрыто] не хранится.",
+              "depends_on": [
+                "L03",
+                "L04"
+              ],
+              "description": "В card-edit-dialog секция Календарь при заданном dueAt: длительность в минутах (дефолт 60), кнопка В календарь disabled с честным состоянием Календарь не подключён и ссылкой на Keeper publicUrl из status-роута; POST в v1 не вызывается, выдуманных успехов нет.",
+              "estimate_minutes": {
+                "maximum": 15,
+                "minimum": 10
+              },
+              "label": "UI В календарь в карточке",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      },
+      {
+        "acceptance": "npm test и lint зелёные без регрессий существующих тестов.",
+        "created_at": "2026-11-06T17:50:10+03:00",
+        "depends_on": [
+          "L05"
+        ],
+        "description": "vitest run по всему репо, eslint и typecheck; починить fallout от новых типов.",
+        "estimate_minutes": {
+          "maximum": 15.0,
+          "minimum": 10.0
+        },
+        "id": "L06",
+        "label": "Полный suite зелёный",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:10+03:00",
+            "changes": {
+              "acceptance": "npm test и lint зелёные без регрессий существующих тестов.",
+              "depends_on": [
+                "L05"
+              ],
+              "description": "vitest run по всему репо, eslint и typecheck; починить fallout от новых типов.",
+              "estimate_minutes": {
+                "maximum": 15,
+                "minimum": 10
+              },
+              "label": "Полный suite зелёный",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      },
+      {
+        "acceptance": "origin/main содержит коммит задачи; статус обеих проверок чистый; в отчёте явно сказано, что интеграция не завершена без реального OAuth владельца.",
+        "created_at": "2026-11-06T17:50:10+03:00",
+        "depends_on": [
+          "L06"
+        ],
+        "description": "Merge task/keeper-calendar в main, push origin, удалить задачный worktree/ветку после доказанного включения, отчёт координатору. Прод-деплой НЕ выполняется: внешний гейт владельца — готовность Keeper endpoint, реальный OAuth и сообщение координатора.",
+        "estimate_minutes": {
+          "maximum": 10.0,
+          "minimum": 5.0
+        },
+        "id": "L07",
+        "label": "Интеграция в main и отчёт",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:10+03:00",
+            "changes": {
+              "acceptance": "origin/main содержит коммит задачи; статус обеих проверок чистый; в отчёте явно сказано, что интеграция не завершена без реального OAuth владельца.",
+              "depends_on": [
+                "L06"
+              ],
+              "description": "Merge task/keeper-calendar в main, push origin, удалить задачный worktree/ветку после доказанного включения, отчёт координатору. Прод-деплой НЕ выполняется: внешний гейт владельца — готовность Keeper endpoint, реальный OAuth и сообщение координатора.",
+              "estimate_minutes": {
+                "maximum": 10,
+                "minimum": 5
+              },
+              "label": "Интеграция в main и отчёт",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      }
+    ],
+    "title": "Календарный Keeper.sh: мост доски Todo (v1 без токена)",
+    "updated_at": "2026-11-06T17:50:10+03:00"
+  },
+  "id": "r001",
+  "observed": {
+    "L01": {
+      "completed": [],
+      "last_seen": "2026-11-06T14:51:23+00:00",
+      "task": {
+        "acceptance": "Тест file-store: карточка с calendarEvent сериализует calendar_event и читается обратно; без привязки поле не пишется; unknown frontmatter сохраняется.",
+        "created_at": "2026-11-06T17:50:09+03:00",
+        "depends_on": [],
+        "description": "CalendarEventBinding {eventId, startTime, endTime, syncedAt} в KanbanCard, сериализация calendar_event в buildFrontmatter только при наличии, поле в KanbanCardUpdates. Без токенов и имён аккаунтов в карточке.",
+        "estimate_minutes": {
+          "maximum": 15.0,
+          "minimum": 10.0
+        },
+        "id": "L01",
+        "label": "Метаданные привязки события в карточке",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:09+03:00",
+            "changes": {
+              "acceptance": "Тест file-store: карточка с calendarEvent сериализует calendar_event и читается обратно; без привязки поле не пишется; unknown frontmatter сохраняется.",
+              "depends_on": [],
+              "description": "CalendarEventBinding {eventId, startTime, endTime, syncedAt} в KanbanCard, сериализация calendar_event в buildFrontmatter только при наличии, поле в KanbanCardUpdates. Без токенов и имён аккаунтов в карточке.",
+              "estimate_minutes": {
+                "maximum": 15,
+                "minimum": 10
+              },
+              "label": "Метаданные привязки события в карточке",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      }
+    },
+    "L02": {
+      "completed": [],
+      "last_seen": "2026-11-06T14:51:23+00:00",
+      "task": {
+        "acceptance": "Юнит-тесты с mock fetch: маппинг payload, ответ Keeper 401/500 превращается в понятную ошибку, таблица решений идемпотентности, provider null — not_connected.",
+        "created_at": "2026-11-06T17:50:09+03:00",
+        "depends_on": [
+          "L01"
+        ],
+        "description": "keeper-config.ts (KEEPER_API_URL/KEEPER_PUBLIC_URL, enabled без секретов) и keeper-calendar.ts: клиент create/update/delete события на официальный REST, per-user credential provider v1 всегда null (никаких хранилищ секретов), helper идемпотентности: тот же payload — переиспользовать eventId, изменённый — PATCH.",
+        "estimate_minutes": {
+          "maximum": 15.0,
+          "minimum": 10.0
+        },
+        "id": "L02",
+        "label": "Keeper конфиг и адаптер API",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:09+03:00",
+            "changes": {
+              "acceptance": "Юнит-тесты с mock fetch: маппинг payload, ответ Keeper 401/500 превращается в понятную ошибку, таблица решений идемпотентности, provider null — not_connected.",
+              "depends_on": [
+                "L01"
+              ],
+              "description": "keeper-config.ts (KEEPER_API_URL/KEEPER_PUBLIC_URL, enabled без секретов) и keeper-calendar.ts: клиент create/update/delete события на официальный REST, per-user credential provider v1 всегда null (никаких хранилищ секретов), helper идемпотентности: тот же payload — переиспользовать eventId, изменённый — PATCH.",
+              "estimate_minutes": {
+                "maximum": 15,
+                "minimum": 10
+              },
+              "label": "Keeper конфиг и адаптер API",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      }
+    },
+    "L03": {
+      "completed": [],
+      "last_seen": "2026-11-06T14:51:23+00:00",
+      "task": {
+        "acceptance": "Route-тесты: все перечисленные статусы, идемпотентность create/update/delete, карточка читается после записи привязки.",
+        "created_at": "2026-11-06T17:50:09+03:00",
+        "depends_on": [
+          "L02"
+        ],
+        "description": "POST/DELETE [локальный путь]/[id][локальный путь]: только human identity из cookie (401 без неё, 403 при Authorization bearer), 503 keeper_disabled без env, 409 keeper_not_connected без креда, 400 без dueAt; POST идемпотентен (повтор — тот же eventId без вызова Keeper; изменённое время — PATCH), DELETE идемпотентен; привязка пишется через updateCard.",
+        "estimate_minutes": {
+          "maximum": 15.0,
+          "minimum": 10.0
+        },
+        "id": "L03",
+        "label": "Серверный bridge роут карточки",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:09+03:00",
+            "changes": {
+              "acceptance": "Route-тесты: все перечисленные статусы, идемпотентность create/update/delete, карточка читается после записи привязки.",
+              "depends_on": [
+                "L02"
+              ],
+              "description": "POST/DELETE [локальный путь]/[id][локальный путь]: только human identity из cookie (401 без неё, 403 при Authorization bearer), 503 keeper_disabled без env, 409 keeper_not_connected без креда, 400 без dueAt; POST идемпотентен (повтор — тот же eventId без вызова Keeper; изменённое время — PATCH), DELETE идемпотентен; привязка пишется через updateCard.",
+              "estimate_minutes": {
+                "maximum": 15,
+                "minimum": 10
+              },
+              "label": "Серверный bridge роут карточки",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      }
+    },
+    "L04": {
+      "completed": [],
+      "last_seen": "2026-11-06T14:51:23+00:00",
+      "task": {
+        "acceptance": "Тесты: статусы 401/403/200, форма ответа не содержит токенов.",
+        "created_at": "2026-11-06T17:50:09+03:00",
+        "depends_on": [
+          "L02"
+        ],
+        "description": "GET [локальный путь] возвращает {enabled, connected:false, publicUrl} без секретов; 401 без identity, 403 при bearer.",
+        "estimate_minutes": {
+          "maximum": 10.0,
+          "minimum": 5.0
+        },
+        "id": "L04",
+        "label": "Status роут календаря для UI",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:09+03:00",
+            "changes": {
+              "acceptance": "Тесты: статусы 401/403/200, форма ответа не содержит токенов.",
+              "depends_on": [
+                "L02"
+              ],
+              "description": "GET [локальный путь] возвращает {enabled, connected:false, publicUrl} без секретов; 401 без identity, 403 при bearer.",
+              "estimate_minutes": {
+                "maximum": 10,
+                "minimum": 5
+              },
+              "label": "Status роут календаря для UI",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      }
+    },
+    "L05": {
+      "completed": [],
+      "last_seen": "2026-11-06T14:51:23+00:00",
+      "task": {
+        "acceptance": "Component-тест: с dueAt секция видна, кнопка disabled, ссылка на publicUrl; без dueAt секции нет; [скрыто] не хранится.",
+        "created_at": "2026-11-06T17:50:10+03:00",
+        "depends_on": [
+          "L03",
+          "L04"
+        ],
+        "description": "В card-edit-dialog секция Календарь при заданном dueAt: длительность в минутах (дефолт 60), кнопка В календарь disabled с честным состоянием Календарь не подключён и ссылкой на Keeper publicUrl из status-роута; POST в v1 не вызывается, выдуманных успехов нет.",
+        "estimate_minutes": {
+          "maximum": 15.0,
+          "minimum": 10.0
+        },
+        "id": "L05",
+        "label": "UI В календарь в карточке",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:10+03:00",
+            "changes": {
+              "acceptance": "Component-тест: с dueAt секция видна, кнопка disabled, ссылка на publicUrl; без dueAt секции нет; [скрыто] не хранится.",
+              "depends_on": [
+                "L03",
+                "L04"
+              ],
+              "description": "В card-edit-dialog секция Календарь при заданном dueAt: длительность в минутах (дефолт 60), кнопка В календарь disabled с честным состоянием Календарь не подключён и ссылкой на Keeper publicUrl из status-роута; POST в v1 не вызывается, выдуманных успехов нет.",
+              "estimate_minutes": {
+                "maximum": 15,
+                "minimum": 10
+              },
+              "label": "UI В календарь в карточке",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      }
+    },
+    "L06": {
+      "completed": [],
+      "last_seen": "2026-11-06T14:51:23+00:00",
+      "task": {
+        "acceptance": "npm test и lint зелёные без регрессий существующих тестов.",
+        "created_at": "2026-11-06T17:50:10+03:00",
+        "depends_on": [
+          "L05"
+        ],
+        "description": "vitest run по всему репо, eslint и typecheck; починить fallout от новых типов.",
+        "estimate_minutes": {
+          "maximum": 15.0,
+          "minimum": 10.0
+        },
+        "id": "L06",
+        "label": "Полный suite зелёный",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:10+03:00",
+            "changes": {
+              "acceptance": "npm test и lint зелёные без регрессий существующих тестов.",
+              "depends_on": [
+                "L05"
+              ],
+              "description": "vitest run по всему репо, eslint и typecheck; починить fallout от новых типов.",
+              "estimate_minutes": {
+                "maximum": 15,
+                "minimum": 10
+              },
+              "label": "Полный suite зелёный",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      }
+    },
+    "L07": {
+      "completed": [],
+      "last_seen": "2026-11-06T14:51:23+00:00",
+      "task": {
+        "acceptance": "origin/main содержит коммит задачи; статус обеих проверок чистый; в отчёте явно сказано, что интеграция не завершена без реального OAuth владельца.",
+        "created_at": "2026-11-06T17:50:10+03:00",
+        "depends_on": [
+          "L06"
+        ],
+        "description": "Merge task/keeper-calendar в main, push origin, удалить задачный worktree/ветку после доказанного включения, отчёт координатору. Прод-деплой НЕ выполняется: внешний гейт владельца — готовность Keeper endpoint, реальный OAuth и сообщение координатора.",
+        "estimate_minutes": {
+          "maximum": 10.0,
+          "minimum": 5.0
+        },
+        "id": "L07",
+        "label": "Интеграция в main и отчёт",
+        "model": "glm-5.3-flash-minimax-m3.1",
+        "origin": "",
+        "progress_events": [
+          {
+            "at": "2026-11-06T17:50:10+03:00",
+            "changes": {
+              "acceptance": "origin/main содержит коммит задачи; статус обеих проверок чистый; в отчёте явно сказано, что интеграция не завершена без реального OAuth владельца.",
+              "depends_on": [
+                "L06"
+              ],
+              "description": "Merge task/keeper-calendar в main, push origin, удалить задачный worktree/ветку после доказанного включения, отчёт координатору. Прод-деплой НЕ выполняется: внешний гейт владельца — готовность Keeper endpoint, реальный OAuth и сообщение координатора.",
+              "estimate_minutes": {
+                "maximum": 10,
+                "minimum": 5
+              },
+              "label": "Интеграция в main и отчёт",
+              "model": "glm-5.3-flash-minimax-m3.1"
+            },
+            "harness": "unknown",
+            "note": "",
+            "session": "unknown"
+          }
+        ],
+        "status": "queued",
+        "supersedes": []
+      }
+    }
+  },
+  "reason": "Исходный план"
+}

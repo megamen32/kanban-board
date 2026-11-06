@@ -1,0 +1,55 @@
+{
+  "label": "UI В календарь в карточке",
+  "description": "В card-edit-dialog секция Календарь при заданном dueAt: длительность в минутах (дефолт 60), кнопка В календарь disabled с честным состоянием Календарь не подключён и ссылкой на Keeper publicUrl из status-роута; POST в v1 не вызывается, выдуманных успехов нет.",
+  "acceptance": "Component-тест: с dueAt секция видна, кнопка disabled, ссылка на publicUrl; без dueAt секции нет; bearer нигде не хранится.",
+  "affected_files": [
+    "src/components/kanban/card-edit-dialog.tsx"
+  ],
+  "estimate_minutes": {
+    "minimum": 10,
+    "maximum": 15
+  },
+  "depends_on": [
+    "L03",
+    "L04"
+  ],
+  "id": "L05",
+  "model": "glm-5.3-flash-minimax-m3.1",
+  "created_at": "2026-11-06T17:50:10+03:00",
+  "updated_at": "2026-11-06T20:02:57+03:00",
+  "progress_events": [
+    {
+      "at": "2026-11-06T17:50:10+03:00",
+      "note": "",
+      "changes": {
+        "label": "UI В календарь в карточке",
+        "description": "В card-edit-dialog секция Календарь при заданном dueAt: длительность в минутах (дефолт 60), кнопка В календарь disabled с честным состоянием Календарь не подключён и ссылкой на Keeper publicUrl из status-роута; POST в v1 не вызывается, выдуманных успехов нет.",
+        "acceptance": "Component-тест: с dueAt секция видна, кнопка disabled, ссылка на publicUrl; без dueAt секции нет; bearer нигде не хранится.",
+        "affected_files": [
+          "src/components/kanban/card-edit-dialog.tsx"
+        ],
+        "estimate_minutes": {
+          "minimum": 10,
+          "maximum": 15
+        },
+        "depends_on": [
+          "L03",
+          "L04"
+        ],
+        "model": "glm-5.3-flash-minimax-m3.1"
+      },
+      "session": "unknown",
+      "harness": "unknown"
+    },
+    {
+      "at": "2026-11-06T20:02:57+03:00",
+      "note": "UI: CardCalendarSection в card-edit-dialog — длительность, честные состояния, ссылка на Keeper, активна только при connected. Тесты 6/6.",
+      "changes": {
+        "status": "done"
+      },
+      "session": "unknown",
+      "harness": "unknown"
+    }
+  ],
+  "status": "done"
+}

@@ -1,0 +1,53 @@
+{
+  "label": "Status роут календаря для UI",
+  "description": "GET /api/kanban/calendar/status возвращает {enabled, connected:false, publicUrl} без секретов; 401 без identity, 403 при bearer.",
+  "acceptance": "Тесты: статусы 401/403/200, форма ответа не содержит токенов.",
+  "affected_files": [
+    "src/app/api/kanban/calendar/status/route.ts"
+  ],
+  "estimate_minutes": {
+    "minimum": 5,
+    "maximum": 10
+  },
+  "depends_on": [
+    "L02"
+  ],
+  "id": "L04",
+  "model": "glm-5.3-flash-minimax-m3.1",
+  "created_at": "2026-11-06T17:50:09+03:00",
+  "updated_at": "2026-11-06T20:02:57+03:00",
+  "progress_events": [
+    {
+      "at": "2026-11-06T17:50:09+03:00",
+      "note": "",
+      "changes": {
+        "label": "Status роут календаря для UI",
+        "description": "GET /api/kanban/calendar/status возвращает {enabled, connected:false, publicUrl} без секретов; 401 без identity, 403 при bearer.",
+        "acceptance": "Тесты: статусы 401/403/200, форма ответа не содержит токенов.",
+        "affected_files": [
+          "src/app/api/kanban/calendar/status/route.ts"
+        ],
+        "estimate_minutes": {
+          "minimum": 5,
+          "maximum": 10
+        },
+        "depends_on": [
+          "L02"
+        ],
+        "model": "glm-5.3-flash-minimax-m3.1"
+      },
+      "session": "unknown",
+      "harness": "unknown"
+    },
+    {
+      "at": "2026-11-06T20:02:57+03:00",
+      "note": "Status роут {enabled, connected, publicUrl} per-user, 401/403, storeUnavailable вместо фейка. Тесты 6/6.",
+      "changes": {
+        "status": "done"
+      },
+      "session": "unknown",
+      "harness": "unknown"
+    }
+  ],
+  "status": "done"
+}

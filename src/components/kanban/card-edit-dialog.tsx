@@ -24,6 +24,7 @@ import { ReviewActionGate, reviewActionAccess } from './review-action-gate';
 import { CardExecutionOverview } from './card-execution-overview';
 import { MarkdownText } from './markdown-text';
 import { CardBriefPanel } from './card-brief-panel';
+import { CardCalendarSection, type CalendarBridgeStatus } from './card-calendar-section';
 import { hasCardHistory } from './card-history';
 import { CardHierarchyPanel } from './card-hierarchy-panel';
 import { getEligibleParentCards } from './card-hierarchy';
@@ -111,6 +112,11 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   const [refreshing, setRefreshing] = useState(false);
   const [reviewNote, setReviewNote] = useState('');
   const [baseline, setBaseline] = useState(card);
+  const [calendarStatus, setCalendarStatus] = useState<CalendarBridgeStatus | 'unavailable' | null>(null);
+  const [calendarDuration, setCalendarDuration] = useState(60);
+  const [calendarSyncing, setCalendarSyncing] = useState(false);
+  const [calendarEventId, setCalendarEventId] = useState<string | null>(null);
+  const [calendarMessage, setCalendarMessage] = useState<string | null>(null);
   const pollInFlight = useRef(false);
 
   useEffect(() => {
@@ -132,6 +138,59 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     setPlanning(initialPlanningMetadata(card));
     // A remote update must not erase unsaved input or silently advance its CAS.
   }, [card.id, open]);
+
+  // Calendar bridge state is per user and lives only while the dialog is open.
+  useEffect(() => {
+    if (!open || !card.dueAt) return;
+    let active = true;
+    setCalendarStatus(null);
+    setCalendarEventId(null);
+    setCalendarMessage(null);
+    void (async () => {
+      try {
+        const [statusResponse, eventResponse] = await Promise.all([
+          fetch('/api/kanban/calendar/status', { cache: 'no-store' }),
+          fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/calendar`, { cache: 'no-store' }),
+        ]);
+        if (!active) return;
+        setCalendarStatus(statusResponse.ok ? await statusResponse.json() as CalendarBridgeStatus : 'unavailable');
+        if (eventResponse.ok) {
+          const data = await eventResponse.json() as { event?: { eventId?: string } | null };
+          setCalendarEventId(data.event?.eventId ?? null);
+        }
+      } catch {
+        if (active) setCalendarStatus('unavailable');
+      }
+    })();
+    return () => { active = false; };
+  }, [card.id, card.dueAt, open]);
+
+  const handleCalendarSync = async () => {
+    if (calendarSyncing) return;
+    setCalendarSyncing(true);
+    setCalendarMessage(null);
+    try {
+      const response = await fetch(`/api/kanban/cards/${encodeURIComponent(card.id)}/calendar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ durationMinutes: calendarDuration }),
+      });
+      const data = await response.json().catch(() => null) as { event?: { eventId?: string }; error?: string } | null;
+      if (response.ok && data?.event?.eventId) {
+        setCalendarEventId(data.event.eventId);
+        return;
+      }
+      if (response.status === 409 && (data?.error === 'keeper_not_connected' || data?.error === 'calendar_sync_pending')) {
+        setCalendarMessage('Календарь не подключён или синхронизация ещё не подтверждена.');
+        return;
+      }
+      setCalendarMessage('Не удалось создать событие. Попробуйте позже.');
+    } catch {
+      setCalendarMessage('Не удалось связаться с сервером календаря.');
+    } finally {
+      setCalendarSyncing(false);
+    }
+  };
 
   const watchExecution = shouldRefreshExecutionCard(card);
   useEffect(() => {
@@ -293,6 +352,17 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Срок
             <Input aria-label="Срок" type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} className="w-full min-w-0" />
           </label>
+          <CardCalendarSection
+            className="col-span-2 min-w-0 space-y-1 sm:col-span-3 lg:col-span-6"
+            dueAt={card.dueAt}
+            status={calendarStatus}
+            durationMinutes={calendarDuration}
+            onDurationChange={setCalendarDuration}
+            onSync={() => void handleCalendarSync()}
+            syncing={calendarSyncing}
+            eventId={calendarEventId}
+            message={calendarMessage}
+          />
           <label className="col-span-2 min-w-0 space-y-1 text-xs text-muted-foreground sm:col-span-1 lg:col-span-2">Следующий шаг
             <Input aria-label="Следующий шаг" value={nextAction} onChange={e => setNextAction(e.target.value)} maxLength={4000} placeholder="Например: запросить файл у поставщика" className="w-full min-w-0" />
           </label>

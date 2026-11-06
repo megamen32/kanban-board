@@ -1,0 +1,26 @@
+{
+  "title": "Календарный Keeper.sh: мост доски Todo (v1 без токена)",
+  "goal": "Владелец хочет отправлять карточку доски с датой/временем в календарь Keeper кнопкой «В календарь»; v1 строит безопасный серверный мост, UI и тесты в состоянии «не подключено» — без токенов и выдуманных записей.",
+  "business_result": "В карточке с дедлайном появляется секция «Календарь»: длительность, отключённая кнопка «В календарь» с честным состоянием «Календарь не подключён» и ссылкой на Keeper; серверный мост и хранение event_id готовы включиться сразу после реального OAuth владельца без повторных доработок.",
+  "acceptance_scenarios": [
+    "Тесты моста: без cookie — 401; с Authorization bearer — 403; без KEEPER_API_URL — 503 keeper_disabled; без креда пользователя — 409 keeper_not_connected; без dueAt — 400.",
+    "Идемпотентность: повторный POST с теми же start/end/title возвращает тот же eventId без второго вызова Keeper; изменение времени делает PATCH, а не новое событие; повторный DELETE без привязки — идемпотентный 200 без вызова Keeper.",
+    "UI: в карточке с dueAt видна секция Календарь с длительностью и отключённой кнопкой + ссылкой на Keeper publicUrl; без dueAt секции нет; ни один bearer не попадает в frontend или Markdown.",
+    "npm test и npm run lint зелёные; merge в main и push выполнены; прод-деплой не делается до сообщения координатора и реального OAuth владельца."
+  ],
+  "acceptance_scenario": "Запускаем vitest для новых keeper-тестов и полный npm test + lint: видно 401 без cookie, 403 с bearer, 503 keeper_disabled без env, 409 keeper_not_connected без креда, 400 без dueAt; повторный POST отдаёт тот же eventId без второго вызова Keeper; PATCH вместо дубля при изменённом времени; идемпотентный DELETE; в UI кнопка В календарь disabled с подписью Календарь не подключён и рабочей ссылкой на Keeper. Прод-деплой не делаем до сообщения координатора и реального OAuth владельца.",
+  "current_progress": "Исследование кода доски, auth-механики и контракта Keeper завершено; план создан, исполнение начинается с L01.",
+  "mode": "fullcycle",
+  "recon": [
+    "Карточки несут поле dueAt (ISO-строка), в диалоге карточки оно редактируется через datetime-local :: src/lib/kanban/types.ts:11 + src/components/kanban/card-edit-dialog.tsx:294",
+    "Человеческая идентичность API берётся только из cookie gptadmin_auth с внешней проверкой; запросы с Authorization считаются сервисными и отклоняются :: src/lib/auth/board-human.ts:9-29",
+    "Route-тесты изолированы через vi.hoisted + vi.mock библиотек, параметры как Promise<{id}> :: src/app/api/kanban/cards/[id]/route.test.ts",
+    "buildFrontmatter пишет опциональные поля только при наличии и сохраняет неизвестный frontmatter :: src/lib/kanban/file-store.ts:468",
+    "Keeper v2.29.3 поднят координатором на private LAN, контракт events REST, bearer kpr_ не выдан :: http://192.168.2.100:43349",
+    "Секреты запрещено хранить в shared work mount карточек; только защищённый auth root или Airlock vault :: /home/roomhacker/todo-kanban/work-auth"
+  ],
+  "external_waits": "Реальный OAuth владельца Keeper и выдача per-user кредов — координирующий ассистент; без этого интеграция не считается завершённой. Прод-деплой заблокирован владельцем до готовности Keeper endpoint и сообщения координатора.",
+  "default_model": "glm-5.3-flash-minimax-m3.1",
+  "slots": 1,
+  "updated_at": "2026-11-06T17:52"
+}
