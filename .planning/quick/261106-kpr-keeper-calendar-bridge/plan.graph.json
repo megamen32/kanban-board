@@ -25,7 +25,7 @@
   "revisions": [],
   "external_waits": "Реальный OAuth владельца Keeper и выдача per-user кредов — координирующий ассистент; без этого интеграция не считается завершённой. Прод-деплой заблокирован владельцем до готовности Keeper endpoint и сообщения координатора.",
   "slots": 1,
-  "updated_at": "2026-11-06T18:17:09+03:00",
+  "updated_at": "2026-11-06T18:26:54+03:00",
   "tasks": [
     {
       "id": "L01",
@@ -82,7 +82,7 @@
     {
       "id": "L02",
       "label": "Keeper конфиг и адаптер API",
-      "status": "queued",
+      "status": "done",
       "description": "keeper-config.ts (KEEPER_API_URL/KEEPER_PUBLIC_URL, enabled без секретов) и keeper-calendar.ts: клиент create/update/delete события на официальный REST, per-user credential provider v1 всегда null (никаких хранилищ секретов), helper идемпотентности: тот же payload — переиспользовать eventId, изменённый — PATCH.",
       "acceptance": "Юнит-тесты с mock fetch: маппинг payload, ответ Keeper 401/500 превращается в понятную ошибку, таблица решений идемпотентности, provider null — not_connected.",
       "model": "glm-5.3-flash-minimax-m3.1",
@@ -108,6 +108,15 @@
               "L01"
             ],
             "model": "glm-5.3-flash-minimax-m3.1"
+          },
+          "session": "unknown",
+          "harness": "unknown"
+        },
+        {
+          "at": "2026-11-06T18:26:54+03:00",
+          "note": "keeper-config.ts (KEEPER_API_URL/KEEPER_PUBLIC_URL, без секретов) и keeper-calendar.ts (REST create/patch/delete, noKeeperCredentials=null, calendarSyncDecision). Тесты 14/14 green.",
+          "changes": {
+            "status": "done"
           },
           "session": "unknown",
           "harness": "unknown"

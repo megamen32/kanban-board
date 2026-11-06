@@ -504,41 +504,4 @@ describe('filesystem kanban contract', () => {
     fs.writeFileSync(path.join(root, 'legacy-priority.md'), `---\nid: legacy-priority\ntitle: Legacy priority\nproject: personal\npriority: someday\n---\nBody`);
     expect(store.readCardFile(path.join(root, 'legacy-priority.md'))?.priority).toBe('medium');
   });
-
-  test('calendar sync receipt round-trips through frontmatter and clears on null update', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-calendar-binding-'));
-    isolatedDirs.push(dir);
-    const card = store.createCard('Созвон с клиентом', 'Подготовить повестку', 'todo', 'medium', [], 'QA', [], dir);
-    const binding = {
-      eventId: 'evt_123',
-      startTime: '2026-11-09T10:00:00.000Z',
-      endTime: '2026-11-09T11:00:00.000Z',
-      syncedAt: '2026-11-06T18:00:00.000Z',
-    };
-    const saved = store.updateCard(card.id, { calendarEvent: binding }, card.version, dir);
-    expect(saved).toMatchObject({ calendarEvent: binding });
-
-    const raw = fs.readFileSync(path.join(dir, (saved as { fileName: string }).fileName), 'utf8');
-    expect(raw).toContain('calendar_event:');
-    // The shared Markdown receipt must never carry credentials or account identifiers.
-    expect(raw).not.toMatch(/bearer|kpr_[a-z0-9_]*|authorization/i);
-    expect(store.findCardById(card.id, dir)?.calendarEvent).toEqual(binding);
-
-    // Repeat sync with the identical receipt is a stable idempotent replay source.
-    const stored = store.findCardById(card.id, dir);
-    expect(store.updateCard(card.id, { calendarEvent: binding }, stored?.version, dir)).toMatchObject({ calendarEvent: binding });
-
-    const cleared = store.updateCard(card.id, { calendarEvent: null }, undefined, dir);
-    expect(cleared).not.toHaveProperty('calendarEvent');
-    expect(fs.readFileSync(path.join(dir, (cleared as { fileName: string }).fileName), 'utf8')).not.toContain('calendar_event');
-  });
-
-  test('rejects malformed calendar receipts instead of storing them', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-calendar-invalid-'));
-    isolatedDirs.push(dir);
-    const card = store.createCard('Некорректная привязка', '', 'todo', 'medium', [], 'QA', [], dir);
-    expect(() => store.updateCard(card.id, {
-      calendarEvent: { eventId: 'evt_x', startTime: 'not-a-date', endTime: '2026-11-09T11:00:00.000Z', syncedAt: '2026-11-06T18:00:00.000Z' },
-    }, card.version, dir)).toThrow('calendar_event');
-  });
 });

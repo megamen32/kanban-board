@@ -1,4 +1,4 @@
-import type { CalendarEventBinding } from './types';
+import type { CalendarEventBinding } from './keeper-bindings';
 
 /**
  * Server-side Keeper.sh calendar adapter for the official REST contract:
@@ -127,6 +127,8 @@ export async function keeperDeleteEvent(baseUrl: string, bearer: string, eventId
 
 export interface CalendarSyncInput {
   title: string;
+  /** sha256 hex of the exact event title. */
+  titleHash: string;
   startTime: string;
   endTime: string;
 }
@@ -137,14 +139,16 @@ export type CalendarSyncDecision =
   | { action: 'patch'; binding: CalendarEventBinding };
 
 /**
- * Duplicate-safe sync decision: an unchanged synced window is answered from
- * the stored receipt without touching Keeper, a changed window patches the
- * existing event, and only an unsynced card creates an event.
+ * Duplicate-safe sync decision: an unchanged synced window and title are
+ * answered from the stored receipt without touching Keeper, any change
+ * patches the existing event, and only an unsynced card creates an event.
  */
 export function calendarSyncDecision(existing: CalendarEventBinding | undefined, input: CalendarSyncInput): CalendarSyncDecision {
   if (!existing) return { action: 'create' };
-  if (existing.startTime === input.startTime && existing.endTime === input.endTime) {
-    return { action: 'none', binding: existing };
-  }
-  return { action: 'patch', binding: existing };
+  // Receipts written before title hashing carry no titleHash: window-only fallback.
+  const titleMatches = existing.titleHash === undefined || existing.titleHash === input.titleHash;
+  const sameWindow = existing.startTime === input.startTime
+    && existing.endTime === input.endTime
+    && titleMatches;
+  return sameWindow ? { action: 'none', binding: existing } : { action: 'patch', binding: existing };
 }

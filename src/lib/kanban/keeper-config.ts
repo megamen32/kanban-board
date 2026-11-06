@@ -23,3 +23,18 @@ export function keeperCalendarPublicUrl(): string | null {
 export function keeperCalendarEnabled(): boolean {
   return keeperCalendarApiUrl() !== null;
 }
+
+export interface BridgeIdentity {
+  username: string;
+  scope: 'work' | 'personal';
+}
+
+/**
+ * The calendar bridge is for the board's human owners only. Service bearers
+ * never reach this layer (rejected earlier), and other verified accounts get
+ * a clear refusal instead of access to a calendar they do not own.
+ */
+export function calendarBridgeUsername(identity: BridgeIdentity | null): string | null {
+  if (!identity || identity.scope !== 'work') return null;
+  return ['nikita', 'oleg'].includes(identity.username) ? identity.username : null;
+}

@@ -10,7 +10,7 @@ import {
 } from './keeper-calendar';
 
 const BASE = 'http://192.168.2.100:43349';
-const INPUT = { calendarId: 'cal-1', title: 'Созвон', startTime: '2026-11-09T10:00:00.000Z', endTime: '2026-11-09T11:00:00.000Z' };
+const INPUT = { calendarId: 'cal-1', title: 'Созвон', titleHash: 'a'.repeat(64), startTime: '2026-11-09T10:00:00.000Z', endTime: '2026-11-09T11:00:00.000Z' };
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(body === undefined || body === '' ? '' : JSON.stringify(body), { status });
@@ -28,7 +28,7 @@ describe('keeper calendar adapter (official REST contract)', () => {
     const result = await keeperCreateEvent(BASE, 'kpr_secret', INPUT);
 
     expect(result).toEqual({ eventId: 'evt_42', eventUrl: 'https://keeper-calendar.airlock.bezrabotnyi.com/e/evt_42' });
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${BASE}/api/v1/events`);
     expect(init.method).toBe('POST');
     expect(JSON.parse(String(init.body))).toEqual({ calendarId: 'cal-1', title: 'Созвон', startTime: INPUT.startTime, endTime: INPUT.endTime });
@@ -43,7 +43,7 @@ describe('keeper calendar adapter (official REST contract)', () => {
     const result = await keeperUpdateEvent(BASE, 'kpr_secret', 'evt_42', INPUT);
 
     expect(result).toEqual({ eventId: 'evt_42' });
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${BASE}/api/v1/events/evt_42`);
     expect(init.method).toBe('PATCH');
   });
@@ -54,7 +54,7 @@ describe('keeper calendar adapter (official REST contract)', () => {
 
     await keeperDeleteEvent(BASE, 'kpr_secret', 'evt_42');
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${BASE}/api/v1/events/evt_42`);
     expect(init.method).toBe('DELETE');
     expect(init.body).toBeUndefined();
@@ -85,7 +85,7 @@ describe('keeper calendar adapter (official REST contract)', () => {
     const fetchMock = vi.fn(async () => jsonResponse(200, ''));
     vi.stubGlobal('fetch', fetchMock);
     await keeperDeleteEvent(BASE, 'kpr_secret', 'a/b c');
-    const [url] = fetchMock.mock.calls[0] as [string];
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
     expect(url).toBe(`${BASE}/api/v1/events/a%2Fb%20c`);
   });
 });
@@ -97,11 +97,12 @@ describe('duplicate-safe sync decisions', () => {
     expect(calendarSyncDecision(undefined, INPUT)).toEqual({ action: 'create' });
   });
 
-  test('identical window reuses the stored receipt without a Keeper call', () => {
-    expect(calendarSyncDecision(binding, INPUT)).toEqual({ action: 'none', binding });
+  test('identical window and title reuse the stored receipt without a Keeper call', () => {
+    const hashedBinding = { ...binding, titleHash: 'a'.repeat(64) };
+    expect(calendarSyncDecision(hashedBinding, INPUT)).toEqual({ action: 'none', binding: hashedBinding });
   });
 
-  test('changed start or end patches the existing event instead of duplicating', () => {
+  test('changed start, end or title patches the existing event instead of duplicating', () => {
     expect(calendarSyncDecision(binding, { ...INPUT, startTime: '2026-11-09T10:30:00.000Z' })).toEqual({
       action: 'patch',
       binding,
@@ -110,6 +111,15 @@ describe('duplicate-safe sync decisions', () => {
       action: 'patch',
       binding,
     });
+    expect(calendarSyncDecision({ ...binding, titleHash: 'a'.repeat(64) }, { ...INPUT, title: 'Новое название', titleHash: 'b'.repeat(64) })).toEqual({
+      action: 'patch',
+      binding: { ...binding, titleHash: 'a'.repeat(64) },
+    });
+  });
+
+  test('a receipt without titleHash falls back to window-only comparison', () => {
+    expect(calendarSyncDecision(binding, INPUT).action).toBe('none');
+    expect(calendarSyncDecision(binding, { ...INPUT, startTime: '2026-11-09T10:30:00.000Z' }).action).toBe('patch');
   });
 
   test('v1 credential source connects nobody and errors carry no tokens', async () => {
