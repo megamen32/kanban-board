@@ -1,7 +1,7 @@
 {
   "error": null,
-  "last_file_event": "2026-11-06T17:02:59+00:00",
-  "last_successful_sync": "2026-11-06T17:02:59+00:00",
+  "last_file_event": "2026-11-06T17:53:02+00:00",
+  "last_successful_sync": "2026-11-06T17:53:03+00:00",
   "pending": {
     "document": {
       "acceptance_scenarios": [
@@ -348,17 +348,26 @@
               "harness": "unknown",
               "note": "",
               "session": "unknown"
+            },
+            {
+              "at": "2026-11-06T20:53:01+03:00",
+              "changes": {
+                "status": "done"
+              },
+              "harness": "unknown",
+              "note": "Merge 8d3cd9d (содержит fail-closed fix 34e7494) в origin/main. Deploy: образ keeper-8d3cd9d=70c9735f собран allowlist-ом из standalone (state.json/env исключены, найдены и удалены при сборке), контейнер запущен через 3-compose up --no-build, guard 512MiB/256PIDs/2CPU подтверждён. Smoke: status 401/403, POST/DELETE 401, / 200, MCP unauth 401, карты 184=184, логи без kpr_/bearer, keeper-calendar-internal [локальный путь] 200 из контейнера. Отложено на owner: реальный OAuth/токен (MCP canary с живой сессией и calendar POST 200), operator добавляет keeper-credentials.json 0600.",
+              "session": "unknown"
             }
           ],
-          "status": "queued",
+          "status": "done",
           "supersedes": []
         }
       ],
       "title": "Календарный Keeper.sh: мост доски Todo (v1 без токена)",
-      "updated_at": "2026-11-06T20:02:58+03:00"
+      "updated_at": "2026-11-06T20:53:01+03:00"
     },
     "identity": "decf9f95f54ef2d11954d56d",
-    "last_file_event": "2026-11-06T17:02:59+00:00",
+    "last_file_event": "2026-11-06T17:53:02+00:00",
     "name": "plan-20261106-1751-decf9f95f54ef2d11954d56d",
     "observed": {
       "L01": {
@@ -673,7 +682,7 @@
       },
       "L07": {
         "completed": [],
-        "last_seen": "2026-11-06T14:51:23+00:00",
+        "last_seen": "2026-11-06T17:53:02+00:00",
         "task": {
           "acceptance": "origin/main содержит коммит задачи; статус обеих проверок чистый; в отчёте явно сказано, что интеграция не завершена без реального OAuth владельца.",
           "created_at": "2026-11-06T17:50:10+03:00",
@@ -708,9 +717,18 @@
               "harness": "unknown",
               "note": "",
               "session": "unknown"
+            },
+            {
+              "at": "2026-11-06T20:53:01+03:00",
+              "changes": {
+                "status": "done"
+              },
+              "harness": "unknown",
+              "note": "Merge 8d3cd9d (содержит fail-closed fix 34e7494) в origin/main. Deploy: образ keeper-8d3cd9d=70c9735f собран allowlist-ом из standalone (state.json/env исключены, найдены и удалены при сборке), контейнер запущен через 3-compose up --no-build, guard 512MiB/256PIDs/2CPU подтверждён. Smoke: status 401/403, POST/DELETE 401, / 200, MCP unauth 401, карты 184=184, логи без kpr_/bearer, keeper-calendar-internal [локальный путь] 200 из контейнера. Отложено на owner: реальный OAuth/токен (MCP canary с живой сессией и calendar POST 200), operator добавляет keeper-credentials.json 0600.",
+              "session": "unknown"
             }
           ],
-          "status": "queued",
+          "status": "done",
           "supersedes": []
         }
       }
@@ -1326,15 +1344,15 @@
       }
     ],
     "schema_version": 1,
-    "seq": 4
+    "seq": 5
   },
-  "seq": 4,
+  "seq": 5,
   "server_receipt": {
     "identity": "decf9f95f54ef2d11954d56d",
-    "received_at": "2026-11-06T17:02:59+00:00",
-    "seq": 4,
+    "received_at": "2026-11-06T17:53:02+00:00",
+    "seq": 5,
     "url": "https://lhc.bezrabotnyi.com/excode/plan-20261106-1751-decf9f95f54ef2d11954d56d/"
   },
-  "source_hash": "eb39102cd0d6c614d425a3043d385a91310d0cbd106e120dfde3c038d914d999",
+  "source_hash": "64bb1d30b610e3a62ca2a34c56b6a106e8a4c744ada5d717b4ac115bc3a8de81",
   "warning": null
 }
