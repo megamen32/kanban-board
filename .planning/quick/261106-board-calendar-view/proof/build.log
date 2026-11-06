@@ -1,0 +1,62 @@
+▲ Next.js 16.3.0 (webpack)
+✓ Running next.config.ts took 56ms
+- Experiments (use with caution):
+  · cpus: 2
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 16.8s
+  Running TypeScript ...
+  Finished TypeScript in 8.8s ...
+  Collecting page data using 2 workers ...
+  Generating static pages using 2 workers (0/23) ...
+  Generating static pages using 2 workers (5/23) 
+  Generating static pages using 2 workers (11/23) 
+  Generating static pages using 2 workers (17/23) 
+✓ Generating static pages using 2 workers (23/23) in 515ms
+  Finalizing page optimization ...
+  Collecting build traces ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /.well-known/oauth-authorization-server
+├ ƒ /.well-known/openid-configuration
+├ ƒ /api/auth/airlock/callback
+├ ƒ /api/auth/airlock/login
+├ ƒ /api/auth/airlock/status
+├ ƒ /api/auth/login
+├ ƒ /api/auth/logout
+├ ƒ /api/auth/session
+├ ƒ /api/auth/setup
+├ ƒ /api/kanban/calendar/events
+├ ƒ /api/kanban/calendar/status
+├ ƒ /api/kanban/cards
+├ ƒ /api/kanban/cards/[id]
+├ ƒ /api/kanban/cards/[id]/answer
+├ ƒ /api/kanban/cards/[id]/calendar
+├ ƒ /api/kanban/cards/[id]/dot-event
+├ ƒ /api/kanban/cards/[id]/execution
+├ ƒ /api/kanban/cards/[id]/question
+├ ƒ /api/kanban/cards/[id]/result
+├ ƒ /api/kanban/cards/[id]/result-correction
+├ ƒ /api/kanban/cards/[id]/review
+├ ƒ /api/kanban/graph-layout
+├ ƒ /api/kanban/inbox-capture
+├ ƒ /api/kanban/reorder
+├ ƒ /api/kanban/roles
+├ ƒ /api/kanban/source-intent/execution
+├ ƒ /api/kanban/weekly-plan
+├ ƒ /api/notifications/public-key
+├ ƒ /api/notifications/subscription
+├ ƒ /api/notifications/test
+├ ƒ /auth/login
+├ ƒ /link-preview
+├ ƒ /mcp
+├ ƒ /oauth/authorize
+├ ƒ /oauth/revoke
+└ ƒ /oauth/token
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
