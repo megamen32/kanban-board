@@ -44,3 +44,10 @@ describe('board URL state', () => {
    const state: BoardUrlState = { project: 'Synthetic', workspaceView: 'shared', layout: 'graph', tab: 'execution', assignee: 'all', person: 'synthetic', search: 'needle', attention: 'all', closedKind: 'all', inboxOnly: false };
    expect(parseBoardUrlState(serializeBoardUrlState(state))).toMatchObject(parsed);
  });
+
+it('round-trips a calendar link with its date, period and filters on mobile', () => {
+  const state: BoardUrlState = { project: 'Demo', workspaceView: 'mine', layout: 'calendar', tab: 'execution', assignee: 'all', person: 'nikita', search: 'needle', attention: 'all', closedKind: 'all', inboxOnly: false, calendarDate: '2026-11-07', calendarPeriod: 'week' };
+  expect(parseBoardUrlState(serializeBoardUrlState(state))).toMatchObject({ layout: 'calendar', calendarDate: '2026-11-07', calendarPeriod: 'week', project: 'Demo', search: 'needle' });
+  expect(resolveBoardLayout('calendar', true)).toBe('calendar');
+  expect(parseBoardUrlState(new URLSearchParams('layout=calendar&date=2026-02-30&period=nonsense'))).toEqual({ layout: 'calendar' });
+});

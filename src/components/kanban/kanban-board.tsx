@@ -34,6 +34,7 @@ import type { KanbanCard, KanbanCardUpdates, RoleDefinition } from '@/lib/kanban
 import { NIKITA_ACTOR, type HumanReviewAction } from '@/lib/kanban/transition-policy';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { CardGraphView } from './card-graph-view';
+import { BoardCalendarView } from './board-calendar-view';
 import { TaskListView } from './task-list-view';
 import { filterCards, filterWorkspaceCards, getAssigneeOptions, getProjectOptions, getPrimaryBoardLaneCards, searchCards, isClosedCard, getBoardCounts, filterAttentionCards, resolveInitialWorkspaceView, WORKSPACE_HINT, type AttentionFilter, type WorkspaceView } from './view-model';
 import { CardEditDialog } from './card-edit-dialog';
@@ -58,6 +59,8 @@ export function KanbanBoard() {
   const { cards, projects, loading, conflict, createCard, updateCard, deleteCard, moveCard, reorderColumn, resolveConflict, refresh, weeklyDraft, weeklyLoading, weeklyError, fetchWeeklyDraft, acceptWeeklyPlan } = useKanban();
   const [showAdd, setShowAdd] = useState(false);
   const [defaultColumn, setDefaultColumn] = useState('inbox');
+  const [calendarDate, setCalendarDate] = useState<string>();
+  const [calendarPeriod, setCalendarPeriod] = useState<'month' | 'week'>('month');
   const [view, setView] = useState<BoardLayout>('kanban');
   const [project, setProject] = useState('all');
   const [assignee, setAssignee] = useState('all');
@@ -115,6 +118,8 @@ export function KanbanBoard() {
     if (initial.assignee) setAssignee(initial.assignee);
     if (initial.search) setSearch(initial.search);
     setWorkspaceView(resolveInitialWorkspaceView(window.location.hostname, username, initial.workspaceView));
+    if (initial.calendarDate) setCalendarDate(initial.calendarDate);
+    if (initial.calendarPeriod) setCalendarPeriod(initial.calendarPeriod);
     if (initial.layout) setView(resolveBoardLayout(initial.layout, isMobile));
     if (initial.tab && (initial.tab !== 'balance' || username === NIKITA_ACTOR)) setPlanningTab(initial.tab);
     if (initial.attention) setAttention(initial.attention);
@@ -128,12 +133,12 @@ export function KanbanBoard() {
     if (!urlReady) return;
     const params = serializeBoardUrlState({
       project, workspaceView, layout: view, tab: planningTab, assignee, person,
-      search, attention, closedKind, inboxOnly,
+      search, attention, closedKind, inboxOnly, calendarDate, calendarPeriod,
     });
     const next = window.location.pathname + '?' + params.toString() + window.location.hash;
     const current = window.location.pathname + window.location.search + window.location.hash;
     if (next !== current) window.history.replaceState(window.history.state, '', next);
-  }, [assignee, attention, closedKind, inboxOnly, person, planningTab, project, search, urlReady, view, workspaceView]);
+  }, [assignee, attention, closedKind, inboxOnly, person, planningTab, project, search, urlReady, view, workspaceView, calendarDate, calendarPeriod]);
 
   const projectOptions = getProjectOptions(cards, projects);
   const assigneeOptions = useMemo(() => getAssigneeOptions(cards), [cards]);
@@ -274,7 +279,7 @@ export function KanbanBoard() {
               <Search aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <input type="search" aria-label="Поиск задач" placeholder="Найти задачу или человека" value={search} onChange={event => setSearch(event.target.value)} className="h-8 w-full min-w-0 rounded-md border bg-background pl-8 pr-2 text-sm" />
             </label>
-            <div className="ml-auto flex shrink-0 items-center gap-0.5">
+            <div className="ml-auto flex max-w-full flex-wrap items-center gap-0.5">
               <div className="hidden items-center gap-0.5 md:flex">{renderAttentionFilters()}</div>
               {planningTab !== 'execution' && (
                 <Button aria-label="Открыть граф задач" title="Открыть граф задач" variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => { handlePlanningTabChange('execution'); setView('graph'); }}>
@@ -284,6 +289,7 @@ export function KanbanBoard() {
               {planningTab === 'execution' && <div className="flex items-center gap-0.5 rounded-md border p-0.5">
                 {!isMobile && <Button aria-label="Канбан" title="Канбан" aria-pressed={view === 'kanban'} variant={view === 'kanban' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setView('kanban')}><Columns3 aria-hidden className="h-4 w-4" /><span>Канбан</span></Button>}
                 <Button aria-label="Список" title="Список" aria-pressed={view === 'list'} variant={view === 'list' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setView('list')}><ListTodo aria-hidden className="h-4 w-4" /><span>Список</span></Button>
+                <Button aria-label="Календарь" title="Календарь" aria-pressed={view === 'calendar'} variant={view === 'calendar' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setView('calendar')}><CalendarDays aria-hidden className="h-4 w-4" /><span>Календарь</span></Button>
                 <Button aria-label="Граф" title="Граф" aria-pressed={view === 'graph'} variant={view === 'graph' ? 'secondary' : 'ghost'} size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setView('graph')}><GitFork aria-hidden className="h-4 w-4" />Граф</Button>
               </div>}
               <Button aria-label="Обновить" title="Обновить" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={refresh}><RotateCw aria-hidden className="h-3.5 w-3.5" /></Button>
@@ -342,7 +348,9 @@ export function KanbanBoard() {
             <IntegratorTaskDashboard cards={derivedCards} onOpen={setSelectedCard} onRefresh={refresh} canAssignReviewer={isSuperAdmin} onAssignReviewer={handleAssignReviewer} />
           </TabsContent>
           <TabsContent value="execution" className="order-1 md:order-2 min-h-0 min-w-0 overflow-y-auto">
-            {view === 'graph' ? (
+            {view === 'calendar' ? (
+              <BoardCalendarView cards={visibleCards} username={username} anchor={calendarDate} period={calendarPeriod} onNavigate={(date, period) => { setCalendarDate(date); setCalendarPeriod(period); }} onOpen={setSelectedCard} />
+            ) : view === 'graph' ? (
               <CardGraphView cards={visibleCards} onOpen={setSelectedCard} workspaceView={workspaceView} onWorkspaceViewChange={setWorkspaceView} />
             ) : view === 'list' ? (
               <TaskListView cards={getPlanningTabCards(visibleCards, 'execution')} authoritativeCards={cards} breadcrumbCards={scopedCards} highlightCardId={highlightCardId} username={username} onRefresh={refresh} onStatusChange={(id, column, version) => updateCard(id, { column }, version)} onOpen={setSelectedCard} />

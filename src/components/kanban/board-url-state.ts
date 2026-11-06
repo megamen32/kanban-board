@@ -1,6 +1,7 @@
+import { validCalendarDay } from '@/lib/kanban/board-calendar';
 import type { AttentionFilter, PlanningTab, WorkspaceView } from './view-model';
 
-export type BoardLayout = 'kanban' | 'list' | 'graph';
+export type BoardLayout = 'kanban' | 'list' | 'graph' | 'calendar';
 export type ClosedKind = 'all' | 'done' | 'archived';
 
 export type BoardUrlState = Readonly<{
@@ -14,11 +15,13 @@ export type BoardUrlState = Readonly<{
   attention: AttentionFilter;
   closedKind: ClosedKind;
   inboxOnly: boolean;
+  calendarDate?: string;
+  calendarPeriod?: 'month' | 'week';
 }>;
 
 const TABS = new Set<PlanningTab>(['dashboard', 'execution', 'inbox', 'week', 'today', 'balance', 'closed']);
 const WORKSPACE_VIEWS = new Set<WorkspaceView>(['mine', 'shared', 'all']);
-const LAYOUTS = new Set<BoardLayout>(['kanban', 'list', 'graph']);
+const LAYOUTS = new Set<BoardLayout>(['kanban', 'list', 'graph', 'calendar']);
 const ATTENTION_FILTERS = new Set<AttentionFilter>(['all', 'blocked', 'unassigned']);
 const CLOSED_KINDS = new Set<ClosedKind>(['all', 'done', 'archived']);
 
@@ -64,6 +67,10 @@ export function parseBoardUrlState(params: URLSearchParams): Partial<BoardUrlSta
   if (closedKind && CLOSED_KINDS.has(closedKind as ClosedKind)) parsed.closedKind = closedKind as ClosedKind;
   if (params.get('inbox') === '1') parsed.inboxOnly = true;
 
+  const calendarDate = params.get('date');
+  if (calendarDate && validCalendarDay(calendarDate)) parsed.calendarDate = calendarDate;
+  const calendarPeriod = params.get('period');
+  if (calendarPeriod === 'week' || calendarPeriod === 'month') parsed.calendarPeriod = calendarPeriod;
   return parsed;
 }
 
@@ -80,6 +87,8 @@ export function serializeBoardUrlState(state: BoardUrlState): URLSearchParams {
   if (state.attention !== 'all') params.set('attention', state.attention);
   if (state.closedKind !== 'all') params.set('closed', state.closedKind);
   if (state.inboxOnly) params.set('inbox', '1');
+  if (state.calendarDate) params.set('date', state.calendarDate);
+  if (state.calendarPeriod) params.set('period', state.calendarPeriod);
   return params;
 }
 
