@@ -59,6 +59,18 @@ describe('CardCalendarSection (honest states, no invented connection)', () => {
     expect(syncingHtml).toMatch(/<button[^>]*\sdisabled=""/);
   });
 
+  test('warns when the edited due date is not saved yet (calendar acts on the saved date)', () => {
+    const html = renderToStaticMarkup(
+      <CardCalendarSection {...base} dueAtUnsaved status={{ enabled: true, connected: false }} />,
+    );
+    expect(html).toContain('не сохранена');
+    expect(html).toContain('сохранённый срок');
+    const savedHtml = renderToStaticMarkup(
+      <CardCalendarSection {...base} status={{ enabled: true, connected: false }} />,
+    );
+    expect(savedHtml).not.toContain('не сохранена');
+  });
+
   test('never renders credentials, only the caller-own event acknowledgement', () => {
     const html = renderToStaticMarkup(
       <CardCalendarSection {...base} eventId="evt_1" status={{ enabled: true, connected: true }} />,

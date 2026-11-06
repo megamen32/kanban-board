@@ -21,6 +21,8 @@ export interface CardCalendarSectionProps {
   /** The calling user's own synced event, if any. Never another user's. */
   eventId?: string | null;
   message?: string | null;
+  /** The edited due date differs from the saved one: the section must say so. */
+  dueAtUnsaved?: boolean;
   className?: string;
 }
 
@@ -32,7 +34,7 @@ const DURATION_OPTIONS = [15, 30, 60, 90, 120];
  * enabled AND this user's account is connected, the action stays disabled
  * with an honest label and a link to Keeper.
  */
-export function CardCalendarSection({ dueAt, status, durationMinutes, onDurationChange, onSync, syncing = false, eventId, message, className }: CardCalendarSectionProps) {
+export function CardCalendarSection({ dueAt, status, durationMinutes, onDurationChange, onSync, syncing = false, eventId, message, dueAtUnsaved = false, className }: CardCalendarSectionProps) {
   if (!dueAt) return null;
 
   const unavailable = status === 'unavailable' || (status !== null && (!status.enabled || status.storeUnavailable === true));
@@ -69,6 +71,11 @@ export function CardCalendarSection({ dueAt, status, durationMinutes, onDuration
         {eventId && <span className="text-xs text-muted-foreground">Событие создано в вашем календаре</span>}
         {message && <span className="text-xs text-red-600" role="alert">{message}</span>}
       </div>
+      {dueAtUnsaved && (
+        <p className="text-xs text-amber-600" role="note">
+          Срок изменён, но карточка не сохранена — в календарь уйдёт сохранённый срок. Сначала сохраните карточку.
+        </p>
+      )}
       {notConnected && (
         <p className="text-xs text-muted-foreground">
           Личный календарь Keeper ещё не подключён к вашему аккаунту — действие станет доступным после подключения.
