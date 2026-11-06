@@ -1,7 +1,7 @@
 {
   "error": null,
-  "last_file_event": "2026-11-06T14:51:23+00:00",
-  "last_successful_sync": "2026-11-06T14:51:23+00:00",
+  "last_file_event": "2026-11-06T15:17:11+00:00",
+  "last_successful_sync": "2026-11-06T15:17:11+00:00",
   "pending": {
     "document": {
       "acceptance_scenarios": [
@@ -58,9 +58,18 @@
               "harness": "unknown",
               "note": "",
               "session": "unknown"
+            },
+            {
+              "at": "2026-11-06T18:17:09+03:00",
+              "changes": {
+                "status": "done"
+              },
+              "harness": "unknown",
+              "note": "CalendarEventBinding в types.ts, сериализация calendar_event + валидатор в file-store.ts, тесты: round-trip, очистка null, отказ malformed. Витрин: vitest file-store.test.ts 26/26 green. Коммит a8d419a.",
+              "session": "unknown"
             }
           ],
-          "status": "queued",
+          "status": "done",
           "supersedes": []
         },
         {
@@ -301,15 +310,15 @@
         }
       ],
       "title": "Календарный Keeper.sh: мост доски Todo (v1 без токена)",
-      "updated_at": "2026-11-06T17:50:10+03:00"
+      "updated_at": "2026-11-06T18:17:09+03:00"
     },
     "identity": "decf9f95f54ef2d11954d56d",
-    "last_file_event": "2026-11-06T14:51:23+00:00",
+    "last_file_event": "2026-11-06T15:17:11+00:00",
     "name": "plan-20261106-1751-decf9f95f54ef2d11954d56d",
     "observed": {
       "L01": {
         "completed": [],
-        "last_seen": "2026-11-06T14:51:23+00:00",
+        "last_seen": "2026-11-06T15:17:11+00:00",
         "task": {
           "acceptance": "Тест file-store: карточка с calendarEvent сериализует calendar_event и читается обратно; без привязки поле не пишется; unknown frontmatter сохраняется.",
           "created_at": "2026-11-06T17:50:09+03:00",
@@ -340,9 +349,18 @@
               "harness": "unknown",
               "note": "",
               "session": "unknown"
+            },
+            {
+              "at": "2026-11-06T18:17:09+03:00",
+              "changes": {
+                "status": "done"
+              },
+              "harness": "unknown",
+              "note": "CalendarEventBinding в types.ts, сериализация calendar_event + валидатор в file-store.ts, тесты: round-trip, очистка null, отказ malformed. Витрин: vitest file-store.test.ts 26/26 green. Коммит a8d419a.",
+              "session": "unknown"
             }
           ],
-          "status": "queued",
+          "status": "done",
           "supersedes": []
         }
       },
@@ -1218,15 +1236,15 @@
       }
     ],
     "schema_version": 1,
-    "seq": 1
+    "seq": 2
   },
-  "seq": 1,
+  "seq": 2,
   "server_receipt": {
     "identity": "decf9f95f54ef2d11954d56d",
-    "received_at": "2026-11-06T14:51:23+00:00",
-    "seq": 1,
+    "received_at": "2026-11-06T15:17:11+00:00",
+    "seq": 2,
     "url": "https://lhc.bezrabotnyi.com/excode/plan-20261106-1751-decf9f95f54ef2d11954d56d/"
   },
-  "source_hash": "3ddfcd91f3deee9a21731bef4de2151b9687b570ad3349f17ff04e77aa73502e",
+  "source_hash": "75b1203d24ff47ea24d5180efff065aec161c6a4b820292a5c6477bb87a3fdda",
   "warning": null
 }

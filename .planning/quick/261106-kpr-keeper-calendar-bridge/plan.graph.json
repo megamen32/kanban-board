@@ -25,12 +25,12 @@
   "revisions": [],
   "external_waits": "Реальный OAuth владельца Keeper и выдача per-user кредов — координирующий ассистент; без этого интеграция не считается завершённой. Прод-деплой заблокирован владельцем до готовности Keeper endpoint и сообщения координатора.",
   "slots": 1,
-  "updated_at": "2026-11-06T17:50:10+03:00",
+  "updated_at": "2026-11-06T18:17:09+03:00",
   "tasks": [
     {
       "id": "L01",
       "label": "Метаданные привязки события в карточке",
-      "status": "queued",
+      "status": "done",
       "description": "CalendarEventBinding {eventId, startTime, endTime, syncedAt} в KanbanCard, сериализация calendar_event в buildFrontmatter только при наличии, поле в KanbanCardUpdates. Без токенов и имён аккаунтов в карточке.",
       "acceptance": "Тест file-store: карточка с calendarEvent сериализует calendar_event и читается обратно; без привязки поле не пишется; unknown frontmatter сохраняется.",
       "model": "glm-5.3-flash-minimax-m3.1",
@@ -54,6 +54,15 @@
             },
             "depends_on": [],
             "model": "glm-5.3-flash-minimax-m3.1"
+          },
+          "session": "unknown",
+          "harness": "unknown"
+        },
+        {
+          "at": "2026-11-06T18:17:09+03:00",
+          "note": "CalendarEventBinding в types.ts, сериализация calendar_event + валидатор в file-store.ts, тесты: round-trip, очистка null, отказ malformed. Витрин: vitest file-store.test.ts 26/26 green. Коммит a8d419a.",
+          "changes": {
+            "status": "done"
           },
           "session": "unknown",
           "harness": "unknown"
