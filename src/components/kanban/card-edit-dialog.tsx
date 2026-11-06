@@ -362,6 +362,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             syncing={calendarSyncing}
             eventId={calendarEventId}
             message={calendarMessage}
+            dueAtUnsaved={(fromDateTimeLocalValue(dueAt) || null) !== (card.dueAt ?? null)}
           />
           <label className="col-span-2 min-w-0 space-y-1 text-xs text-muted-foreground sm:col-span-1 lg:col-span-2">Следующий шаг
             <Input aria-label="Следующий шаг" value={nextAction} onChange={e => setNextAction(e.target.value)} maxLength={4000} placeholder="Например: запросить файл у поставщика" className="w-full min-w-0" />
