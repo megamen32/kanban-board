@@ -1,0 +1,24 @@
+{
+  "created_at": "2026-11-06T16:59:16+00:00",
+  "details": "Full vitest run on main (primary checkout, no keeper changes) already fails 22 tests in src/app/api/kanban/cards: route.intent-consumption 11, route.notice 6, source-intent.test 4, owner-attribution 1, source-intent.identity 1; plus src/components/kanban/card-brief-panel.test.tsx (2), integrator-task-dashboard.markdown.test.tsx, dnd-review-routing.test.tsx, planning-metadata-dialog.test.ts and src/lib/kanban/source-launch.test.ts. Keeper worktree reproduces identical per-file counts (cards dir: 22 failed | 212 passed on BOTH main and worktree) — zero new failures from calendar work. Evidence: CI=1 vitest run outputs 2026-11-06, primary /home/roomhacker/excode vs worktree.",
+  "events": [
+    {
+      "action": "register",
+      "actor": "ses_e4ec03a0effezcz1OxmmM2ajXq (opencode, keeper-calendar Lead)",
+      "at": "2026-11-06T16:59:16+00:00",
+      "changes": {
+        "details": "Full vitest run on main (primary checkout, no keeper changes) already fails 22 tests in src/app/api/kanban/cards: route.intent-consumption 11, route.notice 6, source-intent.test 4, owner-attribution 1, source-intent.identity 1; plus src/components/kanban/card-brief-panel.test.tsx (2), integrator-task-dashboard.markdown.test.tsx, dnd-review-routing.test.tsx, planning-metadata-dialog.test.ts and src/lib/kanban/source-launch.test.ts. Keeper worktree reproduces identical per-file counts (cards dir: 22 failed | 212 passed on BOTH main and worktree) — zero new failures from calendar work. Evidence: CI=1 vitest run outputs 2026-11-06, primary /home/roomhacker/excode vs worktree.",
+        "source": "observed",
+        "status": "open",
+        "title": "Pre-existing main baseline test rot (not introduced by keeper task)"
+      }
+    }
+  ],
+  "id": "Bf00e6f0458334f1890ac",
+  "owner": "ses_e4ec03a0effezcz1OxmmM2ajXq (opencode, keeper-calendar Lead)",
+  "reporter": "ses_e4ec03a0effezcz1OxmmM2ajXq (opencode, keeper-calendar Lead)",
+  "source": "observed",
+  "status": "open",
+  "title": "Pre-existing main baseline test rot (not introduced by keeper task)",
+  "updated_at": "2026-11-06T16:59:16+00:00"
+}
