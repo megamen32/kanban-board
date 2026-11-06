@@ -1,0 +1,24 @@
+{
+  "created_at": "2026-11-06T23:10:38+00:00",
+  "details": "next build сообщает graph-layout-store.ts dynamic filesystem tracing whole project; standalone содержит src/*.test.ts. Повторный test после build обнаруживает копии и дополнительные import failures. Артефакт вынесен в отдельный staging, конфигурация тестов не отключалась; исходный дефект трассировки открыт.",
+  "events": [
+    {
+      "action": "register",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-06T23:10:38+00:00",
+      "changes": {
+        "details": "next build сообщает graph-layout-store.ts dynamic filesystem tracing whole project; standalone содержит src/*.test.ts. Повторный test после build обнаруживает копии и дополнительные import failures. Артефакт вынесен в отдельный staging, конфигурация тестов не отключалась; исходный дефект трассировки открыт.",
+        "source": "bun run test; verified baseline comparison; source and runtime inspection",
+        "status": "open",
+        "title": "Standalone включает исходные тесты и расширяет повторный test discovery"
+      }
+    }
+  ],
+  "id": "BUILD-TRACE-001",
+  "owner": "/root/advance_board_2105",
+  "reporter": "/root/advance_board_2105",
+  "source": "bun run test; verified baseline comparison; source and runtime inspection",
+  "status": "open",
+  "title": "Standalone включает исходные тесты и расширяет повторный test discovery",
+  "updated_at": "2026-11-06T23:10:38+00:00"
+}

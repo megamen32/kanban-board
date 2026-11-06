@@ -14,6 +14,167 @@ afterAll(() => {
 });
 
 describe('filesystem kanban contract', () => {
+
+  test('an existing title-change destination is rejected without deleting either file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-existing-destination-'));
+    isolatedDirs.push(dir);
+    const card = store.createCard('Old title', 'Original', 'todo', 'medium', [], 'QA', [], dir);
+    const originalPath = path.join(dir, card.fileName);
+    const before = fs.readFileSync(originalPath, 'utf8');
+    const destination = path.join(dir, 'New-title-' + card.id.split('-')[0] + '.md');
+    fs.writeFileSync(destination, 'Existing destination sentinel', { mode: 0o600 });
+    const euid = vi.spyOn(process, 'geteuid').mockReturnValue(0);
+    const chown = vi.spyOn(fs, 'fchownSync').mockImplementation(() => { throw new Error('must not reach chown'); });
+    try {
+      expect(() => store.updateCard(card.id, { title: 'New title' }, card.version, dir)).toThrow('card_rename_destination_exists');
+      expect(chown).not.toHaveBeenCalled();
+    } finally { chown.mockRestore(); euid.mockRestore(); }
+    expect(fs.readFileSync(originalPath, 'utf8')).toBe(before);
+    expect(fs.readFileSync(destination, 'utf8')).toBe('Existing destination sentinel');
+  });
+
+  test('old-name unlink failure rolls back the replacement without losing the original', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-unlink-failure-'));
+    isolatedDirs.push(dir);
+    const card = store.createCard('Old title', 'Original', 'todo', 'medium', [], 'QA', [], dir);
+    const originalPath = path.join(dir, card.fileName);
+    const before = fs.readFileSync(originalPath, 'utf8');
+    const actualUnlink = fs.unlinkSync;
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(file => {
+      if (file === originalPath) throw new Error('simulated old unlink failure');
+      actualUnlink(file);
+    });
+    try {
+      expect(() => store.updateCard(card.id, { title: 'New title' }, card.version, dir)).toThrow('simulated old unlink failure');
+    } finally { unlink.mockRestore(); }
+    expect(fs.readFileSync(originalPath, 'utf8')).toBe(before);
+    expect(store.getAllCards(dir)).toHaveLength(1);
+    expect(store.findCardById(card.id, dir)?.version).toBe(card.version);
+  });
+
+  test.each([1, 2])('title-change directory fsync failure at stage %s retains one valid card', failingStage => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-fsync-failure-'));
+    isolatedDirs.push(dir);
+    const card = store.createCard('Old title', 'Original', 'todo', 'medium', [], 'QA', [], dir);
+    let directorySyncs = 0;
+    const actualSync = fs.fsyncSync;
+    const sync = vi.spyOn(fs, 'fsyncSync').mockImplementation(fd => {
+      if (fs.fstatSync(fd).isDirectory() && ++directorySyncs === failingStage) {
+        throw new Error('simulated directory fsync failure');
+      }
+      actualSync(fd);
+    });
+    try {
+      expect(() => store.updateCard(card.id, { title: 'New title' }, card.version, dir)).toThrow('simulated directory fsync failure');
+    } finally { sync.mockRestore(); }
+    expect(store.getAllCards(dir)).toHaveLength(1);
+    expect(store.findCardById(card.id, dir)).toMatchObject({
+      title: failingStage === 1 ? 'Old title' : 'New title',
+      version: failingStage === 1 ? card.version : card.version + 1,
+      description: 'Original',
+    });
+    expect(fs.readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  test('root atomic writes inherit the actual directory owner before fsync and rename', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-root-owner-'));
+    isolatedDirs.push(dir);
+    const directory = fs.statSync(dir);
+    const euid = vi.spyOn(process, 'geteuid').mockReturnValue(0);
+    const chown = vi.spyOn(fs, 'fchownSync').mockImplementation(() => {});
+    const sync = vi.spyOn(fs, 'fsyncSync');
+    const rename = vi.spyOn(fs, 'renameSync');
+    try {
+      const card = store.createCard('Owner fixture', 'Original', 'todo', 'medium', [], 'QA', [], dir);
+      const updated = store.updateCard(card.id, { description: 'Updated' }, card.version, dir);
+      expect(updated).toMatchObject({ description: 'Updated', version: card.version + 1 });
+      expect(chown).toHaveBeenCalledTimes(2);
+      for (let i = 0; i < chown.mock.calls.length; i++) {
+        expect(chown.mock.calls[i]).toEqual([expect.any(Number), directory.uid, directory.gid]);
+        const chownOrder = chown.mock.invocationCallOrder[i];
+        const renameOrder = rename.mock.invocationCallOrder[i];
+        expect(chownOrder).toBeLessThan(renameOrder);
+        expect(sync.mock.invocationCallOrder.some(order => order > chownOrder && order < renameOrder)).toBe(true);
+      }
+      expect(fs.statSync(path.join(dir, card.fileName)).mode & 0o777).toBe(0o600);
+      expect(fs.readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    } finally { rename.mockRestore(); sync.mockRestore(); chown.mockRestore(); euid.mockRestore(); }
+  });
+
+  test('root updates inherit a nested parent owner rather than the task root owner', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-nested-owner-'));
+    isolatedDirs.push(dir);
+    const card = store.createCard('Nested owner', 'Original', 'todo', 'medium', [], 'QA', [], dir);
+    const nested = path.join(dir, 'folder');
+    fs.mkdirSync(nested);
+    fs.renameSync(path.join(dir, card.fileName), path.join(nested, card.fileName));
+    const actualStat = fs.statSync;
+    const stats = vi.spyOn(fs, 'statSync').mockImplementation(((...args: Parameters<typeof fs.statSync>) => {
+      const result = Reflect.apply(actualStat, fs, args);
+      return args[0] === nested && result ? Object.assign(result, { uid: 2001, gid: 2002 }) : result;
+    }) as typeof fs.statSync);
+    const euid = vi.spyOn(process, 'geteuid').mockReturnValue(0);
+    const chown = vi.spyOn(fs, 'fchownSync').mockImplementation(() => {});
+    try {
+      store.updateCard(card.id, { description: 'Nested update' }, card.version, dir);
+      expect(chown).toHaveBeenCalledWith(expect.any(Number), 2001, 2002);
+      expect(store.findCardById(card.id, dir)?.description).toBe('Nested update');
+    } finally { chown.mockRestore(); euid.mockRestore(); stats.mockRestore(); }
+  });
+
+  test('non-root writers do not attempt ownership changes', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-user-owner-'));
+    isolatedDirs.push(dir);
+    const euid = vi.spyOn(process, 'geteuid').mockReturnValue(1000);
+    const chown = vi.spyOn(fs, 'fchownSync').mockImplementation(() => { throw new Error('must not chown'); });
+    try {
+      const card = store.createCard('User fixture', 'Original', 'todo', 'medium', [], 'QA', [], dir);
+      store.updateCard(card.id, { description: 'Updated' }, card.version, dir);
+      expect(chown).not.toHaveBeenCalled();
+      expect(fs.statSync(path.join(dir, card.fileName)).mode & 0o777).toBe(0o600);
+    } finally { chown.mockRestore(); euid.mockRestore(); }
+  });
+
+  test.each([false, true])('ownership failure preserves original bytes and version on title change %s', titleChange => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-owner-failure-'));
+    isolatedDirs.push(dir);
+    const card = store.createCard('Original title', 'Keep original', 'todo', 'medium', [], 'QA', [], dir);
+    const before = fs.readFileSync(path.join(dir, card.fileName), 'utf8');
+    const euid = vi.spyOn(process, 'geteuid').mockReturnValue(0);
+    const chown = vi.spyOn(fs, 'fchownSync').mockImplementation(() => { throw new Error('simulated ownership failure'); });
+    try {
+      expect(() => store.updateCard(card.id, { description: 'Must not publish', ...(titleChange ? { title: 'New title' } : {}) }, card.version, dir))
+        .toThrow('simulated ownership failure');
+    } finally { chown.mockRestore(); euid.mockRestore(); }
+    expect(fs.readFileSync(path.join(dir, card.fileName), 'utf8')).toBe(before);
+    expect(store.findCardById(card.id, dir)).toMatchObject({ title: card.title, version: card.version, description: 'Keep original' });
+    expect(fs.readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    expect(store.getAllCards(dir)).toHaveLength(1);
+  });
+
+  test('a failed rename during title change preserves the original card', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-title-rename-failure-'));
+    isolatedDirs.push(dir);
+    const card = store.createCard('Original title', 'Keep original', 'todo', 'medium', [], 'QA', [], dir);
+    const before = fs.readFileSync(path.join(dir, card.fileName), 'utf8');
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw new Error('simulated rename failure'); });
+    try {
+      expect(() => store.updateCard(card.id, { title: 'Different title' }, card.version, dir)).toThrow('simulated rename failure');
+    } finally { rename.mockRestore(); }
+    expect(fs.readFileSync(path.join(dir, card.fileName), 'utf8')).toBe(before);
+    expect(fs.readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    expect(store.getAllCards(dir)).toHaveLength(1);
+  });
+
+  test('a title change with the same sanitized filename does not delete the new content', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-title-collision-'));
+    isolatedDirs.push(dir);
+    const card = store.createCard('Same title', 'Original', 'todo', 'medium', [], 'QA', [], dir);
+    const updated = store.updateCard(card.id, { title: 'Same title!', description: 'Retained' }, card.version, dir);
+    expect(updated).toMatchObject({ fileName: card.fileName, title: 'Same title!', description: 'Retained', version: card.version + 1 });
+    expect(store.findCardById(card.id, dir)).toMatchObject({ title: 'Same title!', description: 'Retained' });
+    expect(store.getAllCards(dir)).toHaveLength(1);
+  });
   test('closes a legacy card whose multibyte filename is close to the filesystem byte limit', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-legacy-name-'));
     isolatedDirs.push(dir);

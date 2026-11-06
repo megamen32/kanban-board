@@ -1,0 +1,35 @@
+{
+  "blocker": "Source fix и root writer fixture проверены; production release ждёт штатного lease/CAS пути. Не обходить gate и не считать временный chown постоянным решением.",
+  "created_at": "2026-11-06T23:10:38+00:00",
+  "details": "Root writer публикует Markdown mode0600 uid0 вместо владельца родительского каталога. Подтверждено исходниками, runtime и реальным PermissionError; точные приватные пути только в карточке/частном receipt.",
+  "events": [
+    {
+      "action": "register",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-06T23:10:38+00:00",
+      "changes": {
+        "details": "Root writer публикует Markdown mode0600 uid0 вместо владельца родительского каталога. Подтверждено исходниками, runtime и реальным PermissionError; точные приватные пути только в карточке/частном receipt.",
+        "source": "bun run test; verified baseline comparison; source and runtime inspection",
+        "status": "open",
+        "title": "Атомарная запись root создаёт недоступную владельцу карточку"
+      }
+    },
+    {
+      "action": "update",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-06T23:13:58+00:00",
+      "changes": {
+        "blocker": "Source fix и root writer fixture проверены; production release ждёт штатного lease/CAS пути. Не обходить gate и не считать временный chown постоянным решением.",
+        "status": "blocked"
+      },
+      "reason": ""
+    }
+  ],
+  "id": "CARD-OWNER-001",
+  "owner": "/root/advance_board_2105",
+  "reporter": "/root/advance_board_2105",
+  "source": "bun run test; verified baseline comparison; source and runtime inspection",
+  "status": "blocked",
+  "title": "Атомарная запись root создаёт недоступную владельцу карточку",
+  "updated_at": "2026-11-06T23:13:58+00:00"
+}
