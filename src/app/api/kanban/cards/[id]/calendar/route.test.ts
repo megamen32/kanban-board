@@ -378,11 +378,39 @@ describe('delete semantics', () => {
     expect(keeperBindingStore.get('nikita', 'card-1')).toBeNull();
   });
 
-  it('clears a bound receipt without a credential (v1 has no real upstream events)', async () => {
+  it('fails closed without a credential: keeps the bound receipt so the next POST cannot duplicate', async () => {
     keeperBindingStore.set('nikita', 'card-1', boundRecord());
     credential.current = null;
-    const body = await payload(remove(), 200);
-    expect(body).toEqual({ removed: true });
+    const body = await payload(remove(), 409);
+    expect(body.error).toBe('keeper_not_connected');
+    expect(fetchMock).not.toHaveBeenCalled();
+    // The receipt stays: a later sync patches evt_1 instead of creating a duplicate.
+    expect(keeperBindingStore.get('nikita', 'card-1')).toMatchObject({ state: 'bound', eventId: 'evt_1' });
+  });
+
+  it('fails closed when the bridge is disabled: keeps the bound receipt', async () => {
+    keeperBindingStore.set('nikita', 'card-1', boundRecord());
+    delete process.env.KEEPER_API_URL;
+    const body = await payload(remove(), 503);
+    expect(body.error).toBe('keeper_disabled');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(keeperBindingStore.get('nikita', 'card-1')).toMatchObject({ state: 'bound', eventId: 'evt_1' });
+  });
+
+  it('fails closed for a pending patch without a credential', async () => {
+    keeperBindingStore.set('nikita', 'card-1', { state: 'pending', phase: 'patch', eventId: 'evt_old', startedAt: '2026-11-06T18:00:00.000Z' });
+    credential.current = null;
+    const body = await payload(remove(), 409);
+    expect(body.error).toBe('keeper_not_connected');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(keeperBindingStore.get('nikita', 'card-1')).toMatchObject({ state: 'pending', phase: 'patch', eventId: 'evt_old' });
+  });
+
+  it('pending create still clears after explicit manual reconciliation, even without a credential', async () => {
+    keeperBindingStore.set('nikita', 'card-1', { state: 'pending', phase: 'create', startedAt: '2026-11-06T18:00:00.000Z' });
+    credential.current = null;
+    const body = await payload(remove({ confirmManualReconcile: true }), 200);
+    expect(body).toEqual({ removed: true, recovered: true, manualReconcile: true });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(keeperBindingStore.get('nikita', 'card-1')).toBeNull();
   });

@@ -227,6 +227,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     }
     try {
       const existing = keeperBindingStore.get(username, id);
+      // Nothing is stored, so nothing upstream is known to this user+card.
       if (!existing) return NextResponse.json({ removed: true, alreadyClear: true });
 
       if (existing.state === 'pending' && existing.phase === 'create') {
@@ -243,45 +244,47 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
         return NextResponse.json({ removed: true, recovered: true, manualReconcile: true });
       }
 
+      // bound or pending-patch: an upstream event may exist. Fail closed — the
+      // local receipt is only removed after Keeper PROVES the event is gone
+      // (successful delete or upstream 404). Without a working credential or
+      // disabled bridge the record stays, so the next POST can never duplicate.
+      const disabled = requireEnabled();
+      if (disabled) return disabled;
+
       const resolved = await credentialFor(username);
       if ('response' in resolved) return resolved.response;
       const credential = resolved.credential;
+      if (!credential) {
+        return NextResponse.json({ error: 'keeper_not_connected' }, { status: 409 });
+      }
 
-      if (existing.state === 'bound') {
-        if (credential && keeperCalendarEnabled()) {
-          try {
-            await keeperDeleteEvent(keeperCalendarApiUrl()!, credential.bearer, existing.eventId);
-          } catch (error) {
-            // An upstream 404 means the event is already gone; other failures
-            // stay retryable by keeping the record in place.
-            if (!(error instanceof KeeperApiError && error.status === 404)) {
-              return NextResponse.json(
-                {
-                  error: error instanceof KeeperApiError ? 'keeper_upstream' : 'keeper_unreachable',
-                  upstreamStatus: error instanceof KeeperApiError ? error.status : undefined,
-                },
-                { status: 502 },
-              );
-            }
-          }
+      const eventId = existing.state === 'pending' && !existing.eventId ? null : existing.eventId;
+      if (!eventId) {
+        // Pending patch without a known upstream id: reconciliation gate.
+        if (!confirmManualReconcile) {
+          const pendingPatch = existing as Extract<CalendarSyncRecord, { state: 'pending' }>;
+          return NextResponse.json(
+            { error: 'calendar_sync_pending_manual_required', phase: pendingPatch.phase, startedAt: pendingPatch.startedAt },
+            { status: 409 },
+          );
         }
-      } else {
-        // Pending patch: the event it may have touched MUST be removed
-        // upstream before the marker is cleared; failures are never swallowed.
-        if (existing.eventId && credential && keeperCalendarEnabled()) {
-          try {
-            await keeperDeleteEvent(keeperCalendarApiUrl()!, credential.bearer, existing.eventId);
-          } catch (error) {
-            if (!(error instanceof KeeperApiError && error.status === 404)) {
-              return NextResponse.json(
-                {
-                  error: error instanceof KeeperApiError ? 'keeper_upstream' : 'keeper_unreachable',
-                  upstreamStatus: error instanceof KeeperApiError ? error.status : undefined,
-                },
-                { status: 502 },
-              );
-            }
-          }
+        keeperBindingStore.clear(username, id);
+        return NextResponse.json({ removed: true, recovered: true, manualReconcile: true });
+      }
+
+      try {
+        await keeperDeleteEvent(keeperCalendarApiUrl()!, credential.bearer, eventId);
+      } catch (error) {
+        // An upstream 404 means the event is already gone; other failures
+        // stay retryable by keeping the record in place.
+        if (!(error instanceof KeeperApiError && error.status === 404)) {
+          return NextResponse.json(
+            {
+              error: error instanceof KeeperApiError ? 'keeper_upstream' : 'keeper_unreachable',
+              upstreamStatus: error instanceof KeeperApiError ? error.status : undefined,
+            },
+            { status: 502 },
+          );
         }
       }
 
