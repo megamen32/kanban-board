@@ -1,0 +1,21 @@
+{
+  "baseline_commit": "eeb10add87060beb925461afb7ee3ec6f0a3ba83",
+  "baseline_failed": 29,
+  "baseline_passed": 856,
+  "final_failed": 29,
+  "final_passed": 867,
+  "same_failed_test_names": true,
+  "focused_passed": 61,
+  "new_regressions": 11,
+  "build": "passed",
+  "typecheck": "passed",
+  "focused_lint": "passed",
+  "private_evidence_logs": "/home/roomhacker/excode-worktrees/card-write-ownership-20261106/.agents/tasks/20261106-card-write-ownership",
+  "log_hashes": {
+    "baseline-tests.log": "ef89f46cc4c318d0be441310f9e6f9218aaa565c7e8dd177f4b45e2f56bf0d65",
+    "tests-clean-release.log": "3ba59314436bf38a258127b9acaa17e97a9dcb9a30e88faa0593051b8f531f24",
+    "focused-clean-release.log": "348ff2f6cf6d08447a513fc64345292df4326b7abf9155d1c32893ca2659bfff",
+    "build.log": "7be15ef4274ddc483accb704b42b8513ce53b984719fd700534eea7ef3274fad",
+    "root-owner-proof.json": "34281ca89806e087e225d77270a34f03e37ac42bb2bf9487b6bbd7fb4b8cda23"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "root_run": {
+    "rootWriterUid": 0,
+    "directoryUid": 1000,
+    "uid": 1000,
+    "gid": 1000,
+    "mode": "600",
+    "version": 3,
+    "file": "/tmp/kanban-owner-integration-80cuht4e/Synthetic-renamed-fixture-2d334dae.md"
+  },
+  "host_reader_uid": 1000,
+  "read_ok": true
+}

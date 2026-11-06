@@ -1,0 +1,19 @@
+$ vitest run src/lib/kanban/file-store.test.ts src/lib/mcp/kanban-server.test.ts src/app/mcp/route.test.ts src/lib/auth/store.test.ts
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - ESM syntax in a file loaded as CommonJS (vitest.config.ts:1:1). Use a `.mjs` extension or set `"type": "module"` in the closest package.json
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+
+ RUN  v4.1.10 /home/roomhacker/excode-worktrees/card-write-ownership-20261106
+
+ ✓ src/lib/auth/store.test.ts (4 tests) 688ms
+     ✓ requires TOTP for the owner session and isolates OAuth scope  429ms
+ ✓ src/app/mcp/route.test.ts (7 tests) 867ms
+     ✓ requires a signed canonical envelope despite the model-facing trusted MCP service identity  306ms
+ ✓ src/lib/mcp/kanban-server.test.ts (15 tests) 2094ms
+     ✓ requires an ExManager signature, then replays one source identity and preserves no-launch outcomes  509ms
+ ✓ src/lib/kanban/file-store.test.ts (35 tests) 2391ms
+
+ Test Files  4 passed (4)
+      Tests  61 passed (61)
+   Start at  02:08:27
+   Duration  3.12s (transform 859ms, setup 0ms, import 2.22s, tests 6.04s, environment 1ms)

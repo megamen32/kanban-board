@@ -1,0 +1,24 @@
+{
+  "created_at": "2026-11-06T23:10:39+00:00",
+  "details": "Падает и на чистом eeb10add87060beb925461afb7ee3ec6f0a3ba83, и на исправленном коде. FAIL  src/lib/kanban/source-launch.test.ts > the server-side source-intent launch > launches one pending intent with the dedicated owner access token; исходный полный набор 29failed/856passed, исправленный 29failed/867passed.",
+  "events": [
+    {
+      "action": "register",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-06T23:10:39+00:00",
+      "changes": {
+        "details": "Падает и на чистом eeb10add87060beb925461afb7ee3ec6f0a3ba83, и на исправленном коде. FAIL  src/lib/kanban/source-launch.test.ts > the server-side source-intent launch > launches one pending intent with the dedicated owner access token; исходный полный набор 29failed/856passed, исправленный 29failed/867passed.",
+        "source": "bun run test; verified baseline comparison; source and runtime inspection",
+        "status": "open",
+        "title": "src/lib/kanban/source-launch.test.ts > the server-side source-intent launch > launches one pending intent with the dedicated owner access token"
+      }
+    }
+  ],
+  "id": "BASELINE-004",
+  "owner": "/root/advance_board_2105",
+  "reporter": "/root/advance_board_2105",
+  "source": "bun run test; verified baseline comparison; source and runtime inspection",
+  "status": "open",
+  "title": "src/lib/kanban/source-launch.test.ts > the server-side source-intent launch > launches one pending intent with the dedicated owner access token",
+  "updated_at": "2026-11-06T23:10:39+00:00"
+}

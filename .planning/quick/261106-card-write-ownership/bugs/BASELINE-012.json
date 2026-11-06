@@ -1,0 +1,24 @@
+{
+  "created_at": "2026-11-06T23:10:41+00:00",
+  "details": "Падает и на чистом eeb10add87060beb925461afb7ee3ec6f0a3ba83, и на исправленном коде. FAIL  src/app/api/kanban/cards/[id]/execution/route.intent-consumption.test.ts > task execution launch intent consumption > keeps the ordinary successful launch unchanged; исходный полный набор 29failed/856passed, исправленный 29failed/867passed.",
+  "events": [
+    {
+      "action": "register",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-06T23:10:41+00:00",
+      "changes": {
+        "details": "Падает и на чистом eeb10add87060beb925461afb7ee3ec6f0a3ba83, и на исправленном коде. FAIL  src/app/api/kanban/cards/[id]/execution/route.intent-consumption.test.ts > task execution launch intent consumption > keeps the ordinary successful launch unchanged; исходный полный набор 29failed/856passed, исправленный 29failed/867passed.",
+        "source": "bun run test; verified baseline comparison; source and runtime inspection",
+        "status": "open",
+        "title": "src/app/api/kanban/cards/[id]/execution/route.intent-consumption.test.ts > task execution launch intent consumption > keeps the ordinary successful launch unchanged"
+      }
+    }
+  ],
+  "id": "BASELINE-012",
+  "owner": "/root/advance_board_2105",
+  "reporter": "/root/advance_board_2105",
+  "source": "bun run test; verified baseline comparison; source and runtime inspection",
+  "status": "open",
+  "title": "src/app/api/kanban/cards/[id]/execution/route.intent-consumption.test.ts > task execution launch intent consumption > keeps the ordinary successful launch unchanged",
+  "updated_at": "2026-11-06T23:10:41+00:00"
+}

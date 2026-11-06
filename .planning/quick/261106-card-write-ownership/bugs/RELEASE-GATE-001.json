@@ -1,0 +1,35 @@
+{
+  "blocker": "Source fix и root writer fixture проверены; production release ждёт штатного lease/CAS пути. Не обходить gate и не считать временный chown постоянным решением.",
+  "created_at": "2026-11-06T23:13:58+00:00",
+  "details": "project_release_lease отсутствует в native каталоге; schema server100 возвращает child_schema_unavailable; Airlock Herder route_metadata_not_ready. В source нет VERSION, runtime image не имеет revision label. Нельзя доказать fallback guard без выдуманного live SHA. Runtime не менялся.",
+  "events": [
+    {
+      "action": "register",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-06T23:13:58+00:00",
+      "changes": {
+        "details": "project_release_lease отсутствует в native каталоге; schema server100 возвращает child_schema_unavailable; Airlock Herder route_metadata_not_ready. В source нет VERSION, runtime image не имеет revision label. Нельзя доказать fallback guard без выдуманного live SHA. Runtime не менялся.",
+        "source": "LHC SHARED_WORKTREE.md и реальная проверка инструментов 2026-11-06",
+        "status": "open",
+        "title": "Штатный release lease недоступен, fallback не применим без VERSION и live SHA"
+      }
+    },
+    {
+      "action": "update",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-06T23:13:58+00:00",
+      "changes": {
+        "blocker": "Source fix и root writer fixture проверены; production release ждёт штатного lease/CAS пути. Не обходить gate и не считать временный chown постоянным решением.",
+        "status": "blocked"
+      },
+      "reason": ""
+    }
+  ],
+  "id": "RELEASE-GATE-001",
+  "owner": "/root/advance_board_2105",
+  "reporter": "/root/advance_board_2105",
+  "source": "LHC SHARED_WORKTREE.md и реальная проверка инструментов 2026-11-06",
+  "status": "blocked",
+  "title": "Штатный release lease недоступен, fallback не применим без VERSION и live SHA",
+  "updated_at": "2026-11-06T23:13:58+00:00"
+}
