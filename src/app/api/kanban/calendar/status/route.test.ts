@@ -64,6 +64,7 @@ describe('calendar status endpoint (per user, no secrets)', () => {
     expect(body).toEqual({
       enabled: true,
       connected: false,
+      projects: [],
       publicUrl: 'https://keeper-calendar.airlock.bezrabotnyi.com',
     });
   });
@@ -85,6 +86,39 @@ describe('calendar status endpoint (per user, no secrets)', () => {
     expect(body.connected).toBe(true);
     expect(JSON.stringify(body)).not.toContain('kpr_secret');
     expect(JSON.stringify(body)).not.toContain('cal-1');
+  });
+
+  it('returns only the current user project names, never credentials or calendar ids', async () => {
+    writeCredentials(JSON.stringify({
+      version: 1,
+      credentials: {
+        nikita: { bearer: 'kpr_nikita_private', calendarId: 'calendar-nikita-default', projectCalendars: { Zebra: 'calendar-nikita-z', Alpha: 'calendar-nikita-a' } },
+        oleg: { bearer: 'kpr_oleg_private', calendarId: 'calendar-oleg-default', projectCalendars: { Other: 'calendar-oleg-other' } },
+      },
+    }));
+    const request = () => new NextRequest('http://localhost/api/kanban/calendar/status');
+    const nikita = await payload(request(), 200);
+    expect(nikita).toEqual({ enabled: true, connected: true, projects: ['Alpha', 'Zebra'], publicUrl: process.env.KEEPER_PUBLIC_URL });
+    identity.current = { username: 'oleg', scope: 'work' };
+    const oleg = await payload(request(), 200);
+    expect(oleg).toEqual({ enabled: true, connected: true, projects: ['Other'], publicUrl: process.env.KEEPER_PUBLIC_URL });
+    for (const body of [nikita, oleg]) {
+      expect(JSON.stringify(body)).not.toMatch(/kpr_|calendar-nikita|calendar-oleg|bearer|calendarId/);
+    }
+    identity.current = { username: 'unknown', scope: 'work' };
+    const unknown = await payload(request(), 403);
+    expect(unknown).toEqual({ error: 'calendar_bridge_not_available_for_account' });
+    expect(JSON.stringify(unknown)).not.toMatch(/Alpha|Zebra|Other|kpr_|calendarId/);
+  });
+
+  it('does not expose another account mapping to an allowed user without credentials', async () => {
+    writeCredentials(JSON.stringify({ version: 1, credentials: {
+      nikita: { bearer: 'kpr_private', calendarId: 'calendar-private', projectCalendars: { PrivateProject: 'calendar-project-private' } },
+    } }));
+    identity.current = { username: 'oleg', scope: 'work' };
+    expect(await payload(new NextRequest('http://localhost/x'), 200)).toEqual({
+      enabled: true, connected: false, projects: [], publicUrl: process.env.KEEPER_PUBLIC_URL,
+    });
   });
 
   it('reports a broken protected store as unavailable instead of a fake state', async () => {
