@@ -323,17 +323,22 @@ export function KonturBoard() {
   useEffect(() => {
     if (!mobileMenu || !isMobile) return;
     const sidebar = sidebarRef.current;
-    const elements = () => Array.from(sidebar?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], select, input') ?? []);
-    elements()[0]?.focus();
+    const elements = () => Array.from(sidebar?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], select, input') ?? [])
+      .filter(element => element.tabIndex >= 0 && !element.matches(':disabled') && element.getClientRects().length > 0 && getComputedStyle(element).visibility === 'visible');
+    // The visibility transition must start before the browser can focus the menu.
+    let focusFrame = requestAnimationFrame(() => {
+      focusFrame = requestAnimationFrame(() => elements()[0]?.focus());
+    });
     const keyboard = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { setMobileMenu(false); return; }
+      if (event.key === 'Escape') { event.preventDefault(); setMobileMenu(false); return; }
       if (event.key !== 'Tab') return;
       const items = elements(); const first = items[0]; const last = items.at(-1);
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      if (!sidebar?.contains(document.activeElement)) { event.preventDefault(); (event.shiftKey ? last : first)?.focus(); }
+      else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     };
     document.addEventListener('keydown', keyboard);
-    return () => { document.removeEventListener('keydown', keyboard); menuRef.current?.focus(); };
+    return () => { cancelAnimationFrame(focusFrame); document.removeEventListener('keydown', keyboard); menuRef.current?.focus(); };
   }, [mobileMenu, isMobile]);
 
   const scopedCards = useMemo(() => username ? filterWorkspaceCards(cards, username, workspace) : [], [cards, username, workspace]);
@@ -513,7 +518,7 @@ export function KonturBoard() {
     <div className="k-workspace" inert={Boolean(isMobile && mobileMenu) || undefined}>
       <header className="k-topbar"><div className="k-breadcrumb"><button type="button" ref={menuRef} className="k-icon-button k-mobile-menu" aria-label="Открыть меню" aria-expanded={mobileMenu} onClick={() => setMobileMenu(true)}><Menu size={20} /></button><span>Рабочее пространство</span><ChevronRight size={13} /><strong>{currentNav.label}</strong></div><div className="k-topbar-actions"><details className="k-services-menu" onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }}><summary aria-label="Связанные сервисы"><ExternalLink size={15} /><span>Сервисы</span></summary><div className="k-services-dropdown"><ServiceLinks /></div></details><span className={`k-read-status${error ? ' is-stale' : ''}`} title={lastLoadedAt ? `Доска прочитана ${formatStamp(lastLoadedAt)} по Москве` : 'Последнее успешное чтение неизвестно'}><i />{refreshing ? 'Обновляю' : error ? 'Нужно обновить' : lastLoadedAt ? 'Данные доски' : 'Загрузка'}</span><button type="button" className="k-icon-button" aria-label={dark ? 'Включить светлую тему' : 'Включить тёмную тему'} onClick={() => setTheme(dark ? 'light' : 'dark')}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button></div></header>
       <main id="kontur-main" className="k-main" tabIndex={-1}>
-        <div className="k-page-heading"><div><div className="k-eyebrow"><span className="k-lime-dot" />ЕДИНАЯ ТОЧКА ПРОДОЛЖЕНИЯ</div><h1>{currentNav.label}</h1><p>{currentNav.description}</p></div><div className="k-heading-actions">{screen === 'overview' && <button type="button" className={`k-button${daily ? ' is-selected' : ''}`} aria-pressed={daily} onClick={() => setDaily(value => !value)}><Sparkles size={15} />На каждый день</button>}<button type="button" className="k-button" disabled={loading || refreshing} onClick={() => void refresh()} aria-label="Обновить данные доски"><RefreshCw size={15} className={refreshing ? 'k-spin' : ''} /><span className="k-refresh-label">Обновить</span></button><button type="button" className="k-button k-button-primary" disabled={!username || loading} onClick={() => newTask()}><Plus size={17} />Новая задача</button></div></div>
+        <div className="k-page-heading"><div><div className="k-eyebrow"><span className="k-lime-dot" />ЕДИНАЯ ТОЧКА ПРОДОЛЖЕНИЯ</div><h1>{currentNav.label}</h1><p>{currentNav.description}</p></div><div className="k-heading-actions">{screen === 'overview' && <button type="button" className={`k-button${daily ? ' is-selected' : ''}`} aria-pressed={daily} onClick={() => setDaily(value => !value)}><Sparkles size={15} />На каждый день</button>}<button type="button" className="k-button" disabled={loading || refreshing} onClick={() => void refresh()} aria-label="Обновить данные доски"><RefreshCw size={15} className={refreshing ? 'k-spin' : ''} /><span className="k-refresh-label">Обновить</span></button><button type="button" className="k-button k-button-primary" disabled={!username || loading} onClick={() => newTask()}><Plus size={17} /><span>Новая задача</span></button></div></div>
 
         <div className="k-filter-bar"><div className="k-filter-selects">
           <label className="k-select"><FolderKanban size={14} /><select aria-label="Фильтр по проекту" value={project} onChange={event => chooseProject(event.target.value)}><option value="all">Все проекты</option>{allProjects.map(name => <option key={name} value={name}>{name}</option>)}{project !== 'all' && !allProjects.includes(project) && <option value={project}>{project}</option>}</select><ChevronDown size={12} /></label>

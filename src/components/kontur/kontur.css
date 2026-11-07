@@ -682,3 +682,17 @@
 @media (prefers-reduced-motion: reduce) {
   .kontur-shell *, .kontur-shell *::before, .kontur-shell *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Chrome's forced light-preference mode can recolor CSS fills despite only dark.
+   Flat SVG fills retain the accent; the foreground alone is composited to black.
+   System forced colors keep their own foreground and background. */
+.kontur-shell .k-button-primary { background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22128%22%20height%3D%2264%22%20viewBox%3D%220%200%20128%2064%22%20preserveAspectRatio%3D%22none%22%3E%3Crect%20width%3D%22128%22%20height%3D%2264%22%20fill%3D%22%23c1ff00%22%2F%3E%3C%2Fsvg%3E"); }
+.kontur-shell .k-button-primary:hover:not(:disabled) { background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22128%22%20height%3D%2264%22%20viewBox%3D%220%200%20128%2064%22%20preserveAspectRatio%3D%22none%22%3E%3Crect%20width%3D%22128%22%20height%3D%2264%22%20fill%3D%22%23d2ff4a%22%2F%3E%3C%2Fsvg%3E"); }
+.kontur-shell .k-button-primary > span,
+.kontur-shell .k-button-primary > svg { filter: brightness(0); }
+@media (forced-colors: active) {
+  .kontur-shell .k-button-primary,
+  .kontur-shell .k-button-primary:hover:not(:disabled) { background-image: none; }
+  .kontur-shell .k-button-primary > span,
+  .kontur-shell .k-button-primary > svg { filter: none; }
+}
