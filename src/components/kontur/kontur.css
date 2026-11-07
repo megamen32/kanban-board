@@ -94,7 +94,6 @@
 .kontur-shell .k-project-navigation > button:hover, .kontur-shell .k-project-navigation > button.is-selected { background: var(--k-panel-raised); color: var(--k-text); }
 .kontur-shell .k-project-navigation > button > span:not(.k-project-dot) { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .kontur-shell .k-project-navigation small { font-size: 9px; color: var(--k-faint); }
-.kontur-shell .k-native-project-label { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--k-line-soft); }
 .kontur-shell .k-project-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 2px; background: var(--k-violet-solid); }
 .kontur-shell .k-project-dot[data-tone="1"], .kontur-shell .k-project-dot[data-tone="3"] { background: var(--k-lime-text); }
 .kontur-shell .k-project-dot[data-tone="2"] { background: #d280de; }
@@ -501,6 +500,42 @@
 @keyframes kontur-spin { to { transform: rotate(360deg); } }
 .kontur-shell .k-mobile-menu, .kontur-shell .k-mobile-close, .kontur-shell .k-sidebar-backdrop { display: none; }
 
+
+/* A single authorized catalogue keeps identity separate from responsibility. */
+.kontur-shell .k-sidebar-project-head > button { display: inline-flex; align-items: center; gap: 4px; padding: 0 10px 10px; border: 0; background: transparent; color: var(--k-violet); font-size: 9px; }
+.kontur-shell .k-sidebar-project-note { margin: -3px 10px 8px; color: var(--k-faint); font-size: 9px; }
+.kontur-shell .k-responsibility { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.kontur-shell .k-responsibility > span { color: var(--k-muted); font-size: 9px; }
+.kontur-shell .k-task-team { display: flex; align-items: flex-start; gap: 5px; margin: 9px 0 0; color: var(--k-faint); font-size: 9px; line-height: 1.5; }
+.kontur-shell .k-task-team > svg { flex-shrink: 0; margin-top: 1px; }
+.kontur-shell .k-task-team > span { overflow-wrap: anywhere; }
+.kontur-shell .k-project-identity { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.kontur-shell .k-project-identity > small { line-height: 1.5; overflow-wrap: anywhere; }
+.kontur-shell .k-catalog-coverage { color: var(--k-faint); font-size: 10px; }
+.kontur-shell .k-catalog-explainer { max-width: 760px; margin: -3px 0 19px; color: var(--k-muted); font-size: 11px; line-height: 1.7; }
+.kontur-shell .k-catalog-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
+.kontur-shell .k-catalog-card { display: flex; flex-direction: column; min-width: 0; padding: 21px 21px 0; }
+.kontur-shell .k-catalog-card > header { display: flex; align-items: center; gap: 12px; margin-bottom: 21px; }
+.kontur-shell .k-catalog-card > header > div { min-width: 0; }
+.kontur-shell .k-catalog-card h2 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.kontur-shell .k-catalog-card header p { margin: 5px 0 0; color: var(--k-faint); font-size: 10px; }
+.kontur-shell .k-team-mark { display: inline-flex; align-items: center; justify-content: center; width: 39px; height: 41px; flex-shrink: 0; color: var(--k-lime-text); background: var(--k-lime-bg); border: 1px solid color-mix(in srgb, var(--k-lime-text) 22%, transparent); border-radius: 8px; }
+.kontur-shell .k-catalog-card dl { margin: 0 0 20px; }
+.kontur-shell .k-catalog-card dt { margin-bottom: 8px; color: var(--k-faint); font-size: 9px; }
+.kontur-shell .k-catalog-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; font-size: 10px; }
+.kontur-shell .k-catalog-tags button { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 5px 8px; border: 1px solid color-mix(in srgb, var(--k-violet) 22%, var(--k-line)); border-radius: 5px; color: var(--k-violet); background: var(--k-violet-bg); text-align: left; overflow-wrap: anywhere; }
+.kontur-shell .k-catalog-tags button:hover { border-color: var(--k-violet); }
+.kontur-shell .k-catalog-tags svg { flex-shrink: 0; }
+.kontur-shell .k-catalog-counts { display: flex; flex-wrap: wrap; gap: 10px 22px; margin: auto 0 19px; color: var(--k-muted); font-size: 10px; }
+.kontur-shell .k-catalog-counts strong { color: var(--k-text); font-size: 18px; font-weight: 550; margin-right: 4px; }
+.kontur-shell .k-catalog-open { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: calc(100% + 42px); min-height: 43px; margin: 0 -21px; padding: 12px 21px; border: 0; border-top: 1px solid var(--k-line-soft); color: var(--k-violet); background: transparent; text-align: left; font-size: 10px; }
+.kontur-shell .k-catalog-open:hover { background: var(--k-panel-raised); }
+@media (max-width: 767px) {
+  .kontur-shell .k-catalog-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .kontur-shell .k-catalog-explainer { font-size: 10px; }
+  .kontur-shell .k-catalog-coverage { font-size: 9px; }
+}
+
 @media (min-width: 1700px) {
   .kontur-shell { grid-template-columns: 236px minmax(0, 1fr); }
   .kontur-shell .k-main { padding: 34px 42px 24px; }
@@ -690,9 +725,22 @@
 .kontur-shell .k-button-primary:hover:not(:disabled) { background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22128%22%20height%3D%2264%22%20viewBox%3D%220%200%20128%2064%22%20preserveAspectRatio%3D%22none%22%3E%3Crect%20width%3D%22128%22%20height%3D%2264%22%20fill%3D%22%23d2ff4a%22%2F%3E%3C%2Fsvg%3E"); }
 .kontur-shell .k-button-primary > span,
 .kontur-shell .k-button-primary > svg { filter: brightness(0); }
+/* Catalogue identity badges keep the same vivid accents in Chrome Auto Dark. */
+.kontur-shell .k-catalog-card .k-project-mark { color: #160b20; background-color: #a855f7; background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22128%22%20height%3D%2264%22%20viewBox%3D%220%200%20128%2064%22%20preserveAspectRatio%3D%22none%22%3E%3Crect%20width%3D%22128%22%20height%3D%2264%22%20fill%3D%22%23a855f7%22%2F%3E%3C%2Fsvg%3E"); }
+.kontur-shell .k-catalog-card .k-project-mark[data-tone="1"],
+.kontur-shell .k-catalog-card .k-project-mark[data-tone="3"],
+.kontur-shell .k-catalog-card .k-team-mark { color: #1b2300; background-color: var(--k-lime); background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22128%22%20height%3D%2264%22%20viewBox%3D%220%200%20128%2064%22%20preserveAspectRatio%3D%22none%22%3E%3Crect%20width%3D%22128%22%20height%3D%2264%22%20fill%3D%22%23c1ff00%22%2F%3E%3C%2Fsvg%3E"); }
+.kontur-shell .k-catalog-card .k-project-mark > span,
+.kontur-shell .k-catalog-card .k-team-mark > svg { filter: brightness(0); }
 @media (forced-colors: active) {
   .kontur-shell .k-button-primary,
-  .kontur-shell .k-button-primary:hover:not(:disabled) { background-image: none; }
+  .kontur-shell .k-button-primary:hover:not(:disabled),
+  .kontur-shell .k-catalog-card .k-project-mark,
+  .kontur-shell .k-catalog-card .k-project-mark[data-tone="1"],
+  .kontur-shell .k-catalog-card .k-project-mark[data-tone="3"],
+  .kontur-shell .k-catalog-card .k-team-mark { background-image: none; }
   .kontur-shell .k-button-primary > span,
-  .kontur-shell .k-button-primary > svg { filter: none; }
+  .kontur-shell .k-button-primary > svg,
+  .kontur-shell .k-catalog-card .k-project-mark > span,
+  .kontur-shell .k-catalog-card .k-team-mark > svg { filter: none; }
 }

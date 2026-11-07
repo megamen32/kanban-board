@@ -134,3 +134,46 @@ Static preview metadata and `/link-preview` contain no task or owner data.
 The external UI remains behind the existing SSO gateway and `/mcp` remains
 Bearer-authenticated. Public crawler ingress routing is a separate reviewed
 infrastructure change; application metadata alone does not prove Telegram preview.
+
+## Team and project metadata in Kontur
+
+The project catalog uses the complete authorized cards and registered projects,
+including empty projects. Mine/Shared/All only filters responsibility; it does
+not remove project identities from navigation and does not define a team.
+
+The cards GET snapshot includes a display-only `teamCatalog` with
+`coverage: visible-projects`. Native callers receive exact project/team
+relationships from the existing Exmanager project-scope resolver. The verified
+owner browser grant still controls the owner's cards; bounded metadata lookups
+cannot remove authorized cards when the team source is unavailable. Other
+native callers receive metadata only from their successful project grants.
+Legacy identities receive only relay-catalog relationships for their already
+allowed projects. No new access grant is derived from catalog metadata.
+
+Native team IDs are namespaced exact team names. Legacy relay IDs use a separate
+namespace. The UI does not merge teams by display name or infer relationships
+from project prefixes, aliases, participants or work/personal scopes. Missing
+relationships remain unknown. The contract supports several explicit teams per
+project, without changing the upstream membership model or creating bindings.
+
+Catalog status distinguishes complete, partial and unavailable metadata.
+Responses are private and uncached; the client validates relationships against
+the same snapshot, clears them on 401/403 and refreshes after task writes and
+when the tab regains attention. Team member IDs, board logins, write grants and
+private source diagnostics are excluded from this display projection.
+
+## Verified owner registration of empty projects
+
+`POST /api/kanban/projects` is available to the same configured native Airlock
+owner and verified Board owner session. The native assertion binds the exact
+POST route and body; a configured same-origin browser action is required.
+The endpoint accepts only `{externalKey,name}`, applies an 8 KiB body limit,
+and writes through the existing durable work project registry. It returns
+201 for a new identity, 200 for the same exact key/name and 409 for a conflicting
+name. It creates no cards, teams, memberships or project access grants.
+
+Service principals and unsigned owner cookies do not authorize this endpoint.
+A failed or unavailable identity check fails closed. Registration metadata is
+private and uncached. Use the same stable external key when reconciling an
+uncertain result; never manufacture an Exmanager signed scope to register an
+independent project.

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KanbanCard } from '@/lib/kanban/types';
+import { loadRelayScopeCatalog } from '@/lib/kanban/project-reviewers';
 
 const { createCard, updateCard, getAllCards, listProjects, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated, managerAuthorized, nativeAccess, nativeProjectAccessContextFromRequest, ownerBrowserReadAllowed } = vi.hoisted(() => ({
   createCard: vi.fn(),
@@ -20,6 +21,12 @@ const { createCard, updateCard, getAllCards, listProjects, validateTransition, d
 }));
 
 vi.mock('@/lib/kanban/file-store', () => ({ createCard, updateCard, getAllCards }));
+vi.mock('@/lib/kanban/project-reviewers', async importOriginal => ({
+  ...await importOriginal<typeof import('@/lib/kanban/project-reviewers')>(),
+  loadRelayScopeCatalog: vi.fn(() => null),
+  relayScopeCatalogFile: () => '/synthetic/relay-catalog.json',
+}));
+
 vi.mock('../../../../lib/kanban/project-store', () => ({ listProjects }));
 vi.mock('@/lib/kanban/due-at', () => ({ normalizeDueAt: vi.fn((value: unknown) => value) }));
 vi.mock('@/lib/kanban/transition-policy', () => ({ validateTransition, NIKITA_ACTOR: 'nikita' }));
@@ -291,6 +298,13 @@ describe('POST /api/kanban/cards', () => {
 });
 
 describe('GET /api/kanban/cards', () => {
+  // Preserve strict existing task/registry assertions; team projection has its own tests below.
+  async function taskSnapshot(response: Response) {
+    const {teamCatalog, ...snapshot} = await response.json();
+    if (Array.isArray(snapshot.cards)) expect(teamCatalog).toMatchObject({coverage: 'visible-projects'});
+    return snapshot;
+  }
+
   const allowed = { ...createdCard, id: 'allowed-card', project: 'Олег и Никита' };
   const qaCard = { ...createdCard, id: 'qa-card', project: 'ExManager QA' };
   const testLoginQaCard = {
@@ -310,6 +324,7 @@ describe('GET /api/kanban/cards', () => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
     nativeAccess.current = null;
+    vi.mocked(loadRelayScopeCatalog).mockReset().mockReturnValue(null);
     nativeProjectAccessContextFromRequest.mockReset().mockResolvedValue(null);
     ownerBrowserReadAllowed.mockReset().mockResolvedValue(false);
     identity.current = { username: 'nikita', scope: 'work' };
@@ -323,7 +338,7 @@ describe('GET /api/kanban/cards', () => {
     authenticated.current = { username: 'nikita', scope: 'work' };
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
+    expect(await taskSnapshot(response)).toEqual({
       cards: [allowed],
       projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }],
     });
@@ -332,6 +347,7 @@ describe('GET /api/kanban/cards', () => {
 
   it('uses the existing owner browser read grant before the unavailable native resolver', async () => {
     ownerBrowserReadAllowed.mockResolvedValueOnce(true);
+    nativeProjectAccessContextFromRequest.mockRejectedValueOnce(new Error('native_identity_unconfigured'));
     const secondBusinessCard = { ...allowed, id: 'second-business-project-card', project: 'ForEnergo тендеры' };
     getAllCards.mockReturnValue([allowed, secondBusinessCard, qaCard]);
     const allProjects = [
@@ -348,9 +364,9 @@ describe('GET /api/kanban/cards', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [allowed, secondBusinessCard, qaCard], projects: allProjects });
+    expect(await taskSnapshot(response)).toEqual({ cards: [allowed, secondBusinessCard, qaCard], projects: allProjects });
     expect(ownerBrowserReadAllowed).toHaveBeenCalledOnce();
-    expect(nativeProjectAccessContextFromRequest).not.toHaveBeenCalled();
+    expect(nativeProjectAccessContextFromRequest).toHaveBeenCalledOnce();
   });
 
   it('keeps ordinary human reads within their existing project even when another project is present', async () => {
@@ -363,7 +379,7 @@ describe('GET /api/kanban/cards', () => {
     ]);
     const response = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [qaCard], projects: [{ id: 'qa-project', externalKey: 'qa', name: 'ExManager QA' }] });
+    expect(await taskSnapshot(response)).toEqual({ cards: [qaCard], projects: [{ id: 'qa-project', externalKey: 'qa', name: 'ExManager QA' }] });
     expect(ownerBrowserReadAllowed).toHaveBeenCalledOnce();
   });
 
@@ -389,7 +405,7 @@ describe('GET /api/kanban/cards', () => {
     nativeProjectAccessContextFromRequest.mockResolvedValueOnce(nativeAccess.current);
     const response = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
+    expect(await taskSnapshot(response)).toEqual({
       cards: [alpha],
       projects: [{ id: '00000000-0000-4000-8000-000000000001', externalKey: 'alpha-key', name: 'Alpha' }],
     });
@@ -406,14 +422,14 @@ describe('GET /api/kanban/cards', () => {
     nativeProjectAccessContextFromRequest.mockResolvedValueOnce(nativeAccess.current);
     const response = await GET(new NextRequest('https://todo-board.airlock.bezrabotnyi.com/api/kanban/cards?project=Alpha'));
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: 'project access could not be verified' });
+    expect(await taskSnapshot(response)).toEqual({ error: 'project access could not be verified' });
   });
 
   it('returns only the server-allowlisted board project, independent of query hints', async () => {
     authenticated.current = { username: 'oleg', scope: 'work' };
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards?project=Alpha'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
+    expect(await taskSnapshot(response)).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
   });
 
   it('allows the other exact server-resolved board identity for the same project only', async () => {
@@ -421,7 +437,7 @@ describe('GET /api/kanban/cards', () => {
     authenticated.current = { username: 'oleg', scope: 'work' };
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards?project=Beta'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
+    expect(await taskSnapshot(response)).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
   });
 
   it.each(['qa_exmanager_a', 'qa_exmanager_b'])('allows QA identity %s to read only the isolated QA project', async username => {
@@ -429,7 +445,7 @@ describe('GET /api/kanban/cards', () => {
     authenticated.current = { username, scope: 'work' };
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards?project=Олег%20и%20Никита'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [qaCard], projects: [{ id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }] });
+    expect(await taskSnapshot(response)).toEqual({ cards: [qaCard], projects: [{ id: 'qa-project', externalKey: 'exmanager-qa', name: 'ExManager QA' }] });
   });
 
   it('preserves the anonymous loopback fixture read for only the synthetic UX QA project', async () => {
@@ -447,7 +463,7 @@ describe('GET /api/kanban/cards', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
+    expect(await taskSnapshot(response)).toEqual({
       cards: [testLoginQaCard, secondFixture],
       projects: [{ id: 'ux-qa-project', externalKey: 'ux-qa', name: 'UX QA 2026-10-26' }],
     });
@@ -470,7 +486,7 @@ describe('GET /api/kanban/cards', () => {
     const response = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards'));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
+    expect(await taskSnapshot(response)).toEqual({
       cards: [testLoginQaCard, l06Fixture],
       projects: [{ id: 'ux-qa-project', externalKey: 'ux-qa', name: 'UX QA 2026-10-26' }],
     });
@@ -481,22 +497,22 @@ describe('GET /api/kanban/cards', () => {
     vi.stubEnv('KANBAN_QA_ANONYMOUS_READS', '1');
     authenticated.current = null;
     const anonymous = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards'));
-    expect(await anonymous.json()).toEqual({ cards: [], projects: [] });
+    expect(await taskSnapshot(anonymous)).toEqual({ cards: [], projects: [] });
     expect(getAllCards).not.toHaveBeenCalled();
 
     authenticated.current = { username: 'other-user', scope: 'work' };
     const unrelatedIdentity = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards'));
-    expect(await unrelatedIdentity.json()).toEqual({ cards: [], projects: [] });
+    expect(await taskSnapshot(unrelatedIdentity)).toEqual({ cards: [], projects: [] });
     expect(getAllCards).not.toHaveBeenCalled();
 
     authenticated.current = { username: 'testlogin', scope: 'personal' };
     const personalScope = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards'));
-    expect(await personalScope.json()).toEqual({ cards: [], projects: [] });
+    expect(await taskSnapshot(personalScope)).toEqual({ cards: [], projects: [] });
     expect(getAllCards).not.toHaveBeenCalled();
 
     authenticated.current = { username: 'testlogin', scope: 'work' };
     const unrelatedHost = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
-    expect(await unrelatedHost.json()).toEqual({ cards: [], projects: [] });
+    expect(await taskSnapshot(unrelatedHost)).toEqual({ cards: [], projects: [] });
     expect(getAllCards).not.toHaveBeenCalled();
   });
 
@@ -506,7 +522,7 @@ describe('GET /api/kanban/cards', () => {
     const response = await GET(new NextRequest('https://qa-board.bezrabotnyi.com/api/kanban/cards'));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [], projects: [] });
+    expect(await taskSnapshot(response)).toEqual({ cards: [], projects: [] });
     expect(getAllCards).not.toHaveBeenCalled();
     expect(listProjects).not.toHaveBeenCalled();
   });
@@ -516,7 +532,7 @@ describe('GET /api/kanban/cards', () => {
     authenticated.current = { username: 'other-user', scope: 'work' };
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [], projects: [] });
+    expect(await taskSnapshot(response)).toEqual({ cards: [], projects: [] });
     expect(getAllCards).not.toHaveBeenCalled();
     expect(listProjects).not.toHaveBeenCalled();
   });
@@ -526,7 +542,7 @@ describe('GET /api/kanban/cards', () => {
     authenticated.current = null;
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [], projects: [] });
+    expect(await taskSnapshot(response)).toEqual({ cards: [], projects: [] });
     expect(getAllCards).not.toHaveBeenCalled();
     expect(listProjects).not.toHaveBeenCalled();
   });
@@ -544,7 +560,7 @@ describe('GET /api/kanban/cards', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [allowed, alpha], projects: [projects[0], projects[1], { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
+    expect(await taskSnapshot(response)).toEqual({ cards: [allowed, alpha], projects: [projects[0], projects[1], { id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
     expect(forProject.mock.calls.map(([project]) => project)).toEqual(['Олег и Никита', 'ExManager QA', 'Alpha', 'Beta', 'Legacy', 'Empty project']);
     expect(tasksDirForScope).toHaveBeenCalledWith('work');
   });
@@ -561,7 +577,7 @@ describe('GET /api/kanban/cards', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [], projects: [] });
+    expect(await taskSnapshot(response)).toEqual({ cards: [], projects: [] });
     expect(forProject).toHaveBeenCalledTimes(1);
     expect(forProject).toHaveBeenCalledWith('Beta');
   });
@@ -581,7 +597,98 @@ describe('GET /api/kanban/cards', () => {
     authenticated.current = { username: 'oleg', scope: 'work' };
     const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
+    expect(await taskSnapshot(response)).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
     expect(nativeProjectAccessContextFromRequest).toHaveBeenCalledTimes(1);
   });
+
+  it('includes current native team metadata without hiding owner tasks whose team cannot be verified', async () => {
+    ownerBrowserReadAllowed.mockResolvedValueOnce(true);
+    const forProject = vi.fn(async (project: string) => {
+      if (project === 'Alpha' || project === 'Empty project') {
+        return {project, team: 'Delivery crew', readAllowed: true as const, writeAllowed: false};
+      }
+      throw new Error('native_project_access_denied');
+    });
+    nativeProjectAccessContextFromRequest.mockResolvedValueOnce({userId: 'owner', forProject});
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(body.cards).toEqual([allowed, qaCard, alpha, beta, legacy]);
+    expect(body.projects).toHaveLength(5);
+    expect(body.teamCatalog).toEqual({
+      status: 'partial', coverage: 'visible-projects',
+      teams: [{id: 'exmanager:Delivery crew', name: 'Delivery crew'}],
+      projectTeams: [
+        {project: 'Alpha', teamId: 'exmanager:Delivery crew', source: 'native-access'},
+        {project: 'Empty project', teamId: 'exmanager:Delivery crew', source: 'native-access'},
+      ],
+      unknownProjectNames: ['Beta', 'ExManager QA', 'Legacy', 'Олег и Никита'],
+    });
+    expect(forProject).toHaveBeenCalledTimes(6);
+  });
+
+  it('never leaks hidden projects or their team names in a native metadata snapshot', async () => {
+    const forProject = vi.fn(async (project: string) => {
+      if (project === 'Alpha') return {project, team: 'Visible crew', readAllowed: true as const, writeAllowed: false};
+      throw new Error('native_project_access_denied');
+    });
+    nativeProjectAccessContextFromRequest.mockResolvedValueOnce({userId: 'member', forProject});
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
+    expect(await response.json()).toEqual({
+      cards: [alpha], projects: [projects[0]],
+      teamCatalog: {
+        status: 'ready', coverage: 'visible-projects',
+        teams: [{id: 'exmanager:Visible crew', name: 'Visible crew'}],
+        projectTeams: [{project: 'Alpha', teamId: 'exmanager:Visible crew', source: 'native-access'}],
+        unknownProjectNames: [],
+      },
+    });
+    expect(forProject).toHaveBeenCalledTimes(6);
+  });
+
+  it('projects legacy team metadata only after existing human project authorization', async () => {
+    vi.mocked(loadRelayScopeCatalog).mockReturnValueOnce({
+      schemaVersion: 1, owner: {telegramUserId: '100'},
+      teams: [
+        {id: 'visible', name: 'Visible crew', kanbanProjects: ['Олег и Никита'], memberTelegramUserIds: ['100']},
+        {id: 'hidden', name: 'Hidden crew', kanbanProjects: ['Alpha'], memberTelegramUserIds: ['200'], boardLogins: {'200': 'private-login'}},
+      ],
+    });
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards?project=Alpha'));
+    expect(await response.json()).toEqual({
+      cards: [allowed],
+      projects: [{id: 'board-project', externalKey: 'board', name: 'Олег и Никита'}],
+      teamCatalog: {
+        status: 'ready', coverage: 'visible-projects',
+        teams: [{id: 'relay-scope:visible', name: 'Visible crew'}],
+        projectTeams: [{project: 'Олег и Никита', teamId: 'relay-scope:visible', source: 'relay-scope'}],
+        unknownProjectNames: [],
+      },
+    });
+  });
+
+  it('retains authorized legacy tasks and reports uncertainty when the team catalog is broken', async () => {
+    vi.mocked(loadRelayScopeCatalog).mockImplementationOnce(() => {throw new Error('private config diagnostics');});
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.cards).toEqual([allowed]);
+    expect(body.teamCatalog).toEqual({
+      status: 'unavailable', coverage: 'visible-projects', teams: [], projectTeams: [],
+      unknownProjectNames: ['Олег и Никита'],
+    });
+    expect(JSON.stringify(body)).not.toContain('diagnostics');
+  });
+
+  it('does not read the team directory for an identity without a board grant', async () => {
+    authenticated.current = null;
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards'));
+    expect(await response.json()).toEqual({
+      cards: [], projects: [],
+      teamCatalog: {status: 'unavailable', coverage: 'visible-projects', teams: [], projectTeams: [], unknownProjectNames: []},
+    });
+    expect(loadRelayScopeCatalog).not.toHaveBeenCalled();
+  });
+
 });

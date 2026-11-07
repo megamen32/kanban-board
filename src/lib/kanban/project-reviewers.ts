@@ -13,6 +13,7 @@ import { NIKITA_ACTOR } from "./transition-policy";
  */
 export interface RelayScopeTeam {
   id: string;
+  name?: string;
   kanbanProjects: string[];
   memberTelegramUserIds: string[];
   boardLogins?: Record<string, string>;
@@ -72,6 +73,7 @@ export function parseRelayScopeCatalog(value: unknown): RelayScopeCatalog {
     }
     return {
       id: label(raw.id, `teams[${index}].id`),
+      ...(raw.name !== undefined ? { name: label(raw.name, `teams[${index}].name`) } : {}),
       kanbanProjects: labelList(raw.kanbanProjects, `teams[${index}].kanbanProjects`),
       memberTelegramUserIds: identifierList(raw.memberTelegramUserIds, `teams[${index}].memberTelegramUserIds`),
       ...(Object.keys(boardLogins).length ? { boardLogins } : {}),
