@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { KanbanCard } from '@/lib/kanban/types';
+import { withSourceOperationLock } from '../../../../../../lib/kanban/source-operation';
 
 const mocks = vi.hoisted(() => ({
   currentCard: { value: undefined as KanbanCard | undefined },
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   humanIdentity: { value: undefined as { username: string; scope: 'work' } | null | undefined },
   boardHumanIdentityFromRequest: vi.fn(),
   callOwnerHerderTool: vi.fn(),
+  sessionInfo: { value: undefined as Record<string, unknown> | undefined },
   validateTransition: vi.fn(),
   taskExecutionSnapshot: vi.fn(),
   readiness: { harness: 'codex' as 'codex' | 'opencode', model: 'gpt-6-luna' },
@@ -24,6 +26,11 @@ vi.mock('@/lib/kanban/file-store', () => ({ findCardById: mocks.findCardById, up
 vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => mocks.identity.value ?? { username: 'anonymous', scope: 'work' },
   identityFromRequest: () => mocks.identity.value,
+  automationTokenValid: (request: Request) => {
+    const expected = process.env.KANBAN_AUTOMATION_TOKEN?.trim();
+    const provided = request.headers.get('x-kanban-automation-token')?.trim();
+    return !!expected && provided === expected;
+  },
   nativeProjectAccessContextFromRequest: vi.fn(async () => null),
 }));
 vi.mock('../../../../../../lib/auth/board-human', () => ({
@@ -32,7 +39,10 @@ vi.mock('../../../../../../lib/auth/board-human', () => ({
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope: mocks.tasksDirForScope }));
 vi.mock('@/lib/kanban/task-execution', () => ({ taskExecutionSnapshot: mocks.taskExecutionSnapshot }));
 vi.mock('@/lib/kanban/task-execution-client', () => ({ callOwnerHerderTool: mocks.callOwnerHerderTool }));
-vi.mock('@/lib/kanban/transition-policy', () => ({ validateTransition: mocks.validateTransition }));
+vi.mock('@/lib/kanban/transition-policy', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/lib/kanban/transition-policy')>()),
+  validateTransition: mocks.validateTransition,
+}));
 
 // The real source-operation journal is used on purpose: this sheet proves the
 // route spends a genuine pending intent, not a mocked transition.
@@ -125,6 +135,11 @@ function toolResult(tool: string, args: Record<string, unknown>) {
   }
   if (tool === 'fleet_create_session') {
     const readiness = args.projectReadiness as Record<string, unknown> | undefined;
+    // Keep the simulated native session separate from the mutable Board card.
+    mocks.sessionInfo.value = {
+      id: sessionId, harness: args.harness, hostId: readiness?.hostId,
+      cwd: args.cwd, model: args.model, status: 'idle', needsPermission: false,
+    };
     const requiredTools = readiness?.requiredTools ?? [];
     const projectExecution = readiness ? {
       projectId: readiness.projectId, projectRoot: readiness.projectRoot,
@@ -138,16 +153,7 @@ function toolResult(tool: string, args: Record<string, unknown>) {
       ...(projectExecution ? { projectReadinessContract: args.projectReadinessContract, projectExecution } : {}),
     }, content: [] };
   }
-  if (tool === 'fleet_session_view') {
-    const binding = mocks.currentCard.value?.taskExecutionHistory?.at(-1)?.projectBinding;
-    const receiptCwd = binding?.cwd ?? scopedProjectRoot;
-    return { structuredContent: {
-      hostId: 'roomhacker-server-100', details: {
-        session: { id: sessionId, harness: binding?.harness ?? 'codex', cwd: receiptCwd, model: binding?.model ?? 'gpt-6-luna' },
-        historyUnavailable: false, messages: [{ role: 'assistant', text: 'Found two candidates' }],
-      },
-    }, content: [] };
-  }
+  if (tool === 'agent_info') return { structuredContent: { session: mocks.sessionInfo.value }, content: [] };
   if (tool === 'send_message') {
     return { content: [{ type: 'text', text: `Native admission receipt: ${JSON.stringify({ admitted: true, inputId: args.inputId, turnId: 'turn-1' })}` }] };
   }
@@ -158,6 +164,7 @@ describe('task execution launch intent consumption', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.readiness = { harness: 'codex', model: 'gpt-6-luna' };
+    mocks.sessionInfo.value = undefined;
     mocks.humanIdentity.value = undefined;
     mocks.boardHumanIdentityFromRequest.mockImplementation(async () =>
       mocks.humanIdentity.value === undefined ? mocks.identity.value : mocks.humanIdentity.value);
@@ -176,8 +183,9 @@ describe('task execution launch intent consumption', () => {
       cardId: card.id,
       state: card.taskExecutionHistory?.at(-1)?.phase === 'running' ? 'running' : 'not-started',
     }));
-    process.env.EXMANAGER_TASK_EXECUTION_CWD = scopedProjectRoot;
-    process.env.AGENT_HERDER_HTTP_TOKEN = 'test-only-protected-ref';
+    vi.stubEnv('EXMANAGER_TASK_EXECUTION_CWD', scopedProjectRoot);
+    vi.stubEnv('AGENT_HERDER_HTTP_TOKEN', 'test-only-protected-ref');
+    vi.stubEnv('KANBAN_AUTOMATION_TOKEN', '');
   });
 
   afterEach(() => {
@@ -253,20 +261,40 @@ describe('task execution launch intent consumption', () => {
     const dir = fixture();
     writeJournal(dir, 'PENDING');
     mocks.tasksDirForScope.mockReturnValue(dir);
+    // This branch must pass the real store's receipt validation and survive reopen.
+    const store = await vi.importActual<typeof import('../../../../../../lib/kanban/file-store')>('../../../../../../lib/kanban/file-store');
+    const source = sourceCard(journalIntentId);
+    const persisted = withSourceOperationLock(dir, () => store.createAdmittedCard({
+      id: source.id, title: source.title, description: source.description, project: source.project,
+      priority: source.priority, assignees: source.assignees, sourceAdmission: source.sourceAdmission!,
+    }, dir));
+    mocks.currentCard.value = persisted;
+    mocks.findCardById.mockImplementation((id: string, tasksDir = dir) => store.findCardById(id, tasksDir));
+    mocks.updateCard.mockImplementation((id: string, patch: Partial<KanbanCard>, expectedVersion: number, tasksDir = dir) => {
+      const saved = store.updateCard(id, patch, expectedVersion, tasksDir);
+      if (!('conflict' in saved)) mocks.currentCard.value = saved;
+      return saved;
+    });
     let refusedCreates = 0;
     mocks.callOwnerHerderTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
       if (tool === 'fleet_create_session' && refusedCreates === 0) {
         refusedCreates += 1;
-        const refused = { state: 'not_attempted', inputId: args.inputId };
+        const refused = { state: 'not_attempted', inputId: args.inputId, retryable: true, reason: 'fixture_preflight_refused' };
         return { structuredContent: refused, content: [{ type: 'text', text: JSON.stringify(refused) }] };
       }
       return toolResult(tool, args);
     });
 
-    const refused = await POST(postRequest(), { params: Promise.resolve({ id: 'task-1' }) });
+    const refused = await POST(postRequest(operationId, persisted.version), { params: Promise.resolve({ id: 'task-1' }) });
 
     expect(refused.status).toBe(503);
+    expect(await refused.json()).toMatchObject({state: 'not_attempted', retryable: true, reason: 'fixture_preflight_refused'});
     expect(mocks.currentCard.value?.taskExecutionHistory?.at(-1)?.phase).toBe('stopped');
+    const reopened = store.readCardFile(path.join(dir, persisted.fileName), dir);
+    expect(reopened?.taskExecutionHistory?.at(-1)).toMatchObject({phase: 'stopped',
+      createReceiptText: JSON.stringify({state: 'not_attempted', inputId: reopened?.taskExecutionHistory?.at(-1)?.createInputId,
+        retryable: true, reason: 'fixture_preflight_refused'})});
+    expect(reopened?.taskExecutionHistory?.at(-1)?.nativeSessionId).toBeUndefined();
     // Nothing was created, so the intent stays spendable and a repeat launch is allowed.
     expect(journalRecord(dir)).toMatchObject({ intentState: 'PENDING' });
 
@@ -276,6 +304,8 @@ describe('task execution launch intent consumption', () => {
     expect(repeat.status).toBe(201);
     expect(mocks.currentCard.value?.taskExecutionHistory?.at(-1)?.phase).toBe('running');
     expect(journalRecord(dir)).toMatchObject({ intentState: 'CONSUMED' });
+    expect(store.readCardFile(path.join(dir, persisted.fileName), dir)?.taskExecutionHistory?.map(receipt => receipt.phase))
+      .toEqual(['stopped', 'running']);
   });
 
   it('keeps the ordinary successful launch unchanged', async () => {
@@ -310,7 +340,9 @@ describe('task execution launch intent consumption', () => {
     expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('fleet_create_session', expect.objectContaining({
       harness: 'opencode', model: 'omniroute/minimax-combo-m3.1',
     }));
-    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('fleet_session_view', expect.objectContaining({ harness: 'opencode' }));
+    expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('agent_info', {
+      harness: 'opencode', sessionId, hostId: 'roomhacker-server-100',
+    });
     expect(mocks.callOwnerHerderTool).toHaveBeenCalledWith('send_message', expect.objectContaining({ harness: 'opencode' }));
 
     const store = await vi.importActual<typeof import('../../../../../../lib/kanban/file-store')>('../../../../../../lib/kanban/file-store');
@@ -425,10 +457,9 @@ describe('task execution launch intent consumption', () => {
     mocks.tasksDirForScope.mockReturnValue(dir);
     const base = mocks.callOwnerHerderTool.getMockImplementation()!;
     mocks.callOwnerHerderTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
-      if (tool === 'fleet_session_view') {
-        return { structuredContent: { hostId: 'roomhacker-server-100', details: {
-          session: { id: sessionId, harness: 'codex', cwd: '/other/project/path', model: 'gpt-6-luna' },
-          historyUnavailable: false, messages: [],
+      if (tool === 'agent_info') {
+        return { structuredContent: { session: {
+          ...mocks.sessionInfo.value, cwd: '/other/project/path',
         } }, content: [] };
       }
       return base(tool, args);
@@ -443,6 +474,7 @@ describe('task execution launch intent consumption', () => {
     // though the task text was never sent.
     expect(receipt?.nativeSessionId).toBe(sessionId);
     expect(journalRecord(dir)).toMatchObject({ intentState: 'CONSUMED', state: 'COMMITTED', intentId: journalIntentId });
+    expect(mocks.callOwnerHerderTool).not.toHaveBeenCalledWith('send_message', expect.anything());
   });
 
 });

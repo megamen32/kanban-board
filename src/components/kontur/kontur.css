@@ -1,0 +1,658 @@
+.kontur-shell {
+  --k-bg: #09080d;
+  --k-sidebar: #100d16;
+  --k-panel: #141019;
+  --k-panel-raised: #1a1423;
+  --k-input: #100d16;
+  --k-line: #30263d;
+  --k-line-soft: #241c2f;
+  --k-text: #f3eefb;
+  --k-muted: #bab1c9;
+  --k-faint: #a89bb9;
+  --k-violet: #d2a7ff;
+  --k-violet-solid: #a855f7;
+  --k-violet-bg: #2b193e;
+  --k-lime: #c1ff00;
+  --k-lime-text: #c1ff00;
+  --k-lime-bg: #202a0e;
+  --k-amber: #ffcd83;
+  --k-amber-bg: #352719;
+  --k-red: #ff9aa8;
+  --k-red-bg: #351b28;
+  --k-shadow: 0 12px 44px #00000038;
+  color-scheme: only dark;
+  color: var(--k-text);
+  background: var(--k-bg);
+  display: grid;
+  grid-template-columns: 218px minmax(0, 1fr);
+  min-height: 100dvh;
+  width: 100%;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  overflow-wrap: break-word;
+}
+.kontur-shell[data-theme="light"] {
+  --k-bg: #f7f4fc;
+  --k-sidebar: #f0eaf8;
+  --k-panel: #ffffff;
+  --k-panel-raised: #f4edfc;
+  --k-input: #ffffff;
+  --k-line: #dacde9;
+  --k-line-soft: #eae1f2;
+  --k-text: #251335;
+  --k-muted: #675476;
+  --k-faint: #725c82;
+  --k-violet: #7030ae;
+  --k-violet-solid: #8b38db;
+  --k-violet-bg: #eee0ff;
+  --k-lime: #c1ff00;
+  --k-lime-text: #496500;
+  --k-lime-bg: #f0f7d8;
+  --k-amber: #855000;
+  --k-amber-bg: #fff3dd;
+  --k-red: #a62945;
+  --k-red-bg: #fff0f3;
+  --k-shadow: 0 12px 44px #4626690c;
+  color-scheme: only light;
+}
+.kontur-shell *, .kontur-shell *::before, .kontur-shell *::after { box-sizing: border-box; }
+.kontur-shell button, .kontur-shell input, .kontur-shell select { font: inherit; }
+.kontur-shell button, .kontur-shell a, .kontur-shell input, .kontur-shell select { -webkit-tap-highlight-color: transparent; }
+.kontur-shell button { cursor: pointer; }
+.kontur-shell button:disabled { cursor: not-allowed; opacity: .5; }
+.kontur-shell button:focus-visible, .kontur-shell a:focus-visible, .kontur-shell select:focus-visible, .kontur-shell input:focus-visible, .kontur-shell summary:focus-visible { outline: 2px solid var(--k-violet-solid); outline-offset: 3px; }
+.kontur-shell a { color: inherit; text-decoration: none; }
+.kontur-shell h1, .kontur-shell h2, .kontur-shell h3, .kontur-shell p { margin: 0; }
+.kontur-shell h2 { font-size: 14px; font-weight: 650; letter-spacing: -.18px; }
+.kontur-shell h3 { font-size: 13px; font-weight: 650; }
+.kontur-shell code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+.kontur-shell button { color: inherit; }
+.kontur-shell svg { flex-shrink: 0; }
+.kontur-shell .k-skip { position: fixed; top: -100px; left: 16px; z-index: 200; padding: 12px; background: var(--k-lime); color: #192000; border-radius: 6px; }
+.kontur-shell .k-skip:focus { top: 12px; }
+.kontur-shell .k-sidebar { position: sticky; top: 0; display: flex; flex-direction: column; gap: 0; height: 100dvh; min-width: 0; padding: 25px 14px 15px; border-right: 1px solid var(--k-line); background: var(--k-sidebar); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--k-line) transparent; }
+.kontur-shell .k-brand-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 35px; padding-left: 7px; }
+.kontur-shell .k-brand { display: inline-flex; align-items: center; gap: 10px; border: 0; padding: 0; background: transparent; text-align: left; }
+.kontur-shell .k-logo { width: 36px; height: 38px; border: 1px solid var(--k-violet-solid); border-radius: 10px; background: var(--k-violet-bg); color: var(--k-lime-text); font-size: 24px; font-weight: 800; line-height: 36px; text-align: center; position: relative; }
+.kontur-shell .k-logo > span { position: absolute; right: -3px; bottom: 3px; width: 7px; height: 7px; background: var(--k-lime); border: 2px solid var(--k-sidebar); border-radius: 2px; }
+.kontur-shell .k-brand strong { display: block; font-size: 23px; font-weight: 700; line-height: 1.15; letter-spacing: -.85px; }
+.kontur-shell .k-brand strong > span { color: var(--k-lime-text); }
+.kontur-shell .k-brand small { display: block; margin-top: 5px; color: var(--k-faint); font-size: 6.8px; letter-spacing: 1.3px; font-weight: 650; }
+.kontur-shell .k-nav-label { display: block; margin: 0 10px 10px; color: var(--k-faint); font-size: 9px; font-weight: 700; letter-spacing: 1.2px; }
+.kontur-shell .k-navigation { display: flex; flex-direction: column; gap: 3px; }
+.kontur-shell .k-navigation > button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 37px; padding: 8px 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--k-muted); text-align: left; font-size: 12px; }
+.kontur-shell .k-navigation > button > span:not(.k-nav-count) { min-width: 0; flex: 1; }
+.kontur-shell .k-navigation > button:hover { background: var(--k-panel-raised); color: var(--k-text); }
+.kontur-shell .k-navigation > button.is-active { color: var(--k-violet); background: var(--k-violet-bg); border-color: color-mix(in srgb, var(--k-violet-solid) 32%, transparent); font-weight: 650; }
+.kontur-shell .k-nav-count { display: inline-flex; justify-content: center; min-width: 19px; padding: 1px 5px; background: var(--k-panel-raised); border-radius: 4px; color: var(--k-muted); font-size: 9px; }
+.kontur-shell .is-active .k-nav-count { color: var(--k-violet); background: color-mix(in srgb, var(--k-violet-solid) 17%, var(--k-panel)); }
+.kontur-shell .k-sidebar-project-head { display: flex; align-items: center; justify-content: space-between; margin-top: 29px; }
+.kontur-shell .k-sidebar-project-head > span:last-child { color: var(--k-faint); margin: 0 10px 10px; font-size: 10px; }
+.kontur-shell .k-project-navigation { flex: 1; min-height: 80px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--k-line) transparent; }
+.kontur-shell .k-project-navigation > button { display: flex; align-items: center; gap: 9px; min-height: 32px; width: 100%; border: 0; border-radius: 6px; padding: 6px 10px; color: var(--k-muted); background: transparent; text-align: left; font-size: 11px; }
+.kontur-shell .k-project-navigation > button:hover, .kontur-shell .k-project-navigation > button.is-selected { background: var(--k-panel-raised); color: var(--k-text); }
+.kontur-shell .k-project-navigation > button > span:not(.k-project-dot) { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.kontur-shell .k-project-navigation small { font-size: 9px; color: var(--k-faint); }
+.kontur-shell .k-project-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 2px; background: var(--k-violet-solid); }
+.kontur-shell .k-project-dot[data-tone="1"], .kontur-shell .k-project-dot[data-tone="3"] { background: var(--k-lime-text); }
+.kontur-shell .k-project-dot[data-tone="2"] { background: #d280de; }
+.kontur-shell .k-sidebar-empty { padding: 9px 10px; color: var(--k-faint); font-size: 11px; }
+.kontur-shell .k-sidebar-bottom { margin-top: 22px; flex-shrink: 0; }
+.kontur-shell .k-classic-link { display: flex; align-items: center; gap: 8px; padding: 9px 10px 16px; color: var(--k-muted); font-size: 11px; }
+.kontur-shell .k-classic-link > svg:last-child { margin-left: auto; }
+.kontur-shell .k-classic-link:hover { color: var(--k-violet); }
+.kontur-shell .k-user { display: flex; align-items: center; gap: 9px; border-top: 1px solid var(--k-line); padding: 17px 6px 0; min-width: 0; }
+.kontur-shell .k-user > span:nth-child(2) { flex: 1; min-width: 0; }
+.kontur-shell .k-user strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; }
+.kontur-shell .k-user small { display: block; color: var(--k-faint); font-size: 9px; margin-top: 2px; }
+.kontur-shell .k-user > svg { color: var(--k-faint); }
+.kontur-shell .k-user-avatar { display: grid; place-items: center; width: 31px; height: 31px; border-radius: 50%; background: var(--k-violet-bg); color: var(--k-violet); border: 1px solid var(--k-line); }
+.kontur-shell .k-workspace { min-width: 0; }
+.kontur-shell .k-topbar { min-height: 63px; border-bottom: 1px solid var(--k-line); padding: 13px 32px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--k-bg); }
+.kontur-shell .k-breadcrumb { display: flex; align-items: center; gap: 11px; min-width: 0; color: var(--k-faint); font-size: 11px; }
+.kontur-shell .k-breadcrumb strong { font-size: 11px; font-weight: 500; color: var(--k-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kontur-shell .k-topbar-actions { display: flex; align-items: center; gap: 17px; flex-shrink: 0; }
+.kontur-shell .k-read-status { display: inline-flex; align-items: center; gap: 6px; color: var(--k-muted); font-size: 10px; }
+.kontur-shell .k-read-status > i { width: 5px; height: 5px; background: var(--k-lime-text); border-radius: 50%; }
+.kontur-shell .k-read-status.is-stale { color: var(--k-amber); }
+.kontur-shell .k-read-status.is-stale > i { background: var(--k-amber); }
+.kontur-shell .k-main { max-width: 1830px; margin: 0 auto; padding: 29px 32px 20px; min-width: 0; outline: none; }
+.kontur-shell .k-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 26px; }
+.kontur-shell .k-page-heading h1 { margin: 8px 0 6px; font-size: 30px; font-weight: 700; letter-spacing: -.8px; line-height: 1.2; }
+.kontur-shell .k-page-heading p { color: var(--k-muted); font-size: 12px; }
+.kontur-shell .k-eyebrow { display: flex; align-items: center; gap: 6px; color: var(--k-faint); font-size: 8px; font-weight: 650; letter-spacing: 1.4px; }
+.kontur-shell .k-lime-dot { display: inline-block; width: 5px; height: 5px; background: var(--k-lime-text); border-radius: 50%; flex-shrink: 0; }
+.kontur-shell .k-heading-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.kontur-shell .k-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 35px; padding: 8px 12px; border: 1px solid var(--k-line); border-radius: 6px; color: var(--k-text); background: var(--k-panel); font-size: 11px; line-height: 1.4; font-weight: 550; white-space: nowrap; }
+.kontur-shell .k-button:hover:not(:disabled) { border-color: var(--k-violet-solid); background: var(--k-panel-raised); }
+.kontur-shell .k-button.is-selected { color: var(--k-violet); background: var(--k-violet-bg); border-color: var(--k-violet-solid); }
+.kontur-shell .k-button-primary { background: var(--k-lime); border-color: var(--k-lime); color: #1b2300; font-weight: 700; }
+.kontur-shell .k-button-primary:hover:not(:disabled) { color: #162000; background: #d2ff4a; border-color: #d2ff4a; }
+.kontur-shell .k-button-small { min-height: 29px; padding: 6px 10px; font-size: 10px; }
+.kontur-shell .k-icon-button { display: inline-flex; align-items: center; justify-content: center; min-width: 29px; min-height: 29px; padding: 5px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--k-muted); }
+.kontur-shell .k-icon-button:hover:not(:disabled) { background: var(--k-panel-raised); color: var(--k-text); }
+.kontur-shell .k-text-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 3px 0; border: 0; background: transparent; color: var(--k-violet); font-size: 10px; line-height: 1.5; text-align: left; }
+.kontur-shell .k-text-button:hover { color: var(--k-text); }
+.kontur-shell .k-filter-bar { display: flex; flex-wrap: wrap; gap: 10px; padding-bottom: 13px; border-bottom: 1px solid var(--k-line); }
+.kontur-shell .k-filter-selects { display: flex; flex: 1 1 510px; gap: 7px; min-width: 0; }
+.kontur-shell .k-select { display: flex; align-items: center; position: relative; gap: 6px; min-width: 0; flex: 1; border: 1px solid var(--k-line); border-radius: 5px; background: var(--k-input); color: var(--k-muted); padding-left: 9px; }
+.kontur-shell .k-select select { width: 100%; min-width: 0; min-height: 33px; border: 0; border-radius: 5px; padding: 7px 22px 7px 0; appearance: none; background: transparent; color: var(--k-text); font-size: 10px; cursor: pointer; text-overflow: ellipsis; }
+.kontur-shell .k-select > svg:last-child { position: absolute; right: 7px; pointer-events: none; }
+.kontur-shell .k-select option { background: var(--k-panel); color: var(--k-text); }
+.kontur-shell .k-reset-filters { display: grid; place-items: center; width: 28px; border: 0; background: transparent; color: var(--k-faint); flex-shrink: 0; }
+.kontur-shell .k-reset-filters:hover { color: var(--k-text); }
+.kontur-shell .k-search { display: flex; align-items: center; gap: 8px; min-height: 35px; flex: 1 1 200px; min-width: 140px; max-width: 300px; border: 1px solid var(--k-line); border-radius: 5px; padding: 0 10px; background: var(--k-input); color: var(--k-faint); }
+.kontur-shell .k-search input { flex: 1; width: 100%; min-width: 0; height: 32px; border: 0; background: transparent; color: var(--k-text); font-size: 10px; }
+.kontur-shell .k-search input::placeholder { color: var(--k-faint); }
+.kontur-shell .k-search input:focus-visible { outline: none; }
+.kontur-shell .k-search:focus-within { outline: 2px solid var(--k-violet-solid); outline-offset: 2px; }
+.kontur-shell .k-search kbd { border: 1px solid var(--k-line); border-radius: 3px; font: inherit; font-size: 8px; padding: 0 3px; white-space: nowrap; }
+.kontur-shell .k-scope-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0 20px; }
+.kontur-shell .k-scope-row > span { color: var(--k-faint); font-size: 9px; }
+.kontur-shell .k-segmented { display: inline-flex; align-items: center; padding: 2px; gap: 2px; border: 1px solid var(--k-line); border-radius: 6px; background: var(--k-input); }
+.kontur-shell .k-segmented > button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 28px; padding: 5px 10px; border: 0; border-radius: 4px; color: var(--k-muted); background: transparent; font-size: 10px; white-space: nowrap; }
+.kontur-shell .k-segmented > button[aria-pressed="true"] { color: var(--k-violet); background: var(--k-violet-bg); }
+.kontur-shell .k-segmented > button > span { font-size: 9px; margin-left: 3px; }
+.kontur-shell .k-scope-switch > button { min-height: 23px; font-size: 9px; padding: 3px 8px; }
+.kontur-shell .k-alert { display: flex; align-items: flex-start; gap: 10px; margin: 12px 0 18px; padding: 13px 15px; background: var(--k-red-bg); border: 1px solid color-mix(in srgb, var(--k-red) 35%, transparent); border-radius: 7px; color: var(--k-red); }
+.kontur-shell .k-alert > div { flex: 1; min-width: 0; }
+.kontur-shell .k-alert strong { font-size: 12px; }
+.kontur-shell .k-alert p { margin-top: 4px; font-size: 11px; }
+.kontur-shell .k-alert small { display: block; margin-top: 6px; }
+.kontur-shell .k-notice { display: flex; align-items: flex-start; gap: 9px; padding: 11px 13px; margin: 0 0 17px; border: 1px solid var(--k-line); border-radius: 6px; background: var(--k-panel); color: var(--k-muted); font-size: 11px; }
+.kontur-shell .k-notice > svg { margin-top: 1px; color: var(--k-violet); }
+.kontur-shell .k-notice > p { flex: 1; }
+.kontur-shell .k-notice > button { flex-shrink: 0; }
+.kontur-shell .k-overview-date { display: flex; justify-content: space-between; gap: 10px; margin: 19px 0 11px; font-size: 10px; color: var(--k-faint); }
+.kontur-shell .k-overview-date > span:first-child { text-transform: capitalize; }
+.kontur-shell .k-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 21px; }
+.kontur-shell .k-stat { display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 138px; padding: 17px 16px 12px; text-align: left; background: var(--k-panel); border: 1px solid var(--k-line); border-radius: 8px; }
+.kontur-shell .k-stat:hover { border-color: var(--k-violet-solid); }
+.kontur-shell .k-stat > span:first-child { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--k-muted); font-size: 10px; }
+.kontur-shell .k-stat > span:first-child > svg { color: var(--k-faint); }
+.kontur-shell .k-stat > strong { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; font-size: 30px; font-weight: 600; letter-spacing: -.7px; line-height: 1.1; }
+.kontur-shell .k-stat > strong > small { font-size: 9px; letter-spacing: 0; font-weight: 400; color: var(--k-muted); }
+.kontur-shell .k-stat-foot { display: flex; align-items: center; gap: 6px; color: var(--k-faint); font-size: 8px; margin-top: auto; }
+.kontur-shell .k-stat-foot > i { width: 4px; height: 4px; background: var(--k-lime-text); border-radius: 50%; }
+.kontur-shell .k-stat-foot > svg { margin-left: auto; }
+.kontur-shell .k-stat-foot.k-violet { color: var(--k-violet); }
+.kontur-shell .k-stat-foot.k-violet > i { background: var(--k-violet); }
+.kontur-shell .k-stat-foot.k-amber { color: var(--k-amber); }
+.kontur-shell .k-stat-foot.k-amber > i { background: var(--k-amber); }
+.kontur-shell .k-overview-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; align-items: start; gap: 19px; }
+.kontur-shell .k-overview-primary, .kontur-shell .k-overview-secondary { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.kontur-shell .k-panel { background: var(--k-panel); border: 1px solid var(--k-line); border-radius: 8px; min-width: 0; overflow: hidden; }
+.kontur-shell .k-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 18px 15px; }
+.kontur-shell .k-panel-head > div { min-width: 0; }
+.kontur-shell .k-panel-head h2 { display: flex; align-items: center; gap: 7px; }
+.kontur-shell .k-panel-head p { color: var(--k-faint); font-size: 10px; margin-top: 4px; }
+.kontur-shell .k-panel-head > svg { color: var(--k-faint); }
+.kontur-shell .k-panel-head > .k-text-button { flex-shrink: 0; }
+.kontur-shell .k-focus-dot { width: 6px; height: 6px; border: 2px solid var(--k-lime-text); border-radius: 50%; box-shadow: 0 0 0 3px var(--k-lime-bg); margin-right: 3px; }
+.kontur-shell .k-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; border: 1px solid var(--k-line); border-radius: 4px; padding: 1px 5px; font-size: 9px; color: var(--k-muted); font-weight: 500; }
+.kontur-shell .k-attention-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 16px 18px; border: 0; border-top: 1px solid var(--k-line-soft); background: transparent; text-align: left; }
+.kontur-shell .k-attention-row:hover { background: var(--k-panel-raised); }
+.kontur-shell .k-project-mark { display: inline-flex; align-items: center; justify-content: center; width: 31px; height: 32px; flex-shrink: 0; border-radius: 7px; background: var(--k-violet-bg); color: var(--k-violet); font-size: 10px; font-weight: 700; letter-spacing: -.4px; }
+.kontur-shell .k-project-mark[data-tone="1"], .kontur-shell .k-project-mark[data-tone="3"] { color: var(--k-lime-text); background: var(--k-lime-bg); }
+.kontur-shell .k-project-mark[data-tone="2"] { color: var(--k-violet); background: color-mix(in srgb, var(--k-violet-bg) 70%, var(--k-red-bg)); }
+.kontur-shell .k-project-mark.is-small { width: 18px; height: 18px; font-size: 7px; border-radius: 4px; }
+.kontur-shell .k-attention-copy { display: block; flex: 1; min-width: 0; }
+.kontur-shell .k-attention-copy > small { display: block; color: var(--k-faint); font-size: 9px; margin-bottom: 5px; }
+.kontur-shell .k-attention-copy > strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12px; font-weight: 600; line-height: 1.5; }
+.kontur-shell .k-attention-copy > span { display: block; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; color: var(--k-muted); font-size: 10px; margin-top: 6px; }
+.kontur-shell .k-attention-tail { display: flex; align-items: center; gap: 8px; flex-shrink: 0; color: var(--k-faint); }
+.kontur-shell .k-status { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--k-line); padding: 3px 6px; border-radius: 4px; background: var(--k-panel-raised); color: var(--k-muted); font-size: 8px; white-space: nowrap; }
+.kontur-shell .k-status > i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+.kontur-shell .k-status[data-status="in-progress"] { color: var(--k-amber); background: var(--k-amber-bg); border-color: color-mix(in srgb, var(--k-amber) 25%, transparent); }
+.kontur-shell .k-status[data-status="review"] { color: var(--k-violet); background: var(--k-violet-bg); border-color: color-mix(in srgb, var(--k-violet) 25%, transparent); }
+.kontur-shell .k-status[data-status="blocked"] { color: var(--k-red); background: var(--k-red-bg); border-color: color-mix(in srgb, var(--k-red) 25%, transparent); }
+.kontur-shell .k-status[data-status="done"] { color: var(--k-lime-text); background: var(--k-lime-bg); border-color: color-mix(in srgb, var(--k-lime-text) 25%, transparent); }
+.kontur-shell .k-project-table-header { display: grid; grid-template-columns: minmax(0, 1fr) 74px 160px; gap: 12px; padding: 9px 18px; background: var(--k-panel-raised); color: var(--k-faint); font-size: 8px; }
+.kontur-shell .k-project-row { display: grid; grid-template-columns: minmax(0, 1fr) 74px 160px; gap: 12px; align-items: center; width: 100%; padding: 14px 18px; border: 0; border-top: 1px solid var(--k-line-soft); background: transparent; text-align: left; }
+.kontur-shell .k-project-row:hover { background: var(--k-panel-raised); }
+.kontur-shell .k-project-row > span:first-child { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.kontur-shell .k-project-row strong { font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
+.kontur-shell .k-project-row > span:nth-child(2) { display: flex; align-items: baseline; gap: 5px; font-size: 16px; }
+.kontur-shell .k-project-row small { color: var(--k-faint); font-size: 9px; }
+.kontur-shell .k-project-row > span:last-child { display: flex; align-items: center; gap: 6px; color: var(--k-muted); font-size: 9px; }
+.kontur-shell .k-project-row > span:last-child > svg:last-child { margin-left: auto; }
+.kontur-shell .k-next-dates > button:not(.k-panel-footer-link) { display: flex; align-items: center; gap: 11px; width: 100%; padding: 10px 17px; border: 0; border-top: 1px solid var(--k-line-soft); text-align: left; background: transparent; }
+.kontur-shell .k-next-dates > button:hover { background: var(--k-panel-raised); }
+.kontur-shell .k-date-chip { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 37px; min-height: 43px; border-radius: 6px; background: var(--k-violet-bg); color: var(--k-violet); font-size: 17px; line-height: 1.2; flex-shrink: 0; }
+.kontur-shell .k-date-chip > small { display: block; font-size: 8px; margin-top: 2px; }
+.kontur-shell .k-next-dates > button > span:nth-child(2) { min-width: 0; }
+.kontur-shell .k-next-dates strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 10px; font-weight: 550; }
+.kontur-shell .k-next-dates > button > span:nth-child(2) > small { display: block; color: var(--k-faint); font-size: 8px; margin-top: 3px; }
+.kontur-shell .k-panel-footer-link { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 12px 17px; border: 0; border-top: 1px solid var(--k-line-soft); color: var(--k-violet); background: transparent; font-size: 10px; }
+.kontur-shell .k-panel-footer-link:hover { background: var(--k-panel-raised); }
+.kontur-shell .k-services > a { display: flex; align-items: center; gap: 10px; padding: 12px 17px; border-top: 1px solid var(--k-line-soft); }
+.kontur-shell .k-services > a:hover { background: var(--k-panel-raised); }
+.kontur-shell .k-service-icon { display: grid; place-items: center; width: 31px; height: 32px; border-radius: 6px; background: var(--k-violet-bg); color: var(--k-violet); }
+.kontur-shell .k-services > a:nth-child(3) .k-service-icon { color: var(--k-lime-text); background: var(--k-lime-bg); }
+.kontur-shell .k-services > a > span:nth-child(2) { flex: 1; min-width: 0; }
+.kontur-shell .k-services strong { display: block; font-size: 10px; font-weight: 600; }
+.kontur-shell .k-services small { display: block; color: var(--k-faint); font-size: 8px; margin-top: 2px; overflow-wrap: anywhere; }
+.kontur-shell .k-services > a > svg { color: var(--k-faint); }
+.kontur-shell .k-continuation { display: flex; flex-direction: column; align-items: flex-start; gap: 13px; position: relative; overflow: hidden; padding: 21px; border: 1px solid color-mix(in srgb, var(--k-violet-solid) 45%, var(--k-line)); border-radius: 8px; background: linear-gradient(125deg, var(--k-violet-bg), var(--k-panel) 90%); }
+.kontur-shell .k-continuation::after { content: ''; position: absolute; width: 140px; height: 140px; border: 1px solid color-mix(in srgb, var(--k-violet-solid) 25%, transparent); border-radius: 28px; right: -92px; top: 39px; transform: rotate(-30deg); pointer-events: none; }
+.kontur-shell .k-continuation > svg { color: var(--k-lime-text); }
+.kontur-shell .k-continuation > .k-eyebrow { font-size: 7px; color: var(--k-violet); }
+.kontur-shell .k-continuation h2 { font-size: 23px; letter-spacing: -.65px; line-height: 1.25; }
+.kontur-shell .k-continuation p { color: var(--k-muted); font-size: 10px; max-width: 210px; }
+.kontur-shell .k-continuation button { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 10px 0 0; margin-top: 3px; border: 0; border-top: 1px solid var(--k-line); color: var(--k-lime-text); background: transparent; font-size: 10px; }
+.kontur-shell .k-mini-timeline > button { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 9px 17px 13px; border: 0; background: transparent; text-align: left; }
+.kontur-shell .k-mini-timeline > button:hover { background: var(--k-panel-raised); }
+.kontur-shell .k-timeline-dot { flex-shrink: 0; width: 6px; height: 6px; border: 1px solid var(--k-violet); border-radius: 50%; margin-top: 5px; }
+.kontur-shell .k-mini-timeline > button > span:last-child { min-width: 0; }
+.kontur-shell .k-mini-timeline small { display: block; color: var(--k-faint); font-size: 8px; }
+.kontur-shell .k-mini-timeline strong { display: block; font-size: 10px; font-weight: 500; margin: 4px 0; }
+.kontur-shell .k-mini-timeline p { color: var(--k-muted); font-size: 9px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.kontur-shell .k-section-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; min-width: 0; }
+.kontur-shell .k-section-title { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.kontur-shell .k-checkbox-label { display: inline-flex; align-items: center; gap: 7px; color: var(--k-muted); font-size: 10px; }
+.kontur-shell .k-checkbox-label input { accent-color: var(--k-violet-solid); width: 13px; height: 13px; }
+.kontur-shell .k-section-note { display: flex; align-items: flex-start; gap: 7px; color: var(--k-faint); font-size: 10px; padding: 12px 0 0; }
+.kontur-shell .k-panel > .k-section-note { padding: 0 17px 17px; }
+.kontur-shell .k-section-note > svg { margin-top: 1px; }
+.kontur-shell .k-kanban-board { display: flex; gap: 14px; overflow-x: auto; align-items: stretch; padding-bottom: 14px; scrollbar-width: thin; scrollbar-color: var(--k-line) var(--k-bg); }
+.kontur-shell .k-kanban-column { width: 272px; min-width: 272px; flex: 1; background: color-mix(in srgb, var(--k-panel) 65%, var(--k-bg)); border: 1px solid var(--k-line-soft); border-radius: 8px; transition: border-color .15s; }
+.kontur-shell .k-kanban-column.is-drop-target { border-color: var(--k-violet-solid); box-shadow: inset 0 0 0 1px var(--k-violet-solid); background: var(--k-violet-bg); }
+.kontur-shell .k-column-head { display: flex; align-items: center; gap: 7px; min-height: 48px; padding: 9px 12px; }
+.kontur-shell .k-column-head h2 { font-size: 11px; font-weight: 550; }
+.kontur-shell .k-column-head > span:nth-last-of-type(1):not(.k-column-dot) { color: var(--k-faint); font-size: 9px; padding: 1px 5px; background: var(--k-panel-raised); border-radius: 4px; }
+.kontur-shell .k-column-head > .k-icon-button { margin-left: auto; }
+.kontur-shell .k-column-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 2px; background: var(--k-faint); }
+.kontur-shell .k-column-dot[data-status="in-progress"] { background: var(--k-amber); }
+.kontur-shell .k-column-dot[data-status="review"] { background: var(--k-violet-solid); }
+.kontur-shell .k-column-dot[data-status="done"] { background: var(--k-lime-text); }
+.kontur-shell .k-column-dot[data-status="blocked"] { background: var(--k-red); }
+.kontur-shell .k-column-body { display: flex; flex-direction: column; gap: 9px; padding: 0 9px 10px; min-height: 210px; }
+.kontur-shell .k-task-card { background: var(--k-panel); border: 1px solid var(--k-line); border-radius: 7px; padding: 12px 12px 0; min-width: 0; }
+.kontur-shell .k-task-card:hover { border-color: color-mix(in srgb, var(--k-violet-solid) 65%, var(--k-line)); }
+.kontur-shell .k-task-card[draggable="true"] { cursor: grab; }
+.kontur-shell .k-task-card[draggable="true"]:active { cursor: grabbing; }
+.kontur-shell .k-task-card.is-saving { opacity: .6; }
+.kontur-shell .k-task-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; margin-bottom: 10px; }
+.kontur-shell .k-project-label { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 8px; color: var(--k-muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.kontur-shell .k-priority { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; color: var(--k-faint); font-size: 8px; white-space: nowrap; }
+.kontur-shell .k-priority[data-priority="critical"] { color: var(--k-red); }
+.kontur-shell .k-priority[data-priority="high"] { color: var(--k-amber); }
+.kontur-shell .k-priority[data-priority="medium"] { color: var(--k-violet); }
+.kontur-shell .k-task-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 5px; padding: 0; border: 0; width: 100%; background: transparent; text-align: left; font-size: 12px; line-height: 1.6; font-weight: 600; overflow-wrap: anywhere; }
+.kontur-shell .k-task-title > svg { margin-top: 3px; color: var(--k-faint); }
+.kontur-shell .k-task-next { color: var(--k-muted); font-size: 10px; margin: 11px 0 !important; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.6; }
+.kontur-shell .k-task-next > span { display: block; color: var(--k-faint); font-size: 8px; margin-bottom: 2px; }
+.kontur-shell .k-card-blocker { display: flex; align-items: flex-start; gap: 5px; padding: 6px 7px; border-radius: 4px; margin-bottom: 10px; color: var(--k-amber); background: var(--k-amber-bg); font-size: 9px; }
+.kontur-shell .k-card-blocker > svg { margin-top: 1px; }
+.kontur-shell .k-card-blocker > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.kontur-shell .k-task-meta { display: flex; flex-wrap: wrap; gap: 5px 9px; color: var(--k-faint); font-size: 8px; padding: 2px 0 9px; }
+.kontur-shell .k-task-meta > span, .kontur-shell .k-task-bottom > span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.kontur-shell .k-task-bottom { display: flex; align-items: center; justify-content: space-between; gap: 7px; border-top: 1px solid var(--k-line-soft); padding: 9px 0; color: var(--k-faint); font-size: 8px; }
+.kontur-shell .k-overdue { color: var(--k-amber); }
+.kontur-shell .k-task-context { border-top: 1px solid var(--k-line-soft); }
+.kontur-shell .k-task-context > summary { display: flex; align-items: center; justify-content: space-between; gap: 5px; list-style: none; padding: 9px 0; color: var(--k-violet); font-size: 8px; cursor: pointer; }
+.kontur-shell summary::-webkit-details-marker { display: none; }
+.kontur-shell .k-task-context[open] > summary > svg { transform: rotate(180deg); }
+.kontur-shell .k-card-facts { min-width: 0; padding-bottom: 12px; }
+.kontur-shell .k-card-facts dl { display: grid; gap: 13px; margin: 0; }
+.kontur-shell .k-card-facts dt { color: var(--k-faint); font-size: 9px; margin-bottom: 3px; }
+.kontur-shell .k-card-facts dd { margin: 0; color: var(--k-text); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflow-y: auto; scrollbar-width: thin; }
+.kontur-shell .k-card-facts dd > a { color: var(--k-violet); }
+.kontur-shell .k-card-facts dd > a > svg { display: inline; margin-left: 5px; }
+.kontur-shell .k-card-facts > .k-text-button { margin-top: 14px; font-size: 9px; }
+.kontur-shell .k-copy-inline { display: inline-flex; vertical-align: middle; margin-left: 7px; border: 0; padding: 3px; border-radius: 3px; color: var(--k-violet); background: var(--k-violet-bg); }
+.kontur-shell .k-unknown { color: var(--k-faint) !important; font-style: italic; }
+.kontur-shell .k-evidence-list { display: grid; gap: 5px; list-style: none; margin: 0; padding: 0; overflow-wrap: anywhere; }
+.kontur-shell .k-evidence-list a { color: var(--k-violet); font-size: 10px; }
+.kontur-shell .k-evidence-list a:hover { text-decoration: underline; }
+.kontur-shell .k-evidence-list a > svg { display: inline; margin-left: 5px; }
+.kontur-shell .k-column-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 150px; border: 1px dashed var(--k-line); border-radius: 6px; padding: 20px; color: var(--k-faint); text-align: center; font-size: 10px; }
+.kontur-shell .k-load-more { display: block; width: 100%; padding: 12px; border: 0; border-top: 1px solid var(--k-line-soft); color: var(--k-violet); background: transparent; font-size: 10px; }
+.kontur-shell .k-load-more:hover { background: var(--k-panel-raised); }
+.kontur-shell .k-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 220px; gap: 11px; padding: 35px 25px; text-align: center; }
+.kontur-shell .k-empty > svg { color: var(--k-violet); }
+.kontur-shell .k-empty > p { color: var(--k-muted); font-size: 11px; max-width: 390px; }
+.kontur-shell .k-empty > .k-button { margin-top: 3px; }
+.kontur-shell .k-empty-small { min-height: 200px; padding: 25px 18px; }
+.kontur-shell .k-empty-small h3 { font-size: 12px; }
+.kontur-shell .k-empty-small p { font-size: 10px; }
+.kontur-shell .k-sort { flex: 0 1 230px; }
+.kontur-shell .k-task-table-wrap { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--k-line) transparent; }
+.kontur-shell .k-task-table { width: 100%; border-collapse: collapse; font-size: 11px; min-width: 850px; }
+.kontur-shell .k-task-table th { padding: 11px 12px; color: var(--k-faint); font-size: 8px; font-weight: 500; text-align: left; background: var(--k-panel-raised); white-space: nowrap; }
+.kontur-shell .k-task-table th:first-child, .kontur-shell .k-task-table td:first-child { width: 36px; padding: 10px 0 10px 12px; }
+.kontur-shell .k-task-table td { padding: 13px 12px; border-top: 1px solid var(--k-line-soft); vertical-align: middle; }
+.kontur-shell .k-task-table th:nth-child(2) { width: 38%; }
+.kontur-shell .k-task-table tbody > tr:hover { background: color-mix(in srgb, var(--k-panel-raised) 40%, transparent); }
+.kontur-shell .k-review-open { display: inline-flex; align-items: center; justify-content: center; width: 28px; min-height: 28px; border: 0; border-radius: 4px; background: transparent; color: var(--k-faint); }
+.kontur-shell .k-review-open:hover { color: var(--k-lime-text); background: var(--k-lime-bg); }
+.kontur-shell .k-review-open.is-verified { color: var(--k-lime-text); }
+.kontur-shell .k-table-title { display: block; width: 100%; padding: 0; border: 0; background: transparent; text-align: left; }
+.kontur-shell .k-table-title > small { display: flex; align-items: center; gap: 5px; color: var(--k-faint); font-size: 8px; margin-bottom: 5px; }
+.kontur-shell .k-table-title > strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 11px; font-weight: 550; line-height: 1.55; }
+.kontur-shell .k-table-title > span { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; color: var(--k-muted); font-size: 9px; margin-top: 5px; }
+.kontur-shell .k-table-person { display: block; font-size: 10px; }
+.kontur-shell .k-table-machine { display: flex; align-items: center; gap: 4px; color: var(--k-faint); font-size: 9px; margin-top: 5px; }
+.kontur-shell .k-table-date { font-size: 9px; color: var(--k-muted); min-width: 110px; }
+.kontur-shell .k-table-detail > td { padding: 18px 36px !important; background: var(--k-input); }
+.kontur-shell .k-table-detail .k-card-facts dl { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 30px; }
+.kontur-shell .k-rotate { transform: rotate(180deg); }
+.kontur-shell .k-scroll-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.kontur-shell .k-scroll-tabs > button { border: 1px solid transparent; border-radius: 5px; padding: 6px 10px; background: transparent; color: var(--k-muted); font-size: 10px; }
+.kontur-shell .k-scroll-tabs > button[aria-pressed="true"] { color: var(--k-violet); border-color: var(--k-line); background: var(--k-violet-bg); }
+.kontur-shell .k-session-grid, .kontur-shell .k-release-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.kontur-shell .k-session-card { padding: 18px; }
+.kontur-shell .k-session-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 18px; }
+.kontur-shell .k-session-state { display: flex; align-items: center; gap: 5px; color: var(--k-faint); font-size: 9px; }
+.kontur-shell .k-session-state > i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.kontur-shell .k-session-state[data-state="running"] { color: var(--k-lime-text); }
+.kontur-shell .k-session-state[data-state="waiting"] { color: var(--k-amber); }
+.kontur-shell .k-session-state[data-state="result"] { color: var(--k-violet); }
+.kontur-shell .k-session-card > .k-eyebrow { letter-spacing: .2px; font-size: 9px; }
+.kontur-shell .k-session-card > h2 { margin-top: 7px; font-size: 13px; line-height: 1.6; min-height: 42px; }
+.kontur-shell .k-session-facts { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 17px 0 12px; color: var(--k-muted); font-size: 10px; }
+.kontur-shell .k-session-facts > span { display: inline-flex; align-items: center; gap: 5px; }
+.kontur-shell .k-session-ids { display: grid; gap: 8px; padding: 10px 0; border-top: 1px solid var(--k-line-soft); border-bottom: 1px solid var(--k-line-soft); }
+.kontur-shell .k-session-ids > div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 7px; font-size: 9px; }
+.kontur-shell .k-session-ids dt { color: var(--k-faint); }
+.kontur-shell .k-session-ids dd { margin: 0; overflow-wrap: anywhere; }
+.kontur-shell .k-session-time { display: flex; gap: 5px; align-items: center; margin: 12px 0 !important; color: var(--k-faint); font-size: 8px; }
+.kontur-shell .k-session-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.kontur-shell .k-error-filters { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 17px; }
+.kontur-shell .k-error-filters > button { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--k-line); border-radius: 5px; padding: 8px 10px; color: var(--k-muted); background: var(--k-panel); font-size: 10px; }
+.kontur-shell .k-error-filters > button[aria-pressed="true"] { color: var(--k-violet); border-color: var(--k-violet-solid); background: var(--k-violet-bg); }
+.kontur-shell .k-error-filters > button > span { font-size: 9px; }
+.kontur-shell .k-blocker-list { display: flex; flex-direction: column; gap: 12px; }
+.kontur-shell .k-blocker-card { display: grid; grid-template-columns: 37px minmax(0, 1fr) auto; align-items: start; gap: 15px; padding: 20px; }
+.kontur-shell .k-blocker-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 7px; color: var(--k-amber); background: var(--k-amber-bg); }
+.kontur-shell .k-blocker-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--k-faint); font-size: 9px; margin-bottom: 8px; }
+.kontur-shell .k-error-tag { display: inline-flex; align-items: center; border-radius: 4px; padding: 2px 5px; border: 1px solid color-mix(in srgb, var(--k-amber) 30%, transparent); background: var(--k-amber-bg); color: var(--k-amber); font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.kontur-shell .k-blocker-title { display: block; padding: 0; border: 0; background: transparent; text-align: left; font-size: 13px; font-weight: 600; line-height: 1.6; }
+.kontur-shell .k-blocker-title:hover { color: var(--k-violet); }
+.kontur-shell .k-blocker-card p { color: var(--k-muted); font-size: 11px; margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.kontur-shell .k-blocker-next { display: flex; align-items: flex-start; gap: 6px; margin-top: 13px; color: var(--k-violet); font-size: 10px; }
+.kontur-shell .k-blocker-next > svg { margin-top: 2px; }
+.kontur-shell .k-blocker-tail { display: flex; align-items: flex-end; flex-direction: column; gap: 12px; }
+.kontur-shell .k-blocker-tail > small { font-size: 8px; color: var(--k-faint); }
+.kontur-shell .k-native-diagnostics { margin-top: 22px; color: var(--k-muted); font-size: 11px; }
+.kontur-shell .k-native-diagnostics[hidden] { display: none; }
+.kontur-shell .k-native-diagnostics > details { border-color: var(--k-line); background: var(--k-panel); border-radius: 7px; padding: 14px; }
+.kontur-shell .k-native-diagnostics summary { color: var(--k-text); margin-bottom: 5px; }
+.kontur-shell .k-native-diagnostics button { margin: 10px 0; border: 1px solid var(--k-line); border-radius: 4px; padding: 5px 8px; color: var(--k-violet); }
+.kontur-shell .k-release-card { padding: 18px; display: flex; flex-direction: column; gap: 13px; }
+.kontur-shell .k-release-top { display: flex; justify-content: space-between; gap: 10px; color: var(--k-faint); font-size: 9px; }
+.kontur-shell .k-release-top > span:first-child { display: flex; align-items: center; gap: 5px; color: var(--k-violet); }
+.kontur-shell .k-release-top > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kontur-shell .k-release-card h2 { font-size: 13px; overflow-wrap: anywhere; }
+.kontur-shell .k-release-card > code { display: block; padding: 9px; border: 1px solid var(--k-line-soft); border-radius: 5px; background: var(--k-input); font-size: 10px; overflow-wrap: anywhere; max-height: 110px; overflow-y: auto; }
+.kontur-shell .k-release-card > p { color: var(--k-muted); font-size: 10px; }
+.kontur-shell .k-release-source { display: flex; align-items: flex-start; gap: 6px; padding: 8px 0; border: 0; background: transparent; color: var(--k-muted); font-size: 10px; text-align: left; }
+.kontur-shell .k-release-source > span { flex: 1; min-width: 0; }
+.kontur-shell .k-release-source:hover { color: var(--k-violet); }
+.kontur-shell .k-release-footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--k-line-soft); }
+.kontur-shell .k-release-footer > small { color: var(--k-faint); font-size: 8px; }
+.kontur-shell .k-subtle { color: var(--k-faint); font-size: 10px; }
+.kontur-shell .k-text-violet { color: var(--k-violet); font-size: 10px; }
+.kontur-shell .k-decision-list { display: flex; flex-direction: column; gap: 12px; }
+.kontur-shell .k-decision-card { display: flex; align-items: flex-start; gap: 18px; padding: 21px; }
+.kontur-shell .k-decision-index { font-size: 21px; font-weight: 500; color: var(--k-violet); opacity: .75; line-height: 1.2; }
+.kontur-shell .k-decision-copy { flex: 1; min-width: 0; }
+.kontur-shell .k-entry-meta { display: flex; flex-wrap: wrap; gap: 7px; color: var(--k-faint); font-size: 9px; margin-bottom: 8px; }
+.kontur-shell .k-decision-copy > h2 { font-size: 13px; }
+.kontur-shell .k-decision-copy > p { color: var(--k-muted); font-size: 11px; margin: 8px 0 11px; white-space: pre-wrap; }
+.kontur-shell .k-decision-copy > small { display: flex; align-items: center; gap: 5px; color: var(--k-faint); font-size: 9px; }
+.kontur-shell .k-decision-copy > .k-evidence-list { margin: 11px 0; }
+.kontur-shell .k-decision-copy > .k-text-button { justify-content: flex-start; margin-top: 5px; }
+.kontur-shell .k-decision-kind { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border: 1px solid var(--k-line); border-radius: 7px; color: var(--k-violet); background: var(--k-violet-bg); }
+.kontur-shell .k-decision-kind[data-decision="accepted"] { color: var(--k-lime-text); background: var(--k-lime-bg); }
+.kontur-shell .k-activity-entry + .k-activity-entry { border-top: 1px solid var(--k-line-soft); }
+.kontur-shell .k-activity-entry > summary { display: flex; align-items: center; gap: 13px; padding: 17px 19px; cursor: pointer; list-style: none; }
+.kontur-shell .k-activity-entry > summary:hover { background: var(--k-panel-raised); }
+.kontur-shell .k-activity-entry > summary > svg { color: var(--k-faint); }
+.kontur-shell .k-activity-entry[open] > summary > svg { transform: rotate(180deg); }
+.kontur-shell .k-activity-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--k-violet-bg); color: var(--k-violet); flex-shrink: 0; }
+.kontur-shell .k-activity-summary { flex: 1; min-width: 0; }
+.kontur-shell .k-activity-summary > small { display: block; color: var(--k-faint); font-size: 9px; }
+.kontur-shell .k-activity-summary > strong { display: block; font-size: 12px; font-weight: 550; margin: 4px 0; }
+.kontur-shell .k-activity-summary > span { display: block; color: var(--k-muted); font-size: 10px; }
+.kontur-shell .k-activity-detail { padding: 0 20px 20px 64px; }
+.kontur-shell .k-activity-detail > p { color: var(--k-muted); font-size: 11px; white-space: pre-wrap; margin-bottom: 10px; }
+.kontur-shell .k-activity-detail > small { color: var(--k-faint); font-size: 9px; }
+.kontur-shell .k-activity-detail > .k-evidence-list { margin: 12px 0; }
+.kontur-shell .k-activity-detail > .k-text-button { margin-top: 10px; }
+.kontur-shell .k-calendar-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.kontur-shell .k-calendar-navigation h2 { text-transform: capitalize; min-width: 140px; text-align: center; font-size: 14px; }
+.kontur-shell .k-calendar-navigation > .k-button { margin-left: 6px; }
+.kontur-shell .k-calendar-layout { display: grid; grid-template-columns: minmax(0, 1fr) 270px; align-items: start; gap: 16px; }
+.kontur-shell .k-weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-bottom: 1px solid var(--k-line); background: var(--k-panel-raised); }
+.kontur-shell .k-weekdays > span { text-align: center; padding: 12px 3px; color: var(--k-faint); font-size: 9px; }
+.kontur-shell .k-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.kontur-shell .k-calendar-cell { display: flex; flex-direction: column; align-items: flex-start; position: relative; min-width: 0; min-height: 102px; border: 0; border-right: 1px solid var(--k-line-soft); border-bottom: 1px solid var(--k-line-soft); padding: 8px 6px; background: transparent; text-align: left; }
+.kontur-shell .k-calendar-cell:nth-child(7n) { border-right: 0; }
+.kontur-shell .k-calendar-cell:nth-last-child(-n + 7) { border-bottom: 0; }
+.kontur-shell .k-calendar-cell:hover { background: var(--k-panel-raised); }
+.kontur-shell .k-calendar-cell.is-selected { background: var(--k-violet-bg); box-shadow: inset 0 0 0 1px var(--k-violet-solid); }
+.kontur-shell .k-cell-day { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; font-size: 10px; }
+.kontur-shell .k-calendar-cell.is-outside .k-cell-day { color: var(--k-faint); opacity: .65; }
+.kontur-shell .k-calendar-cell.is-today .k-cell-day { background: var(--k-lime); color: #1d2900; font-weight: 700; }
+.kontur-shell .k-cell-events { display: flex; flex-direction: column; align-items: flex-start; width: 100%; gap: 3px; margin-top: 5px; }
+.kontur-shell .k-cell-events > span { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; max-width: 100%; padding: 2px 3px; border-left: 2px solid var(--k-violet-solid); color: var(--k-violet); background: color-mix(in srgb, var(--k-violet-bg) 45%, transparent); font-size: 8px; line-height: 1.4; }
+.kontur-shell .k-cell-events > span.is-closed { color: var(--k-muted); border-left-color: var(--k-faint); }
+.kontur-shell .k-cell-events > small { font-size: 8px; color: var(--k-faint); margin-left: 4px; }
+.kontur-shell .k-cell-count { display: none; }
+.kontur-shell .k-day-agenda .k-panel-head { align-items: flex-start; }
+.kontur-shell .k-day-agenda .k-panel-head h2 { margin-top: 6px; font-size: 12px; text-transform: capitalize; line-height: 1.5; }
+.kontur-shell .k-calendar-event { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 15px 17px; border: 0; border-top: 1px solid var(--k-line-soft); background: transparent; text-align: left; }
+.kontur-shell .k-calendar-event:hover { background: var(--k-panel-raised); }
+.kontur-shell .k-event-line { width: 3px; min-height: 39px; background: var(--k-violet-solid); border-radius: 2px; margin-top: 3px; flex-shrink: 0; }
+.kontur-shell .k-priority-line-high { background: var(--k-amber); }
+.kontur-shell .k-priority-line-critical { background: var(--k-red); }
+.kontur-shell .k-event-copy { flex: 1; min-width: 0; }
+.kontur-shell .k-event-copy > small { display: block; color: var(--k-faint); font-size: 9px; margin-bottom: 4px; }
+.kontur-shell .k-event-copy > strong { display: block; font-size: 11px; line-height: 1.55; font-weight: 550; }
+.kontur-shell .k-event-copy > span { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; color: var(--k-muted); font-size: 9px; margin-top: 7px; }
+.kontur-shell .k-calendar-event > svg { color: var(--k-faint); margin-top: 3px; }
+.kontur-shell .k-calendar-event.is-closed .k-event-line { background: var(--k-faint); }
+.kontur-shell .k-calendar-event.is-closed .k-event-copy > strong { color: var(--k-muted); }
+.kontur-shell .k-undated { margin-top: 19px; }
+.kontur-shell .k-undated > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; list-style: none; padding: 15px 17px; cursor: pointer; }
+.kontur-shell .k-undated > summary > span:first-child { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.kontur-shell .k-undated-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; width: 100%; padding: 12px 17px; border: 0; border-top: 1px solid var(--k-line-soft); background: transparent; text-align: left; }
+.kontur-shell .k-undated-row:hover { background: var(--k-panel-raised); }
+.kontur-shell .k-undated-row > span { min-width: 0; }
+.kontur-shell .k-undated-row small { display: block; color: var(--k-faint); font-size: 9px; margin-bottom: 4px; }
+.kontur-shell .k-undated-row strong { display: block; font-size: 11px; font-weight: 500; }
+.kontur-shell .k-undated-row > svg { color: var(--k-faint); }
+.kontur-shell .k-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 29px; padding-top: 15px; border-top: 1px solid var(--k-line); font-size: 8px; color: var(--k-faint); }
+.kontur-shell .k-footer > span { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.kontur-shell .k-footer .k-text-button { font-size: 9px; color: var(--k-faint); }
+.kontur-shell .k-toast { position: fixed; z-index: 100; bottom: 22px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: min(620px, calc(100vw - 26px)); padding: 10px 10px 10px 15px; border: 1px solid var(--k-violet-solid); border-radius: 8px; background: var(--k-panel-raised); color: var(--k-text); box-shadow: var(--k-shadow); font-size: 11px; }
+.kontur-shell .k-toast > span:nth-child(2) { min-width: 0; }
+.kontur-shell .k-toast > button { flex-shrink: 0; }
+.kontur-shell .k-loading { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; padding: 45px 0; color: var(--k-muted); }
+.kontur-shell .k-loading > svg { color: var(--k-violet); }
+.kontur-shell .k-loading-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; width: 100%; margin-top: 20px; }
+.kontur-shell .k-loading-grid > i { height: 130px; border-radius: 8px; border: 1px solid var(--k-line); background: linear-gradient(120deg, var(--k-panel), var(--k-panel-raised)); }
+.kontur-shell .k-spin { animation: kontur-spin 1s linear infinite; }
+@keyframes kontur-spin { to { transform: rotate(360deg); } }
+.kontur-shell .k-mobile-menu, .kontur-shell .k-mobile-close, .kontur-shell .k-sidebar-backdrop { display: none; }
+
+@media (min-width: 1700px) {
+  .kontur-shell { grid-template-columns: 236px minmax(0, 1fr); }
+  .kontur-shell .k-main { padding: 34px 42px 24px; }
+  .kontur-shell .k-overview-grid { grid-template-columns: minmax(0, 1fr) 330px; }
+  .kontur-shell .k-stat { min-height: 153px; padding: 20px; }
+  .kontur-shell .k-stat > strong { font-size: 34px; }
+  .kontur-shell .k-attention-row { padding: 19px 21px; }
+}
+@media (max-width: 1230px) {
+  .kontur-shell { grid-template-columns: 198px minmax(0, 1fr); }
+  .kontur-shell .k-sidebar { padding-left: 9px; padding-right: 9px; }
+  .kontur-shell .k-topbar { padding-left: 24px; padding-right: 24px; }
+  .kontur-shell .k-main { padding: 25px 24px 20px; }
+  .kontur-shell .k-heading-actions { flex-wrap: wrap; justify-content: flex-end; max-width: 290px; }
+  .kontur-shell .k-overview-grid { grid-template-columns: minmax(0, 1fr) 250px; gap: 15px; }
+  .kontur-shell .k-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kontur-shell .k-stat { min-height: 126px; gap: 12px; }
+  .kontur-shell .k-search { max-width: none; }
+  .kontur-shell .k-project-table-header, .kontur-shell .k-project-row { grid-template-columns: minmax(0, 1fr) 53px; gap: 9px; }
+  .kontur-shell .k-project-table-header > span:last-child, .kontur-shell .k-project-row > span:last-child { display: none; }
+  .kontur-shell .k-attention-tail .k-status { max-width: 85px; white-space: normal; font-size: 8px; }
+  .kontur-shell .k-attention-tail > svg { display: none; }
+  .kontur-shell .k-attention-row { padding: 14px; gap: 9px; }
+  .kontur-shell .k-session-grid, .kontur-shell .k-release-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kontur-shell .k-calendar-layout { grid-template-columns: minmax(0, 1fr); }
+  .kontur-shell .k-day-agenda { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kontur-shell .k-day-agenda > .k-panel-head, .kontur-shell .k-day-agenda > .k-empty { grid-column: 1 / -1; }
+}
+@media (max-width: 940px) {
+  .kontur-shell .k-overview-grid { grid-template-columns: minmax(0, 1fr); }
+  .kontur-shell .k-overview-secondary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kontur-shell .k-project-table-header, .kontur-shell .k-project-row { grid-template-columns: minmax(0, 1fr) 60px 150px; }
+  .kontur-shell .k-project-table-header > span:last-child { display: block; }
+  .kontur-shell .k-project-row > span:last-child { display: flex; }
+  .kontur-shell .k-blocker-card { grid-template-columns: 32px minmax(0, 1fr); }
+  .kontur-shell .k-blocker-tail { grid-column: 2; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 10px; }
+  .kontur-shell .k-blocker-tail > button { margin-left: auto; }
+  .kontur-shell .k-page-heading { align-items: flex-start; }
+  .kontur-shell .k-page-heading h1 { font-size: 27px; }
+}
+@media (max-width: 767px) {
+  .kontur-shell { display: block; }
+  .kontur-shell .k-sidebar { position: fixed; z-index: 61; width: 248px; left: 0; bottom: 0; transform: translateX(-100%); visibility: hidden; transition: transform .18s, visibility .18s; padding: 22px 14px 16px; }
+  .kontur-shell.menu-open .k-sidebar { transform: translateX(0); visibility: visible; }
+  .kontur-shell .k-sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 60; background: #050308b5; border: 0; }
+  .kontur-shell .k-mobile-menu, .kontur-shell .k-mobile-close { display: inline-flex; }
+  .kontur-shell .k-mobile-menu { margin-left: -5px; }
+  .kontur-shell .k-topbar { min-height: 57px; position: sticky; top: 0; z-index: 20; padding: 9px 17px; }
+  .kontur-shell .k-breadcrumb { gap: 7px; }
+  .kontur-shell .k-breadcrumb > span, .kontur-shell .k-breadcrumb > svg { display: none; }
+  .kontur-shell .k-topbar-actions { gap: 7px; }
+  .kontur-shell .k-main { padding: 23px 17px 18px; }
+  .kontur-shell .k-page-heading { gap: 16px; margin-bottom: 21px; flex-wrap: wrap; }
+  .kontur-shell .k-page-heading > div:first-child { flex: 1; min-width: 170px; }
+  .kontur-shell .k-page-heading h1 { font-size: 29px; }
+  .kontur-shell .k-heading-actions { max-width: none; justify-content: flex-start; }
+  .kontur-shell .k-heading-actions > .k-button { min-height: 37px; }
+  .kontur-shell .k-filter-selects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex-basis: 100%; }
+  .kontur-shell .k-select select { min-height: 36px; font-size: 11px; }
+  .kontur-shell .k-reset-filters { grid-column: 1 / -1; width: 100%; min-height: 25px; border: 1px dashed var(--k-line); border-radius: 5px; }
+  .kontur-shell .k-reset-filters::after { content: 'Сбросить фильтры'; display: inline; font-size: 10px; }
+  .kontur-shell .k-reset-filters { display: inline-flex; justify-content: center; align-items: center; gap: 6px; }
+  .kontur-shell .k-search { max-width: none; min-height: 36px; }
+  .kontur-shell .k-search input { height: 34px; font-size: 11px; }
+  .kontur-shell .k-scope-row { margin-bottom: 18px; }
+  .kontur-shell .k-scope-row > span { font-size: 8px; }
+  .kontur-shell .k-scope-switch > button { min-height: 27px; }
+  .kontur-shell .k-stat { padding: 15px 13px 12px; min-height: 132px; }
+  .kontur-shell .k-stat > strong { font-size: 31px; gap: 6px; }
+  .kontur-shell .k-overview-date { font-size: 9px; }
+  .kontur-shell .k-panel-head { padding: 16px; }
+  .kontur-shell .k-panel-head > .k-text-button { font-size: 9px; }
+  .kontur-shell .k-attention-row { padding: 15px; }
+  .kontur-shell .k-attention-copy > strong { font-size: 12px; }
+  .kontur-shell .k-attention-tail .k-status { max-width: none; white-space: nowrap; }
+  .kontur-shell .k-attention-tail > svg { display: block; }
+  .kontur-shell .k-table-title > strong { font-size: 12px; }
+  .kontur-shell .k-task-table-wrap { overflow: visible; }
+  .kontur-shell .k-task-table { display: block; min-width: 0; }
+  .kontur-shell .k-task-table thead { display: none; }
+  .kontur-shell .k-task-table tbody { display: block; }
+  .kontur-shell .k-task-table tbody > tr { display: grid; grid-template-columns: 27px minmax(0, 1fr) 28px; gap: 7px 8px; padding: 15px 12px; border-bottom: 1px solid var(--k-line); }
+  .kontur-shell .k-task-table td { display: block; padding: 0 !important; border: 0; min-width: 0; }
+  .kontur-shell .k-task-table td:first-child { grid-column: 1; grid-row: 1; width: auto; }
+  .kontur-shell .k-task-table td:nth-child(2) { grid-column: 2; grid-row: 1; }
+  .kontur-shell .k-task-table td:nth-child(3) { grid-column: 2; grid-row: 2; }
+  .kontur-shell .k-task-table td:nth-child(4) { grid-column: 2; grid-row: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; }
+  .kontur-shell .k-task-table td:nth-child(5) { grid-column: 2; grid-row: 4; }
+  .kontur-shell .k-task-table td:nth-child(6) { grid-column: 2; grid-row: 5; }
+  .kontur-shell .k-task-table td:nth-child(7) { grid-column: 3; grid-row: 1; }
+  .kontur-shell .k-table-machine { margin: 0; }
+  .kontur-shell .k-table-date::before { content: 'Срок: '; color: var(--k-faint); }
+  .kontur-shell .k-task-table tbody > .k-table-detail { display: block; padding: 18px; background: var(--k-input); }
+  .kontur-shell .k-task-table tbody > .k-table-detail > td { display: block; padding: 0 !important; }
+  .kontur-shell .k-table-detail .k-card-facts dl { grid-template-columns: minmax(0, 1fr); gap: 17px; }
+  .kontur-shell .k-table-detail .k-card-facts { padding: 0; }
+  .kontur-shell .k-sort { flex-basis: 225px; }
+  .kontur-shell .k-kanban-column { width: 270px; min-width: 270px; }
+  .kontur-shell .k-scroll-tabs > button { min-height: 33px; }
+  .kontur-shell .k-session-actions { gap: 9px; }
+  .kontur-shell .k-alert { flex-wrap: wrap; }
+  .kontur-shell .k-alert > div { flex-basis: calc(100% - 32px); }
+  .kontur-shell .k-alert > .k-button { margin-left: 28px; }
+  .kontur-shell .k-toast { bottom: 14px; width: max-content; }
+  .kontur-shell .k-footer-dot { display: none; }
+  .kontur-shell .k-footer > span { line-height: 1.8; }
+}
+@media (max-width: 540px) {
+  .kontur-shell .k-heading-actions { width: 100%; gap: 6px; }
+  .kontur-shell .k-heading-actions > .k-button-primary { margin-left: auto; }
+  .kontur-shell .k-heading-actions > .k-button:not(.k-button-primary) { font-size: 10px; padding: 7px 9px; }
+  .kontur-shell .k-refresh-label { display: none; }
+  .kontur-shell .k-overview-secondary { display: flex; }
+  .kontur-shell .k-project-table-header, .kontur-shell .k-project-row { grid-template-columns: minmax(0, 1fr) 62px; }
+  .kontur-shell .k-project-table-header > span:last-child, .kontur-shell .k-project-row > span:last-child { display: none; }
+  .kontur-shell .k-attention-tail > svg { display: none; }
+  .kontur-shell .k-attention-tail { align-self: flex-start; margin-top: 21px; }
+  .kontur-shell .k-attention-tail .k-status { max-width: 77px; white-space: normal; font-size: 8px; }
+  .kontur-shell .k-attention-row > .k-project-mark { width: 25px; height: 27px; font-size: 8px; }
+  .kontur-shell .k-attention-row { gap: 8px; padding: 15px 13px; }
+  .kontur-shell .k-attention-copy > small { font-size: 8px; }
+  .kontur-shell .k-attention-copy > strong { font-size: 11px; }
+  .kontur-shell .k-attention-copy > span { font-size: 9px; }
+  .kontur-shell .k-stats { gap: 9px; }
+  .kontur-shell .k-stat > span:first-child { font-size: 9px; }
+  .kontur-shell .k-stat > span:first-child > svg { width: 14px; }
+  .kontur-shell .k-stat > strong { flex-direction: column; gap: 6px; font-size: 28px; }
+  .kontur-shell .k-stat > strong > small { font-size: 8px; }
+  .kontur-shell .k-stat-foot { font-size: 7px; gap: 4px; align-items: flex-start; }
+  .kontur-shell .k-stat-foot > i { margin-top: 3px; }
+  .kontur-shell .k-stat-foot > svg { display: none; }
+  .kontur-shell .k-session-grid, .kontur-shell .k-release-grid { grid-template-columns: minmax(0, 1fr); }
+  .kontur-shell .k-session-card { padding: 17px; }
+  .kontur-shell .k-session-card > h2 { min-height: 0; }
+  .kontur-shell .k-blocker-card { gap: 10px; padding: 16px; grid-template-columns: 27px minmax(0, 1fr); }
+  .kontur-shell .k-blocker-icon { width: 27px; height: 29px; }
+  .kontur-shell .k-blocker-icon > svg { width: 16px; }
+  .kontur-shell .k-blocker-title { font-size: 12px; }
+  .kontur-shell .k-blocker-card p { font-size: 10px; }
+  .kontur-shell .k-decision-card { gap: 10px; padding: 17px 13px; }
+  .kontur-shell .k-decision-index { font-size: 17px; }
+  .kontur-shell .k-decision-kind { width: 25px; height: 26px; }
+  .kontur-shell .k-decision-kind > svg { width: 14px; }
+  .kontur-shell .k-activity-entry > summary { gap: 9px; padding: 16px 13px; }
+  .kontur-shell .k-activity-summary > strong { font-size: 11px; }
+  .kontur-shell .k-activity-icon { width: 27px; height: 27px; }
+  .kontur-shell .k-activity-detail { padding: 0 15px 17px; }
+  .kontur-shell .k-calendar-navigation { gap: 2px; }
+  .kontur-shell .k-calendar-navigation h2 { min-width: 122px; font-size: 12px; }
+  .kontur-shell .k-calendar-cell { min-height: 60px; padding: 6px 3px; align-items: center; }
+  .kontur-shell .k-cell-events { display: none; }
+  .kontur-shell .k-cell-count { display: inline-flex; align-items: center; justify-content: center; min-width: 15px; height: 15px; border-radius: 4px; margin-top: 5px; padding: 0 3px; color: var(--k-violet); background: var(--k-violet-bg); font-size: 8px; }
+  .kontur-shell .k-calendar-cell.is-selected .k-cell-count { color: var(--k-text); }
+  .kontur-shell .k-day-agenda { display: block; }
+  .kontur-shell .k-weekdays > span { font-size: 8px; padding: 10px 2px; }
+  .kontur-shell .k-notice { font-size: 10px; padding: 10px; }
+  .kontur-shell .k-notice > svg { width: 14px; }
+  .kontur-shell .k-sort { flex-basis: 100%; }
+  .kontur-shell .k-overview-date { flex-wrap: wrap; gap: 5px; }
+  .kontur-shell .k-section-toolbar > .k-subtle { font-size: 9px; }
+  .kontur-shell .k-loading-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 359px) {
+  .kontur-shell .k-main { padding-left: 12px; padding-right: 12px; }
+  .kontur-shell .k-topbar { padding-left: 12px; padding-right: 12px; }
+  .kontur-shell .k-read-status { font-size: 8px; }
+  .kontur-shell .k-heading-actions > .k-button-primary { font-size: 10px; padding: 8px 9px; }
+  .kontur-shell .k-heading-actions > .k-button:first-child { gap: 5px; font-size: 9px; }
+  .kontur-shell .k-page-heading h1 { font-size: 27px; }
+  .kontur-shell .k-panel-head { padding: 15px 13px; }
+  .kontur-shell .k-panel-head h2 { font-size: 13px; }
+  .kontur-shell .k-panel-head p { font-size: 9px; }
+  .kontur-shell .k-stat { padding: 12px 10px; }
+  .kontur-shell .k-attention-tail { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kontur-shell *, .kontur-shell *::before, .kontur-shell *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { todoPreview } from "@/lib/kanban/public-preview";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: todoPreview.title,
+  title: "Контур | Проекты, задачи и агенты",
   description: todoPreview.description,
   metadataBase: new URL(todoPreview.url),
   twitter: { card: "summary_large_image", title: todoPreview.title, description: todoPreview.description, images: [todoPreview.image] },
@@ -36,6 +36,8 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = { colorScheme: "dark light", themeColor: "#09080d" };
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -48,8 +50,10 @@ export default function RootLayout({
       >
         <ThemeProvider
           attribute="class"
-          defaultTheme="system"
-          enableSystem
+          storageKey="kontur-theme"
+          defaultTheme="dark"
+          enableSystem={false}
+          enableColorScheme={false}
           disableTransitionOnChange
         >
           {children}

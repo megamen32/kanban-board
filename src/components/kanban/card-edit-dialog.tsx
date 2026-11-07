@@ -29,6 +29,8 @@ import { hasCardHistory } from './card-history';
 import { CardHierarchyPanel } from './card-hierarchy-panel';
 import { getEligibleParentCards } from './card-hierarchy';
 import { canCompleteDirectly, canTakeOwnReview } from './card-completion';
+import { ResultVerification } from './result-verification';
+import { IntegratorTaskDashboard } from './integrator-task-dashboard';
 import { isTaskActor, taskPersonLabel } from '@/lib/kanban/task-membership';
 import { usesLegacyNoticeQuestion, shouldRefreshExecutionCard } from './card-question-visibility';
 
@@ -51,6 +53,8 @@ interface Props {
   onUpdate?: (id: string, updates: KanbanUpdateRequest, version?: number) => Promise<KanbanCard | null>;
   onReviewDecision?: (id: string, action: HumanReviewAction, note: string, version: number) => Promise<KanbanCard | null>;
   onSelectCard?: (card: KanbanCard) => void;
+  /** Kontur requires a recorded human check before either completion path. */
+  requireReviewBeforeDone?: boolean;
 }
 
 export interface PlanningMetadataForm {
@@ -92,7 +96,7 @@ export function buildPlanningMetadataUpdates(card: KanbanCard, form: PlanningMet
   return updates as KanbanUpdateRequest;
 }
 
-export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, onReviewDecision, onSelectCard, roles, projectOptions = [], relatedCards = [], breadcrumbCards = relatedCards, username, onRefresh }: Props) {
+export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, onReviewDecision, onSelectCard, roles, projectOptions = [], relatedCards = [], breadcrumbCards = relatedCards, username, onRefresh, requireReviewBeforeDone = false }: Props) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
   const [editingDescription, setEditingDescription] = useState(false);
@@ -111,6 +115,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [reviewNote, setReviewNote] = useState('');
+  const [verificationOpen, setVerificationOpen] = useState(false);
+  const verificationRef = useRef<HTMLDivElement>(null);
   const [baseline, setBaseline] = useState(card);
   const [calendarStatus, setCalendarStatus] = useState<CalendarBridgeStatus | 'unavailable' | null>(null);
   const [calendarDuration, setCalendarDuration] = useState(60);
@@ -134,10 +140,15 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     setBaseline(card);
     setError(null);
     setReviewNote('');
+    setVerificationOpen(false);
     setDueAt(toDateTimeLocalValue(card.dueAt));
     setPlanning(initialPlanningMetadata(card));
     // A remote update must not erase unsaved input or silently advance its CAS.
   }, [card.id, open]);
+
+  useEffect(() => {
+    if (verificationOpen) verificationRef.current?.scrollIntoView({block: 'center', behavior: 'smooth'});
+  }, [verificationOpen]);
 
   // Calendar bridge state is per user and lives only while the dialog is open.
   useEffect(() => {
@@ -207,6 +218,10 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
 
   const handleSave = async () => {
     if (!title.trim() || !project.trim() || !onUpdate || saving) return;
+    if (requireReviewBeforeDone && column === 'done' && baseline.column !== 'done') {
+      setError('Сначала сохраните правки задачи, затем нажмите «Завершить задачу» для проверки результата.');
+      setColumn(baseline.column); return;
+    }
     const nextAssignees = assignees.split(',').map(value => value.trim()).filter(Boolean);
     const assigneesChanged = JSON.stringify(nextAssignees) !== JSON.stringify(baseline.assignees);
     if (assigneesChanged && !reassignmentConfirmed) return;
@@ -233,8 +248,29 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     finally { setSaving(false); }
   };
 
+  const hasUnsavedDraft = title !== baseline.title || description !== baseline.description
+    || nextAction !== (baseline.nextAction ?? '') || blockerReason !== (baseline.blockerReason ?? '')
+    || column !== baseline.column || priority !== baseline.priority || project !== baseline.project
+    || assignees !== baseline.assignees.join(', ') || dueAt !== toDateTimeLocalValue(baseline.dueAt)
+    || JSON.stringify(tags) !== JSON.stringify(baseline.tags) || !!tagInput.trim()
+    || JSON.stringify(planning) !== JSON.stringify(initialPlanningMetadata(baseline));
+
+  const cleanDraftForDecision = () => {
+    if (hasUnsavedDraft) {
+      setError('В форме есть несохранённые изменения. Сначала сохраните их, затем примите решение по результату.');
+      return false;
+    }
+    if (baseline.version !== card.version) {
+      setError('Карточка обновилась во время просмотра. Закройте её и откройте снова, чтобы проверить актуальную версию.');
+      return false;
+    }
+    return true;
+  };
+
   const handleComplete = async () => {
     if (!onUpdate || saving || !canCompleteDirectly(card, username)) return;
+    if (!cleanDraftForDecision()) return;
+    if (requireReviewBeforeDone) { setVerificationOpen(true); return; }
     setSaving(true);
     setError(null);
     try {
@@ -263,6 +299,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
 
   const handleTakeReview = async () => {
     if (!onUpdate || saving || !canTakeOwnReview(card, username)) return;
+    if (!cleanDraftForDecision()) return;
     setSaving(true);
     setError(null);
     try {
@@ -270,6 +307,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
       const saved = await onUpdate(card.id, { requiresApprovalFrom: ['nikita'] }, card.version);
       if (!saved) { setError('Карточка изменилась. Обновите её перед назначением проверки.'); return; }
       setBaseline(saved);
+      setPlanning(initialPlanningMetadata(saved));
       onSelectCard?.(saved);
     } catch (failure) { setError(mutationErrorMessage(failure)); }
     finally { setSaving(false); }
@@ -285,6 +323,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
 
   const handleReview = async (action: HumanReviewAction) => {
     if (!onReviewDecision || saving) return;
+    if (!cleanDraftForDecision()) return;
+    if (requireReviewBeforeDone && action === 'accept') { setVerificationOpen(true); return; }
     setSaving(true);
     setError(null);
     try {
@@ -388,6 +428,16 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             {card.blockerReason && <p className="text-sm"><span className="font-medium">Что мешает:</span> {card.blockerReason}</p>}
             {card.column === 'blocked' && <p className="text-sm text-amber-700 dark:text-amber-300">Укажи причину блокировки ниже, чтобы было ясно, что нужно для продолжения.</p>}
             <CardExecutionOverview card={card} refreshing={refreshing} onRefresh={onRefresh ? () => { void refreshExecution(); } : undefined} />
+            <div ref={verificationRef}>{verificationOpen && <ResultVerification card={card} onCancel={() => setVerificationOpen(false)} onSaved={saved => {
+              onSelectCard?.(saved); void onRefresh?.(); onOpenChange(false);
+            }} />}</div>
+            {requireReviewBeforeDone && onRefresh && <details className="rounded-md border p-3" open>
+              <summary className="cursor-pointer text-sm font-semibold">Работа агента</summary>
+              <p className="my-2 text-xs text-muted-foreground">Запуск, продолжение и вопросы связаны с этой задачей. Результат проверяется отдельно.</p>
+              <IntegratorTaskDashboard cards={[card]} onOpen={selected => onSelectCard?.(selected)} onRefresh={onRefresh}
+                canAssignReviewer={username === 'nikita'}
+                onAssignReviewer={async (id, reviewer, version) => onUpdate ? onUpdate(id, {requiresApprovalFrom: [reviewer]}, version) : null} />
+            </details>}
             {card.pendingQuestion && <BoardQuestionPanel key={card.pendingQuestion.id} card={card} onAnswered={() => onRefresh?.()} />}
             {canTakeOwnReview(card, username) && onUpdate && (
               <div className="space-y-2 rounded-md border p-3">
