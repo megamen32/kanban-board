@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, test, vi } from 'vitest';
+import type { TaskExecutionReceipt } from './types';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-store-'));
 const isolatedDirs: string[] = [];
@@ -365,6 +366,151 @@ describe('filesystem kanban contract', () => {
     expect(reopened?.taskExecutionHistory).toEqual([running]);
     expect(()=>store.updateCard(created.id,{taskExecutionHistory:[{...running,targetPreviewId:'bad'}]},savedReceipt.version)).toThrow();
     expect(fs.readFileSync(path.join(root, created.fileName), 'utf8')).toContain('task_execution_history:');
+  });
+
+  describe('proven refusal before native session creation', () => {
+    function pendingAttempt() {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-create-refusal-'));
+      isolatedDirs.push(dir);
+      const created = store.createCard('Synthetic create refusal', 'Keep the unfinished goal.', 'todo', 'medium', [], 'QA', [], dir);
+      const intent: TaskExecutionReceipt = {
+        operationId: '1'.repeat(64), requestHash: '2'.repeat(64), createInputId: '3'.repeat(64), messageInputId: '4'.repeat(64),
+        lastBoardVersion: created.version + 1, phase: 'intent', hostId: 'fixture-host', harness: 'codex',
+        startedBy: 'nikita', createdAt: '2026-11-07T00:00:00Z', updatedAt: '2026-11-07T00:00:00Z',
+      };
+      const saved = store.updateCard(created.id, {taskExecutionHistory: [intent]}, created.version, dir);
+      if ('conflict' in saved) throw new Error('unexpected pending intent conflict');
+      return {dir, created, saved, intent, file: path.join(dir, created.fileName)};
+    }
+
+    function refusal(intent: TaskExecutionReceipt, version: number, overrides: Record<string, unknown> = {}): TaskExecutionReceipt {
+      return {
+        ...intent, phase: 'stopped', lastBoardVersion: version + 1, updatedAt: '2026-11-07T00:01:00Z',
+        createReceiptText: JSON.stringify({state: 'not_attempted', inputId: intent.createInputId, reason: 'fixture_preflight_refused'}),
+        ...overrides,
+      } as TaskExecutionReceipt;
+    }
+
+    test.each([
+      {name: 'minimal', fields: {}},
+      {name: 'fleet-service retryable', fields: {retryable: true, reason: 'fixture_preflight_refused'}},
+      {name: 'fleet-service non-retryable', fields: {retryable: false, reason: 'fixture_policy_refused'}},
+      {name: 'fleet-node', fields: {ok: false, created: false, reason: 'fixture_node_refused'}},
+    ])('persists and reopens $name refusal, preserves CAS and permits the next durable intent', ({fields}) => {
+      const fixture = pendingAttempt();
+      const receipt = refusal(fixture.intent, fixture.saved.version, {
+        createReceiptText: JSON.stringify({state: 'not_attempted', inputId: fixture.intent.createInputId, ...fields}),
+      });
+      const saved = store.updateCard(fixture.saved.id, {taskExecutionHistory: [receipt]}, fixture.saved.version, fixture.dir);
+      if ('conflict' in saved) throw new Error('unexpected refusal conflict');
+      expect(saved.version).toBe(fixture.saved.version + 1);
+      const reopened = store.readCardFile(fixture.file, fixture.dir)!;
+      expect(reopened.description).toBe('Keep the unfinished goal.');
+      expect(reopened.taskExecutionHistory).toEqual([receipt]);
+      expect(reopened.taskExecutionHistory?.[0].nativeSessionId).toBeUndefined();
+
+      const bytes = fs.readFileSync(fixture.file, 'utf8');
+      expect(store.updateCard(saved.id, {taskExecutionHistory: [receipt]}, fixture.saved.version, fixture.dir))
+        .toMatchObject({conflict: true, serverCard: {version: saved.version}});
+      expect(fs.readFileSync(fixture.file, 'utf8')).toBe(bytes);
+
+      const nextIntent: TaskExecutionReceipt = {...fixture.intent, operationId: '5'.repeat(64), createInputId: '6'.repeat(64),
+        messageInputId: '7'.repeat(64), lastBoardVersion: saved.version + 1};
+      const continued = store.updateCard(saved.id, {taskExecutionHistory: [receipt, nextIntent]}, saved.version, fixture.dir);
+      if ('conflict' in continued) throw new Error('unexpected subsequent intent conflict');
+      expect(store.readCardFile(fixture.file, fixture.dir)?.taskExecutionHistory).toEqual([receipt, nextIntent]);
+    });
+
+    test('rejects generic, malformed, foreign and contradictory create receipts without changing the file', () => {
+      const fixture = pendingAttempt();
+      const original = fs.readFileSync(fixture.file, 'utf8');
+      const valid = {state: 'not_attempted', inputId: fixture.intent.createInputId};
+      const receiptTexts = [undefined, '', 'not_attempted', 'null', '[]',
+        JSON.stringify({state: 'unknown', inputId: valid.inputId}),
+        JSON.stringify({state: 'not_attempted'}),
+        JSON.stringify({...valid, inputId: 'f'.repeat(64)}),
+        JSON.stringify({...valid, inputId: fixture.intent.messageInputId}),
+        JSON.stringify({...valid, reason: {message: 'nested prose'}}),
+        JSON.stringify({...valid, sessionId: 'native-session-exists'}),
+        JSON.stringify({...valid, address: {hostId: 'fixture-host', nativeSessionId: 'native-session-exists'}}),
+        JSON.stringify({...valid, launchCwd: '/fixture/project'}),
+        JSON.stringify({...valid, projectReadinessContract: 'integrator-host-readiness-v1'}),
+        JSON.stringify({...valid, projectExecution: {projectId: 'QA'}}),
+        JSON.stringify({...valid, ok: true}),
+        JSON.stringify({...valid, created: true}),
+        JSON.stringify({...valid, admitted: true}),
+        ...['retryable', 'ok', 'created'].flatMap(key => [null, 'false', 0, {}]
+          .map(value => JSON.stringify({...valid, [key]: value}))),
+        `${JSON.stringify(valid)}\nUntrusted trailing prose`,
+      ];
+      for (const createReceiptText of receiptTexts) {
+        const receipt = refusal(fixture.intent, fixture.saved.version, {createReceiptText});
+        expect(() => store.updateCard(fixture.saved.id, {taskExecutionHistory: [receipt]}, fixture.saved.version, fixture.dir))
+          .toThrow('task_execution_history');
+        expect(fs.readFileSync(fixture.file, 'utf8')).toBe(original);
+      }
+    });
+
+    test('rejects post-create or dispatch proofs on an allegedly uncreated stop', () => {
+      const fixture = pendingAttempt();
+      const original = fs.readFileSync(fixture.file, 'utf8');
+      const proofs: Record<string, unknown>[] = [
+        {nativeTurnId: 'fixture-turn'}, {nativeInputMessageId: 'msg_fixture_12345678'},
+        {nativeDispatchJobId: `job_${'e'.repeat(64)}`}, {dispatchReceiptText: '{"admitted":true}'},
+        {executorKeyHash: 'e'.repeat(64)}, {continuations: []},
+        {sessionControls: {stop: {requestHash: 'e'.repeat(64), phase: 'accepted', updatedAt: fixture.intent.updatedAt}}},
+        {taskDecisionRequest: {requestId: `td-${'e'.repeat(40)}`, requestHash: 'e'.repeat(64), purpose: 'fixture', version: 1}},
+        {sessionUrl: 'https://chatgpt.com/c/11111111-2222-3333-4444-555555555555'},
+        {evidenceRefs: ['fixture:dispatched-result']},
+      ];
+      for (const proof of proofs) {
+        const receipt = refusal(fixture.intent, fixture.saved.version, proof);
+        expect(() => store.updateCard(fixture.saved.id, {taskExecutionHistory: [receipt]}, fixture.saved.version, fixture.dir))
+          .toThrow('task_execution_history');
+        expect(fs.readFileSync(fixture.file, 'utf8')).toBe(original);
+      }
+    });
+
+    test('requires the existing operation identity even when the replacement proof is internally consistent', () => {
+      const fixture = pendingAttempt();
+      const original = fs.readFileSync(fixture.file, 'utf8');
+      const replacements: Record<string, unknown>[] = [
+        {operationId: '9'.repeat(64)}, {requestHash: '9'.repeat(64)}, {messageInputId: '9'.repeat(64)},
+        {hostId: 'foreign-host'}, {harness: 'opencode'}, {startedBy: 'other-actor'}, {requestedBy: 'other-native-actor'},
+        {createInputId: '9'.repeat(64), createReceiptText: JSON.stringify({state: 'not_attempted', inputId: '9'.repeat(64)})},
+      ];
+      for (const replacement of replacements) {
+        const receipt = refusal(fixture.intent, fixture.saved.version, replacement);
+        expect(() => store.updateCard(fixture.saved.id, {taskExecutionHistory: [receipt]}, fixture.saved.version, fixture.dir))
+          .toThrow('task_execution_history');
+        expect(fs.readFileSync(fixture.file, 'utf8')).toBe(original);
+      }
+
+      const noIntent = store.createCard('No prior intent', '', 'todo', 'medium', [], 'QA', [], fixture.dir);
+      const noIntentPath = path.join(fixture.dir, noIntent.fileName);
+      const noIntentBytes = fs.readFileSync(noIntentPath, 'utf8');
+      expect(() => store.updateCard(noIntent.id, {taskExecutionHistory: [refusal(fixture.intent, noIntent.version)]}, noIntent.version, fixture.dir))
+        .toThrow('task_execution_history');
+      expect(fs.readFileSync(noIntentPath, 'utf8')).toBe(noIntentBytes);
+    });
+
+    test('cannot turn an unknown or observed native launch into a safe-to-retry refusal', () => {
+      for (const phase of ['create-unknown', 'created', 'running'] as const) {
+        const fixture = pendingAttempt();
+        const observed: TaskExecutionReceipt = {...fixture.intent, phase, lastBoardVersion: fixture.saved.version + 1,
+          ...(phase === 'create-unknown' ? {createReceiptText: 'Transport outcome unknown'} : {nativeSessionId: 'fixture-native-session'}),
+          ...(phase === 'running' ? {nativeTurnId: 'fixture-native-turn'} : {}),
+        };
+        const saved = store.updateCard(fixture.saved.id, {taskExecutionHistory: [observed]}, fixture.saved.version, fixture.dir);
+        if ('conflict' in saved) throw new Error('unexpected observed receipt conflict');
+        const original = fs.readFileSync(fixture.file, 'utf8');
+        const cleared = refusal(fixture.intent, saved.version);
+        expect(() => store.updateCard(saved.id, {taskExecutionHistory: [cleared]}, saved.version, fixture.dir))
+          .toThrow('task_execution_history');
+        expect(fs.readFileSync(fixture.file, 'utf8')).toBe(original);
+        expect(store.readCardFile(fixture.file, fixture.dir)?.taskExecutionHistory).toEqual([observed]);
+      }
+    });
   });
 
   test('round-trips a project-bound OpenCode intent without inventing a harness version', () => {

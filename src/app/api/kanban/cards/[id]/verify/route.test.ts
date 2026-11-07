@@ -18,6 +18,8 @@ import { createCard, findCardById, updateCard } from '../../../../../../lib/kanb
 import { taskFacts } from '../../../../../../components/kontur/kontur-model';
 
 const ORIGIN = 'https://board.example.test';
+const AGENT_ORIGIN = 'https://todo-board.airlock.example.test';
+const RELAY_URL = 'https://airlock.example.test/auth/relay';
 const proof = (expectedVersion: number) => ({
   expectedVersion, confirmed: true,
   result: 'Результат синтетического сценария проверен после повторного открытия',
@@ -35,6 +37,9 @@ describe('POST /api/kanban/cards/[id]/verify with real Markdown CAS', () => {
     mocks.human.mockResolvedValue({ username: 'fixture-owner', scope: 'work' });
     mocks.dispatchCardEvent.mockResolvedValue({ skipped: true });
     vi.stubEnv('KANBAN_PUBLIC_ORIGIN', ORIGIN);
+    vi.stubEnv('KANBAN_AIRLOCK_RELAY_URL', '');
+    vi.stubEnv('KANBAN_AIRLOCK_AGENT_ORIGIN', '');
+    vi.stubEnv('KANBAN_AIRLOCK_RELAY_DOMAIN', 'example.test');
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network access is forbidden in this fixture'); }));
   });
 
@@ -44,15 +49,20 @@ describe('POST /api/kanban/cards/[id]/verify with real Markdown CAS', () => {
     fs.rmSync(tasksDir, { recursive: true, force: true });
   });
 
-  function request(id: string, body: unknown, headers: Record<string, string> = {}) {
-    return new NextRequest(`${ORIGIN}/api/kanban/cards/${id}/verify`, {
-      method: 'POST', headers: { 'content-type': 'application/json', origin: ORIGIN, ...headers },
+  function request(id: string, body: unknown, headers: Record<string, string> = {}, entrypoint = ORIGIN) {
+    return new NextRequest(`${entrypoint}/api/kanban/cards/${id}/verify`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: entrypoint, ...headers },
       body: JSON.stringify(body),
     });
   }
 
-  function post(value: KanbanCard, body: unknown = proof(value.version), headers: Record<string, string> = {}) {
-    return POST(request(value.id, body, headers), { params: Promise.resolve({ id: value.id }) });
+  function post(value: KanbanCard, body: unknown = proof(value.version), headers: Record<string, string> = {}, entrypoint = ORIGIN) {
+    return POST(request(value.id, body, headers, entrypoint), { params: Promise.resolve({ id: value.id }) });
+  }
+
+  function enableRelay(agentOrigin = AGENT_ORIGIN) {
+    vi.stubEnv('KANBAN_AIRLOCK_RELAY_URL', RELAY_URL);
+    vi.stubEnv('KANBAN_AIRLOCK_AGENT_ORIGIN', agentOrigin);
   }
 
   function fixture(overrides: KanbanCardUpdates = {}): KanbanCard {
@@ -152,6 +162,83 @@ describe('POST /api/kanban/cards/[id]/verify with real Markdown CAS', () => {
     expect((await post(before, proof(before.version), { origin: 'https://other.example.test' })).status).toBe(403);
     expect(mocks.tasksDirForScope).not.toHaveBeenCalled();
     expect(disk(before)).toBe(original);
+  });
+
+  it.each([ORIGIN, AGENT_ORIGIN])('accepts the exact configured browser entrypoint %s with the same human and CAS', async entrypoint => {
+    enableRelay();
+    const before = fixture();
+    const response = await post(before, proof(before.version), {}, entrypoint);
+
+    expect(response.status).toBe(200);
+    expect(findCardById(before.id, tasksDir)).toMatchObject({
+      id: before.id, version: before.version + 1, column: 'done', completedBy: 'fixture-owner',
+    });
+    expect(mocks.dispatchCardEvent).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing, opaque, malformed and foreign origins even when the relay is enabled', async () => {
+    enableRelay();
+    const before = fixture();
+    const original = disk(before);
+    const origins = [null, '', 'null', 'not-an-origin', `${ORIGIN}/`, `${AGENT_ORIGIN}/path`,
+      `${ORIGIN}, ${AGENT_ORIGIN}`, 'https://other.example.test', `${AGENT_ORIGIN}.other.example.test`,
+      'https://different.airlock.example.test', 'http://todo-board.airlock.example.test', `${AGENT_ORIGIN}:8443`];
+    for (const origin of origins) {
+      const incoming = request(before.id, proof(before.version));
+      if (origin === null) incoming.headers.delete('origin');
+      else incoming.headers.set('origin', origin);
+      expect((await POST(incoming, { params: Promise.resolve({ id: before.id }) })).status).toBe(403);
+    }
+
+    expect(mocks.tasksDirForScope).not.toHaveBeenCalled();
+    expect(mocks.dispatchCardEvent).not.toHaveBeenCalled();
+    expect(disk(before)).toBe(original);
+  });
+
+  it('does not trust the configured agent origin while the relay is disabled', async () => {
+    vi.stubEnv('KANBAN_AIRLOCK_AGENT_ORIGIN', AGENT_ORIGIN);
+    const before = fixture();
+    const original = disk(before);
+    for (const relayUrl of ['', 'not-a-url', 'http://airlock.example.test/auth/relay', 'https://foreign.test/auth/relay']) {
+      vi.stubEnv('KANBAN_AIRLOCK_RELAY_URL', relayUrl);
+      expect((await post(before, proof(before.version), {}, AGENT_ORIGIN)).status).toBe(403);
+    }
+    expect(mocks.tasksDirForScope).not.toHaveBeenCalled();
+    expect(disk(before)).toBe(original);
+    // A disabled optional entrypoint does not disable the configured public UI.
+    expect((await post(before)).status).toBe(200);
+  });
+
+  it('rejects missing and invalid agent origins, including credentials and wildcard hosts', async () => {
+    const before = fixture();
+    const original = disk(before);
+    for (const agentOrigin of ['', 'null', 'not-a-url', 'http://todo-board.airlock.example.test',
+      `${AGENT_ORIGIN}/path`, `${AGENT_ORIGIN}?query=1`, 'https://user:pass@todo-board.airlock.example.test',
+      'https://*.airlock.example.test']) {
+      enableRelay(agentOrigin);
+      expect((await post(before, proof(before.version), {}, AGENT_ORIGIN)).status).toBe(403);
+    }
+    expect(mocks.tasksDirForScope).not.toHaveBeenCalled();
+    expect(mocks.dispatchCardEvent).not.toHaveBeenCalled();
+    expect(disk(before)).toBe(original);
+  });
+
+  it('does not derive an allowed origin from request or forwarding headers when public config is missing or invalid', async () => {
+    const before = fixture();
+    const original = disk(before);
+    for (const configured of ['', '/', 'null', 'not-a-url', `${ORIGIN}/path`]) {
+      vi.stubEnv('KANBAN_PUBLIC_ORIGIN', configured);
+      expect((await post(before, proof(before.version), {
+        origin: 'https://foreign.example.test', host: 'foreign.example.test',
+        'x-forwarded-host': 'foreign.example.test', 'x-forwarded-proto': 'https',
+      }, 'https://foreign.example.test')).status).toBe(403);
+      expect((await post(before)).status).toBe(403);
+    }
+    expect(mocks.tasksDirForScope).not.toHaveBeenCalled();
+    expect(disk(before)).toBe(original);
+    enableRelay();
+    expect((await post(before, proof(before.version), {}, AGENT_ORIGIN)).status).toBe(200);
   });
 
   it('refuses incomplete proof and incorrect media type without losing the saved goal', async () => {

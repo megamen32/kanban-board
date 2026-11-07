@@ -19,6 +19,7 @@ import { BoardDiagnosticsPanel } from '@/components/kanban/board-diagnostics-pan
 import { DEFAULT_COLUMNS, type KanbanCard, type KanbanCardUpdates, type KanbanColumn, type RoleDefinition } from '@/lib/kanban/types';
 import type { HumanReviewAction } from '@/lib/kanban/transition-policy';
 import { BoardMutationError, boardMutationRequest, mutationErrorMessage, readMutationResponse } from '@/lib/kanban/mutation-response';
+import { recordDiagnostic } from '@/lib/kanban/board-diagnostics';
 import { filterWorkspaceCards, getProjectOptions, isClosedCard, resolveInitialWorkspaceView, type WorkspaceView } from '@/components/kanban/view-model';
 import { parseBoardUrlState } from '@/components/kanban/board-url-state';
 import { UNKNOWN, filterCards, getActivity, getDecisions, getFilterOptions, getReleases, getSessions, safeExternalUrl, taskFacts, type KonturSession } from './kontur-model';
@@ -322,17 +323,22 @@ export function KonturBoard() {
   useEffect(() => {
     if (!mobileMenu || !isMobile) return;
     const sidebar = sidebarRef.current;
-    const elements = () => Array.from(sidebar?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], select, input') ?? []);
-    elements()[0]?.focus();
+    const elements = () => Array.from(sidebar?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], select, input') ?? [])
+      .filter(element => element.tabIndex >= 0 && !element.matches(':disabled') && element.getClientRects().length > 0 && getComputedStyle(element).visibility === 'visible');
+    // The visibility transition must start before the browser can focus the menu.
+    let focusFrame = requestAnimationFrame(() => {
+      focusFrame = requestAnimationFrame(() => elements()[0]?.focus());
+    });
     const keyboard = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { setMobileMenu(false); return; }
+      if (event.key === 'Escape') { event.preventDefault(); setMobileMenu(false); return; }
       if (event.key !== 'Tab') return;
       const items = elements(); const first = items[0]; const last = items.at(-1);
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      if (!sidebar?.contains(document.activeElement)) { event.preventDefault(); (event.shiftKey ? last : first)?.focus(); }
+      else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     };
     document.addEventListener('keydown', keyboard);
-    return () => { document.removeEventListener('keydown', keyboard); menuRef.current?.focus(); };
+    return () => { cancelAnimationFrame(focusFrame); document.removeEventListener('keydown', keyboard); menuRef.current?.focus(); };
   }, [mobileMenu, isMobile]);
 
   const scopedCards = useMemo(() => username ? filterWorkspaceCards(cards, username, workspace) : [], [cards, username, workspace]);
@@ -419,15 +425,23 @@ export function KonturBoard() {
     })();
   }, [notify]);
   const handleCreate = useCallback(async (title: string, description: string, column: string, cardPriority: string, tags: string[], cardProject: string, assignees: string[], dueAt?: string, planning?: KanbanCardUpdates) => {
+    if (column === 'done' || planning?.column === 'done') {
+      recordDiagnostic('create', 0, 'verification_result_evidence_confirmation_required');
+      throw new BoardMutationError('Новую задачу нельзя сразу создать завершённой. Выбери незавершённое состояние, сохрани задачу и проверь результат в её карточке. Введённые данные остались в форме.');
+    }
     const saved = await createWithReviewGate(planning?.column ?? column, true, () => createCard(title, description, column, cardPriority, tags, cardProject, assignees, dueAt, planning));
     if (saved) { setSelectedCardId(saved.id); notify('Задача создана. Открыта сохранённая карточка.'); }
     return saved;
   }, [createCard, notify]);
   const handleUpdate = useCallback(async (id: string, updates: KanbanUpdateRequest, version?: number) => {
+    if (updates.column === 'done' && cards.find(card => card.id === id)?.column !== 'done') {
+      recordDiagnostic('update', 0, 'verification_result_evidence_confirmation_required');
+      throw new BoardMutationError('Для завершения укажи результат и доказательство в блоке ручной проверки карточки. Обычное сохранение не закрывает задачу. Введённые данные остались в форме.');
+    }
     const saved = await updateCard(id, updates, version);
     if (saved) notify('Изменения сохранены');
     return saved;
-  }, [updateCard, notify]);
+  }, [cards, updateCard, notify]);
   const handleReview = useCallback(async (id: string, action: HumanReviewAction, note: string, version: number) => {
     const response = await boardMutationRequest(`/api/kanban/cards/${encodeURIComponent(id)}/review`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, note, expectedVersion: version }),
@@ -487,7 +501,7 @@ export function KonturBoard() {
   return <div className={`kontur-shell${mobileMenu ? ' menu-open' : ''}`} data-theme={dark ? 'dark' : 'light'}>
     <a className="k-skip" href="#kontur-main">Перейти к содержимому</a>
     {mobileMenu && <button type="button" className="k-sidebar-backdrop" onClick={() => setMobileMenu(false)} aria-label="Закрыть меню" tabIndex={-1} />}
-    <aside className="k-sidebar" ref={sidebarRef} aria-label="Основная навигация">
+    <aside className="k-sidebar" ref={sidebarRef} aria-label="Основная навигация" inert={Boolean(isMobile && !mobileMenu) || undefined}>
       <div className="k-brand-row"><button type="button" className="k-brand" onClick={() => navigate('overview')} aria-label="Контур, сводка"><span className="k-logo">К<span /></span><span><strong>контур<span>.</span></strong><small>РАБОЧЕЕ ПРОСТРАНСТВО</small></span></button><button type="button" className="k-icon-button k-mobile-close" onClick={() => setMobileMenu(false)} aria-label="Закрыть меню"><X size={18} /></button></div>
       <span className="k-nav-label">ОБЗОР РАБОТЫ</span>
       <nav className="k-navigation">{NAV.map(({ id, label, icon: Icon }) => <button type="button" key={id} className={screen === id ? 'is-active' : ''} aria-current={screen === id ? 'page' : undefined} onClick={() => navigate(id)}><Icon size={17} strokeWidth={1.7} /><span>{label}</span>{navCount(id) !== undefined && <span className="k-nav-count">{loading || !identityReady ? '…' : ready ? navCount(id) : UNKNOWN}</span>}</button>)}</nav>
@@ -504,7 +518,7 @@ export function KonturBoard() {
     <div className="k-workspace" inert={Boolean(isMobile && mobileMenu) || undefined}>
       <header className="k-topbar"><div className="k-breadcrumb"><button type="button" ref={menuRef} className="k-icon-button k-mobile-menu" aria-label="Открыть меню" aria-expanded={mobileMenu} onClick={() => setMobileMenu(true)}><Menu size={20} /></button><span>Рабочее пространство</span><ChevronRight size={13} /><strong>{currentNav.label}</strong></div><div className="k-topbar-actions"><details className="k-services-menu" onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }}><summary aria-label="Связанные сервисы"><ExternalLink size={15} /><span>Сервисы</span></summary><div className="k-services-dropdown"><ServiceLinks /></div></details><span className={`k-read-status${error ? ' is-stale' : ''}`} title={lastLoadedAt ? `Доска прочитана ${formatStamp(lastLoadedAt)} по Москве` : 'Последнее успешное чтение неизвестно'}><i />{refreshing ? 'Обновляю' : error ? 'Нужно обновить' : lastLoadedAt ? 'Данные доски' : 'Загрузка'}</span><button type="button" className="k-icon-button" aria-label={dark ? 'Включить светлую тему' : 'Включить тёмную тему'} onClick={() => setTheme(dark ? 'light' : 'dark')}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button></div></header>
       <main id="kontur-main" className="k-main" tabIndex={-1}>
-        <div className="k-page-heading"><div><div className="k-eyebrow"><span className="k-lime-dot" />ЕДИНАЯ ТОЧКА ПРОДОЛЖЕНИЯ</div><h1>{currentNav.label}</h1><p>{currentNav.description}</p></div><div className="k-heading-actions">{screen === 'overview' && <button type="button" className={`k-button${daily ? ' is-selected' : ''}`} aria-pressed={daily} onClick={() => setDaily(value => !value)}><Sparkles size={15} />На каждый день</button>}<button type="button" className="k-button" disabled={loading || refreshing} onClick={() => void refresh()} aria-label="Обновить данные доски"><RefreshCw size={15} className={refreshing ? 'k-spin' : ''} /><span className="k-refresh-label">Обновить</span></button><button type="button" className="k-button k-button-primary" disabled={!username || loading} onClick={() => newTask()}><Plus size={17} />Новая задача</button></div></div>
+        <div className="k-page-heading"><div><div className="k-eyebrow"><span className="k-lime-dot" />ЕДИНАЯ ТОЧКА ПРОДОЛЖЕНИЯ</div><h1>{currentNav.label}</h1><p>{currentNav.description}</p></div><div className="k-heading-actions">{screen === 'overview' && <button type="button" className={`k-button${daily ? ' is-selected' : ''}`} aria-pressed={daily} onClick={() => setDaily(value => !value)}><Sparkles size={15} />На каждый день</button>}<button type="button" className="k-button" disabled={loading || refreshing} onClick={() => void refresh()} aria-label="Обновить данные доски"><RefreshCw size={15} className={refreshing ? 'k-spin' : ''} /><span className="k-refresh-label">Обновить</span></button><button type="button" className="k-button k-button-primary" disabled={!username || loading} onClick={() => newTask()}><Plus size={17} /><span>Новая задача</span></button></div></div>
 
         <div className="k-filter-bar"><div className="k-filter-selects">
           <label className="k-select"><FolderKanban size={14} /><select aria-label="Фильтр по проекту" value={project} onChange={event => chooseProject(event.target.value)}><option value="all">Все проекты</option>{allProjects.map(name => <option key={name} value={name}>{name}</option>)}{project !== 'all' && !allProjects.includes(project) && <option value={project}>{project}</option>}</select><ChevronDown size={12} /></label>
@@ -604,6 +618,10 @@ export function KonturBoard() {
     <AddCardDialog requireReviewBeforeDone projectOptions={projectOptions} relatedCards={scopedCards} defaultProject={defaultProject} ownerPreview={username} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
     {selectedCard && <CardEditDialog requireReviewBeforeDone projectOptions={projectOptions} relatedCards={scopedCards} breadcrumbCards={scopedCards} roles={roles} card={selectedCard} username={username} onRefresh={refresh} open onOpenChange={open => { if (!open) setSelectedCardId(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReview} onSelectCard={openCard} />}
     {conflict && <ConflictDialog conflict={conflict} onResolve={async useServer => {
+      if (!useServer && conflict.clientCard.column === 'done' && conflict.serverCard.column !== 'done') {
+        recordDiagnostic('update', 0, 'verification_result_evidence_confirmation_required');
+        throw new BoardMutationError('На сервере задача больше не завершена. Выбери серверную версию и пройди ручную проверку результата; старый статус «Готово» не переносится автоматически.');
+      }
       const resolved = await resolveConflict(useServer);
       // An explicit conflict choice ends this edit session. Ordinary remote
       // updates must keep the user's draft and its original CAS baseline.

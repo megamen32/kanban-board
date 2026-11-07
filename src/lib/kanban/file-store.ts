@@ -253,6 +253,7 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
   ) as Omit<KanbanCardUpdates, 'dueAt' | 'blockerReason' | 'executor'> & { blockerReason?: string; executor?: 'dot' };
   if (normalizedUpdates.taskExecutionHistory !== undefined) {
     normalizedUpdates.taskExecutionHistory = taskExecutionHistoryField(normalizedUpdates.taskExecutionHistory);
+    validateUncreatedStopUpdates(card.taskExecutionHistory ?? [], normalizedUpdates.taskExecutionHistory);
   }
   const relationTouched = Object.hasOwn(updates as object, 'parent')
     || Object.hasOwn(updates as object, 'project') || Object.hasOwn(updates as object, 'owner');
@@ -881,6 +882,48 @@ function taskDecisionQuestionContinuationField(value: unknown, field: string, en
   };
 }
 
+function hasPostCreateProof(entry: unknown): boolean {
+  return !isRecord(entry) || [
+    'nativeSessionId', 'nativeTurnId', 'nativeInputMessageId', 'nativeDispatchJobId',
+    'dispatchReceiptText', 'executorKeyHash', 'executorQuestion', 'taskDecisionRequest',
+    'taskDecisionProposal', 'taskDecisionContinuation', 'continuations', 'sessionControls',
+    'sessionUrl', 'evidenceRefs',
+  ].some(key => entry[key] !== undefined);
+}
+
+/** Only the exact server create refusal proves that a stopped attempt has no session. */
+function provenUncreatedStop(entry: unknown): boolean {
+  if (!isRecord(entry) || !['codex', 'zcode', 'opencode'].includes(String(entry.harness))
+    || entry.phase !== 'stopped' || hasPostCreateProof(entry) || typeof entry.createReceiptText !== 'string') return false;
+  try {
+    const receipt: unknown = JSON.parse(entry.createReceiptText);
+    return isRecord(receipt) && receipt.state === 'not_attempted' && receipt.inputId === entry.createInputId
+      && Object.keys(receipt).every(key => ['state', 'inputId', 'reason', 'retryable', 'ok', 'created'].includes(key))
+      && (receipt.retryable === undefined || typeof receipt.retryable === 'boolean')
+      && (receipt.ok === undefined || receipt.ok === false)
+      && (receipt.created === undefined || receipt.created === false)
+      && (receipt.reason === undefined || typeof receipt.reason === 'string');
+  } catch { return false; }
+}
+
+/** A refusal may finish only its persisted pending intent; it cannot erase an observed launch. */
+function validateUncreatedStopUpdates(previous: readonly TaskExecutionReceipt[], next: readonly TaskExecutionReceipt[]): void {
+  const identityKeys = ['operationId', 'requestHash', 'createInputId', 'messageInputId', 'hostId', 'harness',
+    'startedBy', 'requestedBy', 'createdAt', 'targetPreviewId'] as const;
+  for (const entry of next) {
+    if (entry.harness === 'dot' || entry.phase !== 'stopped' || entry.nativeSessionId !== undefined) continue;
+    const saved = previous.find(old => old.operationId === entry.operationId);
+    const validSource = saved?.phase === 'intent'
+      ? saved === previous.at(-1) && entry === next.at(-1) && saved.createReceiptText === undefined
+      : provenUncreatedStop(saved) && saved?.createReceiptText === entry.createReceiptText;
+    if (!saved || !validSource || hasPostCreateProof(saved)
+      || identityKeys.some(key => saved[key] !== entry[key])
+      || JSON.stringify(saved.projectBinding) !== JSON.stringify(entry.projectBinding)) {
+      throw invalidPlanningField('task_execution_history', 'uncreated stop must match its persisted pending create intent');
+    }
+  }
+}
+
 function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
   if (!Array.isArray(value) || value.length > 32) throw invalidPlanningField('task_execution_history', 'expected at most 32 execution receipts');
   const seen = new Set<string>();
@@ -961,7 +1004,8 @@ function taskExecutionHistoryField(value: unknown): TaskExecutionReceipt[] {
         || !executorQuestion.choices.some(choice => choice.value === taskDecisionProposal.value))) {
       throw invalidPlanningField(`${field}.taskDecisionProposal`, 'proposal is not bound to the saved executor question');
     }
-    if (entry.harness !== 'dot' && ['created', 'dispatch-unknown', 'running', 'waiting', 'stopped', 'result'].includes(String(entry.phase)) && !entry.nativeSessionId) {
+    if (entry.harness !== 'dot' && ['created', 'dispatch-unknown', 'running', 'waiting', 'stopped', 'result'].includes(String(entry.phase))
+      && !entry.nativeSessionId && !provenUncreatedStop(entry)) {
       throw invalidPlanningField(`${field}.nativeSessionId`, 'required after session creation');
     }
     const exactOpenCodeInputBinding = entry.harness === 'opencode' && entry.projectBinding !== undefined

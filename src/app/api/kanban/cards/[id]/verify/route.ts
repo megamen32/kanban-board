@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { boardHumanIdentityFromRequest } from '@/lib/auth/board-human';
 import { boardIdentityFromRequest } from '@/lib/auth/request';
 import { publicOrigin } from '@/lib/auth/origin';
+import { airlockRelayConfig } from '@/lib/auth/airlock-relay';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { findCardById, updateCard } from '@/lib/kanban/file-store';
 import { decideManualVerification, parseManualVerification } from '@/lib/kanban/manual-verification';
@@ -9,6 +10,27 @@ import { dispatchCardEvent } from '@/lib/notifications/push';
 
 const headers = {'Cache-Control': 'private, no-store', 'Vary': 'Cookie'};
 const reply = (body: unknown, status = 200) => NextResponse.json(body, {status, headers});
+
+function httpOrigin(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password
+      || url.pathname !== '/' || url.search || url.hash || url.hostname.includes('*')) return null;
+    return url.origin;
+  } catch { return null; }
+}
+
+function configuredHumanOrigin(request: Request): boolean {
+  const origin = request.headers.get('origin');
+  if (!origin || httpOrigin(origin) !== origin) return false;
+  // publicOrigin's forwarded-header fallback is not a configured trust grant.
+  if (httpOrigin(process.env.KANBAN_PUBLIC_ORIGIN?.trim())
+    && httpOrigin(publicOrigin(request)) === origin) return true;
+  const relay = airlockRelayConfig();
+  return relay.enabled && httpOrigin(relay.agentOrigin) === origin;
+}
+
 async function boundedText(request: Request): Promise<string | null> {
   const reader = request.body?.getReader();
   if (!reader) return '';
@@ -35,7 +57,7 @@ export async function POST(request: NextRequest, {params}: {params: Promise<{id:
     const human = await boardHumanIdentityFromRequest(request);
     if (!human) return reply({error: 'human authentication required'}, 401);
     if (boardIdentityFromRequest(request).scope !== human.scope) return reply({error: 'scope mismatch'}, 403);
-    if (request.headers.get('origin') !== publicOrigin(request)) return reply({error: 'same-origin human action required'}, 403);
+    if (!configuredHumanOrigin(request)) return reply({error: 'same-origin human action required'}, 403);
     if (!request.headers.get('content-type')?.startsWith('application/json')) return reply({error: 'JSON required'}, 415);
     const text = await boundedText(request);
     if (text === null) return reply({error: 'verification too large'}, 413);
