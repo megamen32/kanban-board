@@ -11,6 +11,7 @@ import type { SourceAdmissionRequest } from '../kanban/source-operation';
 import type { SignedSourceAdmissionEnvelope } from './source-resolver';
 import type { SignedTodoMcpReadScope, TodoMcpProjectEnsureClaims, TodoMcpReadScopeClaims, TodoMcpWriteScopeClaims } from './todo-caller-scope';
 import { normalizeDueAt } from '../kanban/due-at';
+import { isSafeProvenanceUrl, MAX_PROVENANCE_URL_LENGTH } from '../kanban/provenance-links';
 import { NIKITA_ACTOR, validateTransition } from '../kanban/transition-policy';
 import { tasksDirForScope } from '../auth/data-scope';
 import type { BoardScope } from '../auth/scopes';
@@ -22,6 +23,10 @@ const PRIORITIES = ['low', 'medium', 'high', 'critical'] as const;
 const PLANNING_TYPES = ['outcome', 'action'] as const;
 const ISO_WEEK = /^\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])$/;
 const RFC3339_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+const provenanceUrlInput = z.string().max(MAX_PROVENANCE_URL_LENGTH)
+  .refine(isSafeProvenanceUrl, 'Expected an absolute HTTP(S) URL without credentials, whitespace or control characters')
+  .nullable().optional();
 
 const cardInput = {
   title: z.string().min(1).optional(),
@@ -44,7 +49,9 @@ const cardInput = {
   parent: z.string().optional(),
   scheduledAt: z.string().optional(),
   todayRank: z.number().int().min(1).max(3).optional(),
-  source: z.string().optional(),
+  source: z.string().optional().describe('Legacy source label or identifier; use sourceMessageUrl and sourceSessionUrl for explicit display links.'),
+  sourceMessageUrl: provenanceUrlInput.describe('Explicit source-message permalink returned by the source (for example User.IO deep_link) or supplied by the user. HTTP(S), max 2048 characters, no credentials/control characters. Null clears; omitted preserves. Display metadata only.'),
+  sourceSessionUrl: provenanceUrlInput.describe('Explicit link to the originating agent session. Separate from managed execution receipts. HTTP(S), max 2048 characters, no credentials/control characters. Null clears; omitted preserves. Does not authorize session control or prove completion.'),
   needsReview: z.boolean().optional(),
   suggestedAssignee: z.string().optional(),
   blockerReason: z.string().max(4000).nullable().optional(),
@@ -262,7 +269,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
   const server = new McpServer(
     { name: `excode-kanban-${scope}`, version: '1.0.0' },
     {
-      instructions: `This MCP server is permanently scoped to the ${scope} Kanban board. Never infer or request access to the other board. Use kanban.list before editing and preserve expectedVersion when available.`,
+      instructions: `This MCP server is permanently scoped to the ${scope} Kanban board. Never infer or request access to the other board. Use kanban.list before editing and preserve expectedVersion when available. Where these writable tools are exposed and the caller already has a source-message permalink or originating-session URL, retain it as sourceMessageUrl or sourceSessionUrl in kanban.change (new/edit) or kanban.capture_inbox. Omitted links remain unknown; never invent provider routes. Links are display metadata, not authorization or completion evidence.`,
     },
   );
 
@@ -370,13 +377,14 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
   if (!readOnlyApp) {
     server.registerTool('kanban.capture_inbox', {
       title: 'Capture raw transcript to Inbox',
-      description: 'Store one raw voice transcription or note in Inbox. Do not classify it, assign a role, invent a deadline, or move any existing card.',
-      inputSchema: { transcript: z.string().min(1), owner: z.string().min(1).optional() },
+      description: 'Store one raw voice transcription or note in Inbox. Optional sourceMessageUrl and sourceSessionUrl retain explicit source-message and originating-session links. Supply only known HTTP(S) URLs; links grant no authority. Do not classify it, assign a role, invent a deadline, or move any existing card.',
+      inputSchema: { transcript: z.string().min(1), owner: z.string().min(1).optional(),
+        sourceMessageUrl: cardInput.sourceMessageUrl, sourceSessionUrl: cardInput.sourceSessionUrl },
       annotations: { openWorldHint: false },
-    }, async ({ transcript, owner }) => {
+    }, async ({ transcript, owner, sourceMessageUrl, sourceSessionUrl }) => {
       if (options.requireExManagerReadScope) throw new Error('raw shared service Inbox capture is disabled');
       const clean = transcript.trim();
-      const basic = createCard(clean.replace(/\s+/g, ' ').slice(0, 96), clean, 'inbox', 'medium', ['inbox-capture'], 'Inbox', [], tasksDir);
+      const basic = createCard(clean.replace(/\s+/g, ' ').slice(0, 96), clean, 'inbox', 'medium', ['inbox-capture'], 'Inbox', [], tasksDir, undefined, { sourceMessageUrl, sourceSessionUrl });
       const result = updateCard(basic.id, {
         owner: owner ?? 'nikita', source: 'hermes:transcript', needsReview: true,
       }, undefined, tasksDir);
@@ -388,7 +396,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
   if (!readOnlyApp) {
     server.registerTool('kanban.change', {
       title: 'Create or update a Kanban card',
-      description: 'Create a card or update an existing card in the authorized board.',
+      description: 'Create or edit a card in the authorized board. Optional sourceMessageUrl and sourceSessionUrl retain explicit source-message and originating-session links; null clears and omitted preserves. Read before editing and pass expectedVersion. Links are display metadata, not ownership, source-admission or completion evidence.',
       inputSchema: {
         mode: z.enum(['new', 'edit']),
         cardId: z.string().min(1).optional(),
@@ -482,10 +490,12 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
           {
             ...(typeof decision.patch.parent === 'string' ? { parent: decision.patch.parent } : {}),
             ...(typeof decision.patch.owner === 'string' ? { owner: decision.patch.owner } : {}),
+            ...(decision.patch.sourceMessageUrl !== undefined ? { sourceMessageUrl: decision.patch.sourceMessageUrl } : {}),
+            ...(decision.patch.sourceSessionUrl !== undefined ? { sourceSessionUrl: decision.patch.sourceSessionUrl } : {}),
           },
         );
         const persisted = Object.fromEntries(
-          Object.entries(decision.patch).filter(([key]) => !['title', 'description', 'project', 'column', 'priority', 'tags', 'assignees', 'dueAt'].includes(key)
+          Object.entries(decision.patch).filter(([key]) => !['title', 'description', 'project', 'column', 'priority', 'tags', 'assignees', 'dueAt', 'sourceMessageUrl', 'sourceSessionUrl'].includes(key)
             && !(key === 'parent' && typeof decision.patch.parent === 'string')),
         ) as KanbanCardUpdates;
         const card = Object.keys(persisted).length > 0

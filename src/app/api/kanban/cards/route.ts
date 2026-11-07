@@ -13,6 +13,7 @@ import { unavailableTeamCatalog, type BoardTeamCatalog } from '@/lib/kanban/team
 import { nativeTeamCatalog, relayTeamCatalog, resolveNativeTeamCatalog } from '@/lib/kanban/team-catalog.server';
 import { loadRelayScopeCatalog, relayScopeCatalogFile } from '@/lib/kanban/project-reviewers';
 import { normalizeDueAt } from '@/lib/kanban/due-at';
+import { normalizeProvenanceUrl } from '@/lib/kanban/provenance-links';
 import { dispatchCardEvent } from '@/lib/notifications/push';
 import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
 import { validateTransition } from '@/lib/kanban/transition-policy';
@@ -178,6 +179,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'request body must be an object' }, { status: 400 });
     }
     const { title, description, column, priority, tags, project, assignees, blockerReason } = body;
+    let sourceMessageUrl: string | null | undefined;
+    let sourceSessionUrl: string | null | undefined;
+    try {
+      sourceMessageUrl = normalizeProvenanceUrl(body.sourceMessageUrl, 'sourceMessageUrl');
+      sourceSessionUrl = normalizeProvenanceUrl(body.sourceSessionUrl, 'sourceSessionUrl');
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'source link is invalid' }, { status: 400 });
+    }
     let dueAt: string | undefined;
     try {
       dueAt = normalizeDueAt(body.dueAt) || undefined;
@@ -210,6 +219,8 @@ export async function POST(req: NextRequest) {
       scheduledAt: body.scheduledAt,
       todayRank: body.todayRank,
       source: body.source,
+      sourceMessageUrl,
+      sourceSessionUrl,
       needsReview: body.needsReview,
       suggestedAssignee: body.suggestedAssignee,
       waitingFor: body.waitingFor,
@@ -249,6 +260,8 @@ export async function POST(req: NextRequest) {
     const createOptions = {
       ...(typeof patch.parent === 'string' ? { parent: patch.parent } : {}),
       ...(typeof patch.owner === 'string' ? { owner: patch.owner } : {}),
+      ...(patch.sourceMessageUrl !== undefined ? { sourceMessageUrl: patch.sourceMessageUrl } : {}),
+      ...(patch.sourceSessionUrl !== undefined ? { sourceSessionUrl: patch.sourceSessionUrl } : {}),
     };
     const createArgs = [
       String(patch.title ?? title), patch.description as string | undefined, patch.column,
