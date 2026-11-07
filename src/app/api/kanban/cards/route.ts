@@ -1,3 +1,4 @@
+import { readOwnerTeamCatalogSnapshot } from '@/lib/kanban/owner-team-snapshot.server';
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllCards, createCard, updateCard } from '@/lib/kanban/file-store';
 import type { KanbanCard, KanbanCardUpdates } from '@/lib/kanban/types';
@@ -88,13 +89,17 @@ export async function GET(req: NextRequest) {
       const cards = getAllCards(tasksDir);
       const projects = listProjects(tasksDir);
       const names = visibleProjectNames(cards, projects);
-      let teamCatalog = unavailableTeamCatalog(names);
-      try {
-        const context = await nativeProjectAccessContextFromRequest(req);
-        if (context) teamCatalog = await resolveNativeTeamCatalog(names, context);
-      } catch {
-        // The owner grant is already verified. An unavailable team source is
-        // metadata uncertainty, never a reason to drop these authorized tasks.
+      // The imported directory is display-only and is read only after both owner identities verified.
+      // Keep its observation time visible instead of presenting cached relationships as live grants.
+      const observedCatalog = readOwnerTeamCatalogSnapshot(tasksDir, names);
+      let teamCatalog = observedCatalog ?? unavailableTeamCatalog(names);
+      if (!observedCatalog) {
+        try {
+          const context = await nativeProjectAccessContextFromRequest(req);
+          if (context) teamCatalog = await resolveNativeTeamCatalog(names, context);
+        } catch {
+          // An unavailable team source never removes these already authorized owner tasks.
+        }
       }
       return boardSnapshot(cards, projects, teamCatalog);
     }

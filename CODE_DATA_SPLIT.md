@@ -30,3 +30,11 @@ release claim.
 Empty projects are private durable board metadata: `.projects/*.json` in the
 existing work-tasks mount. Include this hidden registry in board data backups;
 never copy it into source or images. Legacy Markdown cards need no migration.
+
+
+The optional owner team directory is also private board data:
+`.metadata/exmanager-team-catalog.json` in the work-tasks mount. Include it
+with the private data backup, never source, fixtures or container images.
+Publish validated observations atomically with private file permissions and
+retain their original source revision and observation time. The directory
+is display metadata only; it is not a second task store or an ACL registry.

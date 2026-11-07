@@ -1,9 +1,10 @@
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KanbanCard } from '@/lib/kanban/types';
+import type { BoardTeamCatalog } from '@/lib/kanban/team-catalog';
 import { loadRelayScopeCatalog } from '@/lib/kanban/project-reviewers';
 
-const { createCard, updateCard, getAllCards, listProjects, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated, managerAuthorized, nativeAccess, nativeProjectAccessContextFromRequest, ownerBrowserReadAllowed } = vi.hoisted(() => ({
+const { createCard, updateCard, getAllCards, listProjects, validateTransition, dispatchCardEvent, startDueReminderScheduler, tasksDirForScope, identity, authenticated, managerAuthorized, nativeAccess, nativeProjectAccessContextFromRequest, ownerBrowserReadAllowed, readOwnerTeamCatalogSnapshot } = vi.hoisted(() => ({
   createCard: vi.fn(),
   updateCard: vi.fn(),
   getAllCards: vi.fn(),
@@ -18,6 +19,7 @@ const { createCard, updateCard, getAllCards, listProjects, validateTransition, d
   nativeAccess: { current: null as null | { userId: string; forProject: ReturnType<typeof vi.fn> } },
   nativeProjectAccessContextFromRequest: vi.fn(async () => nativeAccess.current),
   ownerBrowserReadAllowed: vi.fn(async () => false),
+  readOwnerTeamCatalogSnapshot: vi.fn((): BoardTeamCatalog | null => null),
 }));
 
 vi.mock('@/lib/kanban/file-store', () => ({ createCard, updateCard, getAllCards }));
@@ -37,6 +39,7 @@ vi.mock('@/lib/auth/request', () => ({
   nativeProjectAccessContextFromRequest,
 }));
 vi.mock('@/lib/auth/owner-browser-read', () => ({ ownerBrowserReadAllowed }));
+vi.mock('@/lib/kanban/owner-team-snapshot.server', () => ({ readOwnerTeamCatalogSnapshot }));
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope }));
 vi.mock('@/lib/notifications/push', () => ({ dispatchCardEvent }));
 vi.mock('@/lib/notifications/scheduler', () => ({ startDueReminderScheduler }));
@@ -327,6 +330,7 @@ describe('GET /api/kanban/cards', () => {
     vi.mocked(loadRelayScopeCatalog).mockReset().mockReturnValue(null);
     nativeProjectAccessContextFromRequest.mockReset().mockResolvedValue(null);
     ownerBrowserReadAllowed.mockReset().mockResolvedValue(false);
+    readOwnerTeamCatalogSnapshot.mockReset().mockReturnValue(null);
     identity.current = { username: 'nikita', scope: 'work' };
     authenticated.current = { username: 'nikita', scope: 'work' };
     tasksDirForScope.mockReturnValue('/scoped/work');
@@ -599,6 +603,7 @@ describe('GET /api/kanban/cards', () => {
     expect(response.status).toBe(200);
     expect(await taskSnapshot(response)).toEqual({ cards: [allowed], projects: [{ id: 'board-project', externalKey: 'board', name: 'Олег и Никита' }] });
     expect(nativeProjectAccessContextFromRequest).toHaveBeenCalledTimes(1);
+    expect(readOwnerTeamCatalogSnapshot).not.toHaveBeenCalled();
   });
 
   it('includes current native team metadata without hiding owner tasks whose team cannot be verified', async () => {
@@ -645,6 +650,7 @@ describe('GET /api/kanban/cards', () => {
       },
     });
     expect(forProject).toHaveBeenCalledTimes(6);
+    expect(readOwnerTeamCatalogSnapshot).not.toHaveBeenCalled();
   });
 
   it('projects legacy team metadata only after existing human project authorization', async () => {
@@ -689,6 +695,47 @@ describe('GET /api/kanban/cards', () => {
       teamCatalog: {status: 'unavailable', coverage: 'visible-projects', teams: [], projectTeams: [], unknownProjectNames: []},
     });
     expect(loadRelayScopeCatalog).not.toHaveBeenCalled();
+    expect(readOwnerTeamCatalogSnapshot).not.toHaveBeenCalled();
   });
+
+
+  it('returns dated display metadata only after the verified owner grant without repeating unavailable native lookups', async () => {
+    ownerBrowserReadAllowed.mockResolvedValueOnce(true);
+    const observed: BoardTeamCatalog = {
+      status: 'partial', coverage: 'owner-catalog',
+      teams: [{ id: 'exmanager:Crew', name: 'Crew' }, { id: 'exmanager:Unlinked', name: 'Unlinked' }],
+      projectTeams: [{ project: 'Alpha', teamId: 'exmanager:Crew', source: 'exmanager-snapshot' }],
+      unknownProjectNames: ['Beta', 'Empty project', 'ExManager QA', 'Legacy', 'Олег и Никита'],
+      provenance: { mode: 'snapshot', source: 'exmanager', observedAt: '2026-01-01T10:00:00.000Z', sourceRevision: '1'.repeat(40) },
+    };
+    readOwnerTeamCatalogSnapshot.mockReturnValueOnce(observed);
+    const response = await GET(new NextRequest('https://todo.example/api/kanban/cards', {
+      headers: { cookie: 'kanban_session=verified-owner', 'X-Airlock-Todo-Native-Identity': 'verified-owner' },
+    }));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(body.cards).toEqual([allowed, qaCard, alpha, beta, legacy]);
+    expect(body.projects).toHaveLength(5);
+    expect(body.teamCatalog).toEqual(observed);
+    expect(readOwnerTeamCatalogSnapshot).toHaveBeenCalledWith('/scoped/work',
+      expect.arrayContaining(['Alpha', 'Beta', 'Empty project', 'ExManager QA', 'Legacy', 'Олег и Никита']));
+    expect(nativeProjectAccessContextFromRequest).not.toHaveBeenCalled();
+    expect(loadRelayScopeCatalog).not.toHaveBeenCalled();
+  });
+
+  it.each(['native_identity_invalid', 'native_owner_read_mismatch'])(
+    'does not read tasks or the private directory when the owner verification fails: %s', async reason => {
+      ownerBrowserReadAllowed.mockRejectedValueOnce(new Error(reason));
+      const response = await GET(new NextRequest('https://todo.example/api/kanban/cards', {
+        headers: { cookie: 'kanban_session=owner-cookie', 'X-Airlock-Todo-Native-Identity': 'mismatched-or-invalid' },
+      }));
+      expect(response.status).toBe(403);
+      expect(readOwnerTeamCatalogSnapshot).not.toHaveBeenCalled();
+      expect(getAllCards).not.toHaveBeenCalled();
+      expect(listProjects).not.toHaveBeenCalled();
+      expect(nativeProjectAccessContextFromRequest).not.toHaveBeenCalled();
+    },
+  );
 
 });

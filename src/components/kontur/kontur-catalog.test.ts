@@ -170,3 +170,73 @@ describe('Kontur catalogue URL state', () => {
     expect(params.get('project')).toBe('Fixture product');
   });
 });
+
+function ownerSnapshot(): BoardTeamCatalog {
+  return {
+    status: 'partial', coverage: 'owner-catalog',
+    provenance: {mode: 'snapshot', source: 'exmanager', observedAt: '2026-01-02T03:04:05.000Z', sourceRevision: 'b'.repeat(40)},
+    teams: [{id: 'fixture:linked', name: 'Fixture linked team'}, {id: 'fixture:unlinked', name: 'Fixture product'}],
+    projectTeams: [{project: 'Fixture product', teamId: 'fixture:linked', source: 'exmanager-snapshot'}],
+    unknownProjectNames: ['Fixture empty'],
+  };
+}
+
+describe('Kontur dated owner team catalogue', () => {
+  it('retains observed teams with unknown project and task counts instead of false zeroes', () => {
+    const metadata = ownerSnapshot();
+    const projects = buildProjectCatalog([card('a', 'Fixture product')], [{name: 'Fixture empty'}], metadata);
+    const teams = buildTeamCatalog(projects, metadata);
+    expect(teams.find(team => team.id === 'fixture:unlinked')).toMatchObject({
+      projects: [], projectAssociationUnknown: true, taskCount: null, openTaskCount: null,
+    });
+    expect(teams.find(team => team.id === 'fixture:linked')).toMatchObject({
+      projectAssociationUnknown: false, taskCount: 1, openTaskCount: 1,
+    });
+    expect(projects.find(project => project.name === 'Fixture product')?.teams.map(team => team.id))
+      .toEqual(['fixture:linked']);
+  });
+
+  it('retains an observed roster even when no project is visible or linked', () => {
+    const metadata = {...ownerSnapshot(), projectTeams: [], unknownProjectNames: []};
+    const teams = buildTeamCatalog([], metadata);
+    expect(teams).toHaveLength(2);
+    expect(teams.every(team => team.projectAssociationUnknown && team.taskCount === null && team.openTaskCount === null)).toBe(true);
+    expect(teams.every(team => team.projects.length === 0)).toBe(true);
+  });
+
+  it('does not turn a known relationship excluded by a project filter into an unknown one', () => {
+    const metadata = ownerSnapshot();
+    const projects = buildProjectCatalog([card('a', 'Fixture product')], [{name: 'Fixture empty'}], metadata);
+    expect(buildTeamCatalog(projects.filter(project => project.name === 'Fixture empty'), metadata).map(team => team.id))
+      .toEqual(['fixture:unlinked']);
+  });
+
+  it('preserves tasks when the selected observed team has no known projects', () => {
+    const metadata = ownerSnapshot();
+    const cards = [card('a', 'Fixture product'), card('b', 'Fixture empty')];
+    const projects = buildProjectCatalog(cards, [], metadata);
+    expect(resolveTeamFilter('fixture:unlinked', metadata)).toBe('all');
+    expect(filterCardsByTeam(cards, projects, resolveTeamFilter('fixture:unlinked', metadata))).toEqual(cards);
+    expect(resolveTeamFilter('fixture:linked', metadata)).toBe('fixture:linked');
+    expect(filterCardsByTeam(cards, projects, resolveTeamFilter('fixture:linked', metadata))).toEqual([cards[0]]);
+    expect(resolveTeamFilter(UNKNOWN_TEAM_FILTER, metadata)).toBe(UNKNOWN_TEAM_FILTER);
+    expect(resolveTeamFilter('fixture:not-observed', metadata)).toBe('fixture:not-observed');
+  });
+
+  it('carries provenance into task context without attaching an unconfirmed team by matching its name', () => {
+    const metadata = ownerSnapshot();
+    const projects = buildProjectCatalog([card('a', 'Fixture product')], [{name: 'Fixture empty'}], metadata);
+    expect(projects.every(project => project.teamSnapshot === metadata.provenance)).toBe(true);
+    expect(projectTeamLabel(projects.find(project => project.name === 'Fixture empty'))).toBe(UNKNOWN);
+    expect(projectTeamLabel(projects.find(project => project.name === 'Fixture product'))).toBe('Fixture linked team');
+    expect(buildProjectCatalog([card('a', 'Fixture product')], [], linkedCatalog())[0].teamSnapshot).toBeUndefined();
+  });
+
+  it('keeps the normal visible-projects orphan rule unchanged', () => {
+    const metadata = linkedCatalog();
+    metadata.teams.push({id: 'fixture:orphan', name: 'Fixture orphan'});
+    expect(buildTeamCatalog([], metadata)).toEqual([]);
+    const projects = buildProjectCatalog([card('a', 'Fixture product')], [], metadata);
+    expect(buildTeamCatalog(projects, metadata).some(team => team.id === 'fixture:orphan')).toBe(false);
+  });
+});

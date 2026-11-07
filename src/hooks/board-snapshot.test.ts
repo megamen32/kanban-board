@@ -88,3 +88,90 @@ describe('honest native board reads', () => {
     expect(snapshot.teamCatalog).toEqual(catalog);
   });
 });
+
+const snapshotProvenance = {
+  mode: 'snapshot', source: 'exmanager', observedAt: '2026-01-02T03:04:05.000Z', sourceRevision: 'a'.repeat(40),
+} as const;
+const ownerCatalog: BoardTeamCatalog = {
+  status: 'partial', coverage: 'owner-catalog', provenance: snapshotProvenance,
+  teams: [{id: 'fixture:crew', name: 'Fixture crew'}, {id: 'fixture:unlinked', name: 'Fixture unlinked'}],
+  projectTeams: [{project: 'Alpha', teamId: 'fixture:crew', source: 'exmanager-snapshot'}],
+  unknownProjectNames: ['Empty'],
+};
+
+describe('dated owner team snapshots', () => {
+  it('retains observed teams when every project association is unknown', async () => {
+    const metadata = {...ownerCatalog, projectTeams: [], unknownProjectNames: ['Alpha', 'Empty']};
+    expect((await readBoardSnapshot(Response.json({cards: [card], projects: [project], teamCatalog: metadata}))).teamCatalog)
+      .toEqual(metadata);
+  });
+
+  it('retains a partial owner roster without visible projects or fabricated links', async () => {
+    const metadata = {...ownerCatalog, projectTeams: [], unknownProjectNames: []};
+    expect((await readBoardSnapshot(Response.json({cards: [], projects: [], teamCatalog: metadata}))).teamCatalog)
+      .toEqual(metadata);
+  });
+
+  it('keeps partial status for an unlinked team even when every visible project has a link', async () => {
+    const metadata = {...ownerCatalog, unknownProjectNames: []};
+    expect((await readBoardSnapshot(Response.json({cards: [card], teamCatalog: metadata}))).teamCatalog).toEqual(metadata);
+    await expect(readBoardSnapshot(Response.json({cards: [card], teamCatalog: {...metadata, status: 'ready'}})))
+      .rejects.toMatchObject({status: 502});
+  });
+
+  it('accepts a complete dated snapshot without claiming that it is live', async () => {
+    const metadata: BoardTeamCatalog = {
+      ...ownerCatalog, status: 'ready', teams: ownerCatalog.teams.slice(0, 1), unknownProjectNames: [],
+    };
+    expect((await readBoardSnapshot(Response.json({cards: [card], teamCatalog: metadata}))).teamCatalog).toEqual(metadata);
+    await expect(readBoardSnapshot(Response.json({cards: [card], teamCatalog: {...metadata, status: 'partial'}})))
+      .rejects.toMatchObject({status: 502});
+  });
+
+  it('requires exact snapshot provenance and valid UTC observation time', async () => {
+    for (const provenance of [
+      undefined, null, {...snapshotProvenance, mode: 'live'}, {...snapshotProvenance, source: 'guessed'},
+      {...snapshotProvenance, observedAt: '2026-01-02T03:04:05'},
+      {...snapshotProvenance, observedAt: '2026-01-02T03:04:05Z'},
+      {...snapshotProvenance, observedAt: '2026-01-02T03:04:05.0Z'},
+      {...snapshotProvenance, observedAt: '2026-01-02T03:04:05+00:00'},
+      {...snapshotProvenance, observedAt: '2026-02-30T03:04:05.000Z'},
+      {...snapshotProvenance, observedAt: 'not-a-date'},
+      {...snapshotProvenance, sourceRevision: 'a'.repeat(39)},
+      {...snapshotProvenance, sourceRevision: 'A'.repeat(40)},
+    ]) {
+      await expect(readBoardSnapshot(Response.json({cards: [card], projects: [project], teamCatalog: {...ownerCatalog, provenance}})))
+        .rejects.toMatchObject({status: 502});
+    }
+  });
+
+  it('keeps snapshot and live source contracts separate and rejects hidden project links', async () => {
+    for (const change of [
+      {status: 'unavailable'},
+      {projectTeams: [{...ownerCatalog.projectTeams[0], source: 'native-access'}]},
+      {projectTeams: [{...ownerCatalog.projectTeams[0], source: 'relay-scope'}]},
+      {projectTeams: [{...ownerCatalog.projectTeams[0], project: 'Fixture hidden'}]},
+    ]) {
+      await expect(readBoardSnapshot(Response.json({cards: [card], projects: [project], teamCatalog: {...ownerCatalog, ...change}})))
+        .rejects.toMatchObject({status: 502});
+    }
+    for (const change of [
+      {projectTeams: [{...catalog.projectTeams[0], source: 'exmanager-snapshot'}]},
+      {provenance: snapshotProvenance},
+    ]) {
+      await expect(readBoardSnapshot(Response.json({cards: [card], projects: [project], teamCatalog: {...catalog, ...change}})))
+        .rejects.toMatchObject({status: 502});
+    }
+  });
+
+  it('copies only display metadata and provenance, never snapshot permission claims', async () => {
+    const metadata = {
+      ...ownerCatalog,
+      provenance: {...snapshotProvenance, privateSource: 'synthetic-only'},
+      teams: ownerCatalog.teams.map(team => ({...team, canRead: true, members: ['synthetic-only']})),
+      projectTeams: ownerCatalog.projectTeams.map(link => ({...link, readAllowed: true, writeAllowed: true})),
+    };
+    expect((await readBoardSnapshot(Response.json({cards: [card], projects: [project], teamCatalog: metadata}))).teamCatalog)
+      .toEqual(ownerCatalog);
+  });
+});
