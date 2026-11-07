@@ -7,6 +7,8 @@ import type { KanbanProject } from '@/lib/kanban/project-store';
 import type { WeeklyDraft } from '@/lib/kanban/weekly-plan';
 import { retryConflictEdit } from './conflict-choice';
 import { BoardMutationError, boardMutationRequest, readMutationResponse } from '../lib/kanban/mutation-response';
+import { BoardReadError, readBoardSnapshot } from './board-snapshot';
+import { createBoardReader, mergeCardReceipts, type BoardReader } from './board-state';
 
 const WS_URL = '/?XTransformPort=3003';
 
@@ -27,24 +29,40 @@ export function useKanban() {
   const [cards, setCards] = useState<KanbanCard[]>([]);
   const [projects, setProjects] = useState<KanbanProject[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
   const [weeklyDraft, setWeeklyDraft] = useState<WeeklyDraft | null>(null);
   const [weeklyLoading, setWeeklyLoading] = useState(false);
   const [weeklyError, setWeeklyError] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
+  const boardReader = useRef<BoardReader | null>(null);
+  if (!boardReader.current) {
+    boardReader.current = createBoardReader({
+      load: async () => {
+        const res = await fetch('/api/kanban/cards', {cache: 'no-store', credentials: 'same-origin'});
+        return readBoardSnapshot(res);
+      },
+      onData: data => {
+        setCards(data.cards);
+        setProjects(data.projects);
+        setError(null);
+        setLastLoadedAt(new Date().toISOString());
+      },
+      onError: failure => {
+        if (failure instanceof BoardReadError && [401, 403].includes(failure.status)) {
+          setCards([]); setProjects([]); setLastLoadedAt(null);
+        }
+        setError(failure instanceof BoardReadError ? failure.message : 'Сервер недоступен. Сохранённые на экране записи могут быть устаревшими.');
+      },
+      onBusy: setRefreshing,
+      onSettled: () => setLoading(false),
+    });
+  }
 
-  const fetchCards = useCallback(async () => {
-    try {
-      const res = await fetch('/api/kanban/cards');
-      const data = await res.json();
-      if (data.cards) setCards(data.cards);
-      if (data.projects) setProjects(data.projects);
-    } catch (e) {
-      console.error('Fetch cards error:', e);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const fetchCards = useCallback(() => boardReader.current!.read(), []);
+  const refreshCards = useCallback(() => boardReader.current!.refresh(), []);
 
   useEffect(() => {
     fetchCards();
@@ -53,13 +71,14 @@ export function useKanban() {
     const socket = io(WS_URL);
     socketRef.current = socket;
 
-    socket.on('connect', () => { console.log('[ws] connected'); fetchCards(); });
+    socket.on('connect', () => { console.log('[ws] connected'); void refreshCards(); });
     socket.on('disconnect', () => console.log('[ws] disconnected'));
 
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     const scheduleRefresh = () => {
+      boardReader.current!.invalidate();
       clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(fetchCards, 150);
+      refreshTimer = setTimeout(() => { void refreshCards(); }, 150);
     };
     socket.on('board:changed', scheduleRefresh);
     // Retain rollout compatibility, but never merge legacy truncated payloads.
@@ -71,7 +90,7 @@ export function useKanban() {
       clearTimeout(refreshTimer);
       socket.disconnect();
     };
-  }, [fetchCards]);
+  }, [fetchCards, refreshCards]);
 
   const createCard = useCallback(async (title: string, description: string = '', column: string = 'inbox', priority: string = 'medium', tags: string[] = [], project: string = '', assignees: string[] = [], dueAt?: string, planning?: KanbanCardUpdates) => {
     const res = await boardMutationRequest('/api/kanban/cards', {
@@ -82,9 +101,8 @@ export function useKanban() {
     const data = await readMutationResponse(res, false, 'create');
     const saved = data.card;
     if (!saved) throw new BoardMutationError('Сервер не подтвердил создание задачи. Введённые данные не удалены.');
-    if (saved) setCards(prev => prev.some(card => card.id === saved.id)
-      ? prev.map(card => card.id === saved.id ? saved : card)
-      : [...prev, saved]);
+    boardReader.current!.invalidate();
+    setCards(prev => mergeCardReceipts(prev, [saved], true));
     return saved;
   }, []);
 
@@ -107,7 +125,8 @@ export function useKanban() {
     }
     const saved = data.card;
     if (!saved) throw new BoardMutationError('Сервер не подтвердил сохранение карточки. Введённые данные не удалены.');
-    setCards(prev => prev.map(c => c.id === id ? saved : c));
+    boardReader.current!.invalidate();
+    setCards(prev => mergeCardReceipts(prev, [saved]));
     return saved;
   }, []);
 
@@ -115,6 +134,7 @@ export function useKanban() {
     const response = await boardMutationRequest(`/api/kanban/cards/${id}`, { method: 'DELETE' }, 'delete');
     const data = await readMutationResponse(response, false, 'delete');
     if (!data.success) throw new BoardMutationError('Сервер не подтвердил удаление. Карточка не скрыта.');
+    boardReader.current!.invalidate();
     setCards(prev => prev.filter(c => c.id !== id));
     return true;
   }, []);
@@ -133,18 +153,15 @@ export function useKanban() {
     }, 'reorder');
     const data = await readMutationResponse(res, false, 'reorder');
     if (!data.cards) throw new BoardMutationError('Сервер не подтвердил порядок карточек. Обновите доску.');
-    if (data.cards) {
-      setCards((prev: KanbanCard[]) => {
-        const updated = new Map<KanbanCard['id'], KanbanCard>((data.cards as KanbanCard[]).map((c: KanbanCard) => [c.id, c]));
-        return prev.map(c => updated.get(c.id) || c);
-      });
-    }
+    boardReader.current!.invalidate();
+    setCards(prev => mergeCardReceipts(prev, data.cards!));
   }, []);
 
   const resolveConflict = useCallback(async (useServer: boolean) => {
     if (!conflict) return false;
     if (useServer) {
-      setCards(prev => prev.map(c => c.id === conflict.cardId ? conflict.serverCard : c));
+      boardReader.current!.invalidate();
+      setCards(prev => mergeCardReceipts(prev, [conflict.serverCard]));
       setConflict(null);
       return true;
     }
@@ -182,8 +199,9 @@ export function useKanban() {
       });
       const data = await res.json() as WeeklyPlanResult & { cards?: KanbanCard[] };
       if (!res.ok) throw new Error(data.error || 'Не удалось принять план недели');
-      if (data.cards) setCards(previous => previous.map(card => data.cards!.find(updated => updated.id === card.id) ?? card));
-      setWeeklyDraft(previous => previous ? { ...previous, cards: previous.cards.map(card => data.cards?.find(updated => updated.id === card.id) ?? card), cardIds } : previous);
+      boardReader.current!.invalidate();
+      if (data.cards) setCards(previous => mergeCardReceipts(previous, data.cards!));
+      setWeeklyDraft(previous => previous ? { ...previous, cards: mergeCardReceipts(previous.cards, data.cards ?? []), cardIds } : previous);
       return data.cards ?? [];
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Не удалось принять план недели';
@@ -198,6 +216,9 @@ export function useKanban() {
     cards,
     projects,
     loading,
+    refreshing,
+    error,
+    lastLoadedAt,
     conflict,
     createCard,
     updateCard,
@@ -205,7 +226,7 @@ export function useKanban() {
     moveCard,
     reorderColumn,
     resolveConflict,
-    refresh: fetchCards,
+    refresh: refreshCards,
     weeklyDraft,
     weeklyLoading,
     weeklyError,
