@@ -736,6 +736,8 @@
   .kontur-shell .k-button-primary,
   .kontur-shell .k-button-primary:hover:not(:disabled),
   .kontur-shell .k-catalog-card .k-project-mark,
+  .kontur-shell .k-catalog-card .k-project-mark[data-tone="1"],
+  .kontur-shell .k-catalog-card .k-project-mark[data-tone="3"],
   .kontur-shell .k-catalog-card .k-team-mark { background-image: none; }
   .kontur-shell .k-button-primary > span,
   .kontur-shell .k-button-primary > svg,
