@@ -11,9 +11,23 @@ import { DEFAULT_COLUMNS } from '@/lib/kanban/types';
 import type { KanbanCard, Priority, PlanningType, RoleDefinition } from '@/lib/kanban/types';
 import { RolePicker } from './role-picker';
 import { fromDateTimeLocalValue } from '@/lib/kanban/date-input';
-import { mutationErrorMessage } from '../../lib/kanban/mutation-response';
+import { BoardMutationError, mutationErrorMessage } from '../../lib/kanban/mutation-response';
 import { ASSIGNEE_AUTHORIZATION_NOTICE, createFailureMessage, isAssigneeAuthorizationFailure } from './create-form-errors';
 import { getEligibleParentCards } from './card-hierarchy';
+
+const PRIORITY_LABELS: Record<Priority, string> = { low: 'Низкий', medium: 'Средний', high: 'Высокий', critical: 'Критический' };
+const CREATE_REVIEW_NOTICE = 'Сначала создайте задачу в открытом состоянии. Затем откройте карточку, проверьте результат и доказательство и подтвердите завершение.';
+
+/** A new goal has no checked result yet. Classic callers keep their existing default. */
+export function initialCreationColumn(column: string, requireReviewBeforeDone = false): string {
+  return requireReviewBeforeDone && column === 'done' ? 'todo' : column;
+}
+
+/** Refuse completion before invoking the supplied create mutation. */
+export async function createWithReviewGate<T>(column: string, requireReviewBeforeDone: boolean, create: () => Promise<T>): Promise<T> {
+  if (requireReviewBeforeDone && column === 'done') throw new BoardMutationError(CREATE_REVIEW_NOTICE);
+  return create();
+}
 
 export interface PlanningMetadataForm {
   type: PlanningType;
@@ -58,13 +72,14 @@ interface Props {
   roles?: RoleDefinition[];
   projectOptions?: string[];
   relatedCards?: KanbanCard[];
+  requireReviewBeforeDone?: boolean;
   onCreate: (title: string, description: string, column: string, priority: string, tags: string[], project: string, assignees: string[], dueAt?: string, planning?: ReturnType<typeof buildPlanningMetadataCreate>) => Promise<KanbanCard | undefined>;
 }
 
-export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProject = '', ownerPreview = 'nikita', onCreate, roles, projectOptions = [], relatedCards = [] }: Props) {
+export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProject = '', ownerPreview = 'nikita', onCreate, roles, projectOptions = [], relatedCards = [], requireReviewBeforeDone = false }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [column, setColumn] = useState(defaultColumn);
+  const [column, setColumn] = useState(() => initialCreationColumn(defaultColumn, requireReviewBeforeDone));
   const [priority, setPriority] = useState<Priority>('medium');
   const [tags, setTags] = useState<string[]>([]);
   const [project, setProject] = useState('');
@@ -79,7 +94,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
   const [assigneeBlocked, setAssigneeBlocked] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const alertRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => { if (open) { setColumn(defaultColumn); setProject(defaultProject); setBlockerReason(''); setError(null); setAssigneeBlocked(false); setAdvancedOpen(false); } }, [open, defaultColumn, defaultProject]);
+  useEffect(() => { if (open) { setColumn(initialCreationColumn(defaultColumn, requireReviewBeforeDone)); setProject(defaultProject); setBlockerReason(''); setError(null); setAssigneeBlocked(false); setAdvancedOpen(false); } }, [open, defaultColumn, defaultProject, requireReviewBeforeDone]);
 
   // A refusal has to reach the user without hunting for it under the fold.
   useEffect(() => {
@@ -101,7 +116,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
     setAssigneeBlocked(false);
     const requestedAssignees = typedAssignees();
     try {
-    const saved = await onCreate(title.trim(), description.trim(), column, priority, tags, project.trim(), withoutAssignees ? [] : requestedAssignees, fromDateTimeLocalValue(dueAt), buildPlanningMetadataCreate(planning, column === 'blocked' ? blockerReason : undefined));
+    const saved = await createWithReviewGate(column, requireReviewBeforeDone, () => onCreate(title.trim(), description.trim(), column, priority, tags, project.trim(), withoutAssignees ? [] : requestedAssignees, fromDateTimeLocalValue(dueAt), buildPlanningMetadataCreate(planning, column === 'blocked' ? blockerReason : undefined)));
     if (!saved) { setError('Создание не подтверждено. Введённые данные остались в форме.'); return; }
     setTitle('');
     setDescription('');
@@ -176,7 +191,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
 
           <div>
             <label htmlFor="create-project" className="mb-1 block text-xs text-muted-foreground">Проект *</label>
-            <Input id="create-project" aria-label="Проект" list="kanban-create-projects" placeholder="UX QA 2026-10-26" value={project} onChange={e => setProject(e.target.value)} />
+            <Input id="create-project" aria-label="Проект" list="kanban-create-projects" placeholder="Например, Airlock" value={project} onChange={e => setProject(e.target.value)} />
             <datalist id="kanban-create-projects">{projectOptions.map(name => <option key={name} value={name} />)}</datalist>
           </div>
 
@@ -213,7 +228,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">Статус</label>
             <div className="flex flex-wrap gap-1">
-              {DEFAULT_COLUMNS.map(col => (
+              {DEFAULT_COLUMNS.filter(col => !requireReviewBeforeDone || col.id !== 'done').map(col => (
                 <Badge
                   key={col.id}
                   variant={column === col.id ? 'default' : 'outline'}
@@ -224,6 +239,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
                 </Badge>
               ))}
             </div>
+            {requireReviewBeforeDone && <p className="mt-1 text-xs text-muted-foreground">{CREATE_REVIEW_NOTICE}</p>}
           </div>
 
           {column === 'blocked' && <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
@@ -271,7 +287,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
                         className="cursor-pointer"
                         onClick={() => setPriority(p)}
                       >
-                        {p}
+                        {PRIORITY_LABELS[p]}
                       </Badge>
                     ))}
                   </div>

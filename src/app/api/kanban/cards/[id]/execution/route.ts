@@ -10,6 +10,7 @@ import { automationTokenValid, boardIdentityFromRequest, identityFromRequest, na
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { findCardById, updateCard } from '@/lib/kanban/file-store';
 import { taskExecutionSnapshot } from '@/lib/kanban/task-execution';
+import { readBoundSessionStatus, sessionStatusOperation } from '@/lib/kanban/session-status-read';
 import { executorProtocolBlock, newExecutorKey, sweepQuestionTimeout } from '../../../../../../lib/kanban/board-questions';
 import { callOwnerHerderTool, readOwnerHerderResource, type HerderResourceResult, type HerderToolResult } from '@/lib/kanban/task-execution-client';
 import { validateTransition } from '@/lib/kanban/transition-policy';
@@ -2109,6 +2110,19 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   catch (error) { return nativeIdentityErrorResponse(error); }
   try {
     const { id } = await params;
+    if (request.nextUrl.searchParams.has('session')) {
+      const operationId = sessionStatusOperation(request.nextUrl.searchParams);
+      const headers = { 'Cache-Control': 'private, no-store', 'Vary': 'Cookie, Authorization' };
+      if (!operationId) return NextResponse.json({ error: 'invalid session status request', code: 'invalid_request' }, { status: 400, headers });
+      const context = await authorizedTaskCard(request, id, 'read', nativeContext);
+      if ('response' in context) return context.response;
+      const observed = await readBoundSessionStatus(context.card, operationId, {
+        readSession: (args, timeoutMs) => callOwnerHerderTool('agent_info', args, timeoutMs),
+        readCard: () => findCardById(id, context.tasksDir) ?? undefined,
+        legacyCwd: process.env.EXMANAGER_TASK_EXECUTION_CWD,
+      });
+      return NextResponse.json(observed.body, { status: observed.status, headers });
+    }
     if (request.nextUrl.searchParams.has('target')) {
       if(request.nextUrl.searchParams.get('target')!=='preview'||[...request.nextUrl.searchParams.keys()].some(key=>key!=='target'))
         return NextResponse.json({error:'invalid target preview request'},{status:400});

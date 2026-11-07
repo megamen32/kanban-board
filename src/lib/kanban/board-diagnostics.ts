@@ -1,6 +1,11 @@
 export type DiagnosticAction = 'read'|'create'|'update'|'delete'|'reorder'|'review';
 export interface BoardDiagnostic { id:string; requestId?:string; at:string; action:DiagnosticAction; status:number; reason:string; nextStep:string }
 export const mutationReasons: Record<string, string> = {
+    verification_result_evidence_confirmation_required: 'Укажите проверенный результат, доказательство и подтвердите личную проверку.',
+    task_already_closed: 'Задача уже закрыта. Обновите данные, повторная приёмка не нужна.',
+    task_has_unanswered_question: 'Сначала ответьте на открытый вопрос исполнителя.',
+    reviewer_not_authorized: 'Принять результат может только назначенный проверяющий либо владелец своей обычной задачи.',
+    task_not_waiting_for_review: 'Состояние задачи изменилось. Обновите карточку перед решением.',
     assignee_change_requires_owner_authorization: 'Подтвердите переназначение ответственных перед сохранением.',
     reviewer_change_requires_owner_authorization: 'Список принимающих результат меняет только владелец доски.',
     parent_relation_cycle: 'Такая связь создала бы цикл между родительской задачей и подзадачей.',
