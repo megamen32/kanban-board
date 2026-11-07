@@ -24,8 +24,11 @@ export async function GET(req: NextRequest) {
 
   let connected = false;
   let storeUnavailable = false;
+  let projects: string[] = [];
   try {
-    connected = (await keeperCredentialForUser(username)) !== null;
+    const credential = await keeperCredentialForUser(username);
+    connected = credential !== null;
+    if (credential) projects = Object.keys(credential.projectCalendars ?? {}).sort();
   } catch (error) {
     // Fail closed honestly: the UI must show "unavailable", not a fake state.
     if (error instanceof KeeperCredentialStoreError) storeUnavailable = true;
@@ -35,6 +38,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     enabled: keeperCalendarEnabled(),
     connected,
+    projects,
     publicUrl: keeperCalendarPublicUrl(),
     ...(storeUnavailable ? { storeUnavailable: true } : {}),
   });

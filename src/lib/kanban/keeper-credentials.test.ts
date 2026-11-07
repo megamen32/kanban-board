@@ -31,13 +31,30 @@ describe('per-user Keeper credential store (protected auth root)', () => {
     writeCredentials(JSON.stringify({
       version: 1,
       credentials: {
-        nikita: { bearer: 'kpr_nikita_token', calendarId: 'cal-nikita' },
+        nikita: {
+          bearer: 'kpr_nikita_token',
+          calendarId: 'cal-nikita',
+          projectCalendars: { QA: 'cal-qa-nikita' },
+        },
         oleg: { bearer: 'kpr_oleg_token', calendarId: 'cal-oleg' },
       },
     }));
-    expect(await keeperCredentialForUser('nikita')).toEqual({ bearer: 'kpr_nikita_token', calendarId: 'cal-nikita' });
+    expect(await keeperCredentialForUser('nikita')).toEqual({
+      bearer: 'kpr_nikita_token',
+      calendarId: 'cal-nikita',
+      projectCalendars: { QA: 'cal-qa-nikita' },
+    });
     expect(await keeperCredentialForUser('oleg')).toEqual({ bearer: 'kpr_oleg_token', calendarId: 'cal-oleg' });
     expect(await keeperCredentialForUser('stranger')).toBeNull();
+  });
+
+  test('fails closed on malformed per-project calendar mapping', async () => {
+    writeCredentials(JSON.stringify({ version: 1, credentials: { nikita: { bearer: 'kpr_x', calendarId: 'cal', projectCalendars: { QA: '' } } } }));
+    await expect(keeperCredentialForUser('nikita')).rejects.toBeInstanceOf(KeeperCredentialStoreError);
+    writeCredentials(JSON.stringify({ version: 1, credentials: { nikita: { bearer: 'kpr_x', calendarId: 'cal', projectCalendars: [] } } }));
+    await expect(keeperCredentialForUser('nikita')).rejects.toBeInstanceOf(KeeperCredentialStoreError);
+    writeCredentials(JSON.stringify({ version: 1, credentials: { nikita: { bearer: 'kpr_x', calendarId: 'cal', projectCalendars: 'QA' } } }));
+    await expect(keeperCredentialForUser('nikita')).rejects.toBeInstanceOf(KeeperCredentialStoreError);
   });
 
   test('fails closed on a group/other-readable file instead of serving secrets', async () => {

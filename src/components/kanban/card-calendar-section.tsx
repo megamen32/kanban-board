@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button';
 export type CalendarBridgeStatus = {
   enabled: boolean;
   connected: boolean;
+  /** Project names with an explicit calendar mapping (names only, no ids). */
+  projects?: string[];
   publicUrl?: string | null;
   storeUnavailable?: boolean;
 };
@@ -12,6 +14,8 @@ export type CalendarBridgeStatus = {
 export interface CardCalendarSectionProps {
   /** The card's saved due date; the section only exists with one. */
   dueAt?: string | null;
+  /** The card's existing board project; routes the event via the user's own mapping. */
+  project?: string;
   /** null while the status request is in flight. */
   status: CalendarBridgeStatus | 'unavailable' | null;
   durationMinutes: number;
@@ -34,12 +38,13 @@ const DURATION_OPTIONS = [15, 30, 60, 90, 120];
  * enabled AND this user's account is connected, the action stays disabled
  * with an honest label and a link to Keeper.
  */
-export function CardCalendarSection({ dueAt, status, durationMinutes, onDurationChange, onSync, syncing = false, eventId, message, dueAtUnsaved = false, className }: CardCalendarSectionProps) {
+export function CardCalendarSection({ dueAt, project, status, durationMinutes, onDurationChange, onSync, syncing = false, eventId, message, dueAtUnsaved = false, className }: CardCalendarSectionProps) {
   if (!dueAt) return null;
 
   const unavailable = status === 'unavailable' || (status !== null && (!status.enabled || status.storeUnavailable === true));
   const notConnected = !unavailable && status !== null && !status.connected;
   const actionReady = !unavailable && status !== null && status.connected && !syncing;
+  const projectMapped = !unavailable && status !== null && !!project && (status.projects ?? []).includes(project);
   const label = unavailable
     ? 'Календарь недоступен'
     : status === null
@@ -54,6 +59,12 @@ export function CardCalendarSection({ dueAt, status, durationMinutes, onDuration
     <div className={className} aria-label="Календарь" data-testid="card-calendar-section">
       <p className="text-xs font-medium text-muted-foreground">Календарь Keeper</p>
       <div className="flex flex-wrap items-center gap-2">
+        {project && (
+          <span className="text-xs text-muted-foreground" data-testid="calendar-project">
+            Проект: {project}
+            {projectMapped && <span className="ml-1 rounded bg-muted px-1" title="Проект направлен в отдельный календарь этого аккаунта">свой календарь</span>}
+          </span>
+        )}
         <label className="text-xs text-muted-foreground">Длительность
           <select
             aria-label="Длительность события"

@@ -29,6 +29,10 @@ export interface CalendarEventBinding {
   endTime: string;
   /** sha256 of the synced card title; a changed title re-patches the event. */
   titleHash?: string;
+  /** Board project at sync time; a changed project needs manual rebind. */
+  project?: string;
+  /** The calendar the event actually lives in (this user's own). */
+  calendarId?: string;
   syncedAt: string;
 }
 
@@ -58,6 +62,10 @@ function validIso(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 64 && Number.isFinite(new Date(value).getTime());
 }
 
+function validSecretText(value: string, maxLength: number): boolean {
+  return value.trim().length > 0 && value.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
 function validRecord(value: unknown): CalendarSyncRecord | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
@@ -75,7 +83,9 @@ function validRecord(value: unknown): CalendarSyncRecord | null {
   if (record.state !== 'bound') return null;
   if (typeof record.eventId !== 'string' || !record.eventId.trim() || record.eventId.length > 512
     || !validIso(record.startTime) || !validIso(record.endTime) || !validIso(record.syncedAt)
-    || record.titleHash !== undefined && (typeof record.titleHash !== 'string' || !/^[a-f0-9]{64}$/.test(record.titleHash))) {
+    || record.titleHash !== undefined && (typeof record.titleHash !== 'string' || !/^[a-f0-9]{64}$/.test(record.titleHash))
+    || record.project !== undefined && (typeof record.project !== 'string' || !validSecretText(record.project, 200))
+    || record.calendarId !== undefined && (typeof record.calendarId !== 'string' || !validSecretText(record.calendarId, 256))) {
     return null;
   }
   return {
@@ -84,6 +94,8 @@ function validRecord(value: unknown): CalendarSyncRecord | null {
     startTime: new Date(record.startTime).toISOString(),
     endTime: new Date(record.endTime).toISOString(),
     ...(typeof record.titleHash === 'string' && /^[a-f0-9]{64}$/.test(record.titleHash) ? { titleHash: record.titleHash } : {}),
+    ...(typeof record.project === 'string' && validSecretText(record.project, 200) ? { project: record.project } : {}),
+    ...(typeof record.calendarId === 'string' && validSecretText(record.calendarId, 256) ? { calendarId: record.calendarId } : {}),
     syncedAt: new Date(record.syncedAt).toISOString(),
   };
 }

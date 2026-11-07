@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useKanban, type KanbanUpdateRequest } from '@/hooks/use-kanban';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { AddCardDialog } from '@/components/kanban/add-card-dialog';
+import { AddCardDialog, createWithReviewGate } from '@/components/kanban/add-card-dialog';
 import { CardEditDialog } from '@/components/kanban/card-edit-dialog';
 import { ConflictDialog } from '@/components/kanban/conflict-dialog';
 import { BoardDiagnosticsPanel } from '@/components/kanban/board-diagnostics-panel';
@@ -22,12 +22,13 @@ import { BoardMutationError, boardMutationRequest, mutationErrorMessage, readMut
 import { recordDiagnostic } from '@/lib/kanban/board-diagnostics';
 import { filterWorkspaceCards, getProjectOptions, isClosedCard, resolveInitialWorkspaceView, type WorkspaceView } from '@/components/kanban/view-model';
 import { parseBoardUrlState } from '@/components/kanban/board-url-state';
-import { UNKNOWN, filterCards, getActivity, getDecisions, getFilterOptions, getReleases, getSessions, safeExternalUrl, taskFacts } from './kontur-model';
+import { UNKNOWN, filterCards, getActivity, getDecisions, getFilterOptions, getReleases, getSessions, safeExternalUrl, taskFacts, type KonturSession } from './kontur-model';
 import { KonturCalendar, formatStamp, moscowDay } from './kontur-calendar';
+import { KONTUR_SERVICES, PRIMARY_PROJECTS, RECORD_TYPES, isProjectSection, isRecordType, projectMatchesSection, recordTypeScreen, type ProjectSection, type RecordType } from './kontur-config';
 import './kontur.css';
 
 type Screen = 'overview' | 'kanban' | 'list' | 'calendar' | 'sessions' | 'blockers' | 'releases' | 'decisions' | 'activity';
-type SessionFilter = 'all' | 'running' | 'waiting' | 'stopped' | 'result' | 'unknown' | 'check';
+type SessionFilter = 'all' | 'running' | 'waiting' | 'stalled' | 'stopped' | 'result' | 'unknown' | 'check';
 type ErrorFilter = 'all' | 'ACL' | '429' | 'ENAMETOOLONG' | 'other';
 
 const NAV = [
@@ -44,11 +45,58 @@ const NAV = [
 const SCREENS = new Set<string>(NAV.map(item => item.id));
 const PRIORITIES: Record<string, string> = { critical: 'Критический', high: 'Высокий', medium: 'Средний', low: 'Низкий' };
 const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-const SERVICES = [
-  { name: 'Сообщения', host: 'msg.bezrabotnyi.com', href: 'https://msg.bezrabotnyi.com', icon: MessageSquare },
-  { name: 'Agent Herder', host: 'agent.bezrabotnyi.com', href: 'https://agent.bezrabotnyi.com', icon: Radio },
-  { name: 'Airlock', host: 'airlock.bezrabotnyi.com', href: 'https://airlock.bezrabotnyi.com', icon: LockKeyhole },
+const SERVICE_ICONS = { messages: MessageSquare, agents: Radio, airlock: LockKeyhole, gptadmin: Server };
+const SESSION_FILTERS = [
+  ['all', 'Все записи'], ['running', 'Активные'], ['waiting', 'Ожидают'],
+  ['stalled', 'Зависшие'], ['unknown', 'Неизвестно'], ['stopped', 'Остановлены'], ['result', 'С результатом'],
 ] as const;
+const LIVE_SESSION_LABELS = { running: 'В работе', waiting: 'Ожидает', idle: 'Нет активного хода', stopped: 'Остановлена', error: 'Ошибка', unknown: UNKNOWN } as const;
+type LiveSessionState = keyof typeof LIVE_SESSION_LABELS;
+type SessionObservation = {
+  cardVersion: number;
+  sessionId: string | null;
+  state: LiveSessionState;
+  source: 'agent-herder:agent_info' | null;
+  checkedAt: string | null;
+  lastActivityAt: string | null;
+  reason: string | null;
+};
+
+function observationDate(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value));
+}
+
+function sessionObservation(value: unknown, session: KonturSession): SessionObservation | null {
+  if (!value || typeof value !== 'object') return null;
+  const data = value as Record<string, unknown>;
+  const expectedId = session.sessionId === UNKNOWN ? null : session.sessionId;
+  if (data.cardId !== session.cardId || data.operationId !== session.operationId || data.sessionId !== expectedId
+    || !Number.isSafeInteger(data.cardVersion) || Number(data.cardVersion) < 0
+    || typeof data.state !== 'string' || !Object.hasOwn(LIVE_SESSION_LABELS, data.state)) return null;
+  const source = data.source === 'agent-herder:agent_info' ? data.source : null;
+  const checkedAt = observationDate(data.checkedAt) ? data.checkedAt : null;
+  if (data.state !== 'unknown' && (!source || !checkedAt)) return null;
+  return { cardVersion: Number(data.cardVersion), sessionId: expectedId, state: data.state as LiveSessionState,
+    source, checkedAt, lastActivityAt: observationDate(data.lastActivityAt) ? data.lastActivityAt : null,
+    reason: typeof data.reason === 'string' ? data.reason.slice(0, 1000) : null };
+}
+
+function parseSessionFilter(value: string | null): SessionFilter | undefined {
+  if (value === 'active') return 'running';
+  if (value === 'stuck') return 'stalled';
+  return value === 'check' || SESSION_FILTERS.some(([id]) => id === value) ? value as SessionFilter : undefined;
+}
+
+function hasRecordType(card: KanbanCard, type: RecordType) {
+  switch (type) {
+    case 'session': return getSessions([card]).length > 0;
+    case 'pr': return getReleases([card]).some(release => release.kind === 'pr');
+    case 'deployment': return getReleases([card]).some(release => release.kind === 'deployment');
+    case 'decision': return getDecisions([card]).length > 0;
+    case 'activity': return getActivity([card]).length > 0;
+    default: return true;
+  }
+}
 
 function statusLabel(status: string) { return DEFAULT_COLUMNS.find(column => column.id === status)?.title ?? UNKNOWN; }
 function projectTone(project: string) { return [...project].reduce((sum, character) => sum + character.charCodeAt(0), 0) % 4; }
@@ -83,6 +131,15 @@ function Evidence({ refs }: { refs: string[] }) {
     const href = safeExternalUrl(reference);
     return <li key={`${reference}-${index}`}>{href ? <a href={href} target="_blank" rel="noopener noreferrer">{reference}<ExternalLink size={11} /></a> : <code>{reference}</code>}</li>;
   })}</ul>;
+}
+function ServiceLinks() {
+  return <div className="k-service-links">{KONTUR_SERVICES.map(service => {
+    const Icon = SERVICE_ICONS[service.id];
+    return <div className="k-service-item" key={service.id}>
+      <a href={service.href} target="_blank" rel="noopener noreferrer" aria-label={`Открыть сайт ${service.name}: ${service.host}`}><span className="k-service-icon"><Icon size={16} /></span><span><strong>{service.name}</strong><small>{service.host}</small></span><ArrowUpRight size={14} /></a>
+      <div className="k-service-detail"><span>Доступ MCP: неизвестно</span><a href={service.mcpHref} target="_blank" rel="noopener noreferrer" title={service.mcpHref} aria-label={`Открыть MCP ${service.name}: ${service.mcpHref}`}>API / MCP<ArrowUpRight size={12} /></a></div>
+    </div>;
+  })}<p className="k-services-note">Сайт и API открываются отдельно. Содержимое интеграций здесь не подставляется.</p></div>;
 }
 function continuation(card: KanbanCard) {
   const facts = taskFacts(card);
@@ -127,6 +184,8 @@ export function KonturBoard() {
   const [mounted, setMounted] = useState(false);
   const [screen, setScreen] = useState<Screen>('overview');
   const [project, setProject] = useState('all');
+  const [projectSection, setProjectSection] = useState<ProjectSection>('all');
+  const [recordType, setRecordType] = useState<RecordType>('all');
   const [server, setServer] = useState('all');
   const [status, setStatus] = useState('all');
   const [priority, setPriority] = useState('all');
@@ -147,6 +206,8 @@ export function KonturBoard() {
   const [daily, setDaily] = useState(false);
   const [includeClosed, setIncludeClosed] = useState(false);
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>('all');
+  const [sessionObservations, setSessionObservations] = useState<Record<string, SessionObservation>>({});
+  const [checkingSessions, setCheckingSessions] = useState<Set<string>>(new Set());
   const [blockerFilter, setBlockerFilter] = useState<ErrorFilter>('all');
   const [listSort, setListSort] = useState<'priority' | 'updated' | 'due'>('priority');
   const [listLimit, setListLimit] = useState(60);
@@ -162,6 +223,7 @@ export function KonturBoard() {
   const menuRef = useRef<HTMLButtonElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestedWorkspace = useRef<WorkspaceView | undefined>(undefined);
+  const sessionRequests = useRef(new Map<string, AbortController>());
 
   const notify = useCallback((message: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -169,6 +231,10 @@ export function KonturBoard() {
     toastTimer.current = setTimeout(() => setToast(''), 6500);
   }, []);
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+  useEffect(() => () => {
+    for (const controller of sessionRequests.current.values()) controller.abort();
+    sessionRequests.current.clear();
+  }, []);
 
   useEffect(() => {
     setMounted(true);
@@ -180,6 +246,16 @@ export function KonturBoard() {
     else if (legacy.tab === 'closed' || legacy.layout === 'list') setScreen('list');
     else if (legacy.layout === 'kanban' || legacy.tab === 'execution') setScreen('kanban');
     if (legacy.project) setProject(legacy.project);
+    const requestedSection = params.get('section');
+    const requestedType = params.get('recordType');
+    const requestedSession = parseSessionFilter(params.get('sessionState'));
+    if (isProjectSection(requestedSection)) setProjectSection(requestedSection);
+    if (isRecordType(requestedType)) {
+      setRecordType(requestedType);
+      const typeScreen = recordTypeScreen(requestedType);
+      if ((!requestedScreen || !SCREENS.has(requestedScreen)) && typeScreen) setScreen(typeScreen);
+    }
+    if (requestedSession) setSessionFilter(requestedSession);
     if (legacy.search) setSearch(legacy.search);
     const requestedServer = params.get('server');
     const requestedStatus = params.get('status');
@@ -232,7 +308,7 @@ export function KonturBoard() {
     if (!urlReady || !identityReady) return;
     const params = new URLSearchParams(window.location.search);
     params.set('screen', screen); params.set('view', workspace);
-    for (const [key, value] of [['project', project], ['server', server], ['status', status], ['priority', priority], ['search', search.trim()]] as const) {
+    for (const [key, value] of [['project', project], ['section', projectSection], ['recordType', recordType], ['sessionState', sessionFilter], ['server', server], ['status', status], ['priority', priority], ['search', search.trim()]] as const) {
       if (value && value !== 'all') params.set(key, value); else params.delete(key);
     }
     if (daily) params.set('daily', '1'); else params.delete('daily');
@@ -240,9 +316,9 @@ export function KonturBoard() {
     if (selectedCardId) params.set('card', selectedCardId); else params.delete('card');
     const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
     if (next !== window.location.pathname + window.location.search + window.location.hash) window.history.replaceState(window.history.state, '', next);
-  }, [screen, project, server, status, priority, search, workspace, selectedCardId, daily, includeClosed, identityReady, urlReady]);
+  }, [screen, project, projectSection, recordType, sessionFilter, server, status, priority, search, workspace, selectedCardId, daily, includeClosed, identityReady, urlReady]);
 
-  useEffect(() => { setListLimit(60); setJournalLimit(50); setColumnLimit({}); }, [project, server, status, priority, search, workspace, screen]);
+  useEffect(() => { setListLimit(60); setJournalLimit(50); setColumnLimit({}); }, [project, projectSection, recordType, server, status, priority, search, workspace, screen]);
 
   useEffect(() => {
     if (!mobileMenu || !isMobile) return;
@@ -264,26 +340,74 @@ export function KonturBoard() {
   const filterOptions = useMemo(() => getFilterOptions(scopedCards), [scopedCards]);
   const projectOptions = useMemo(() => getProjectOptions(cards, projects), [cards, projects]);
   const allProjects = useMemo(() => [...new Set([...filterOptions.projects, ...projects.map(item => item.name).filter(Boolean)])].sort((a, b) => a.localeCompare(b, 'ru')), [filterOptions.projects, projects]);
-  const filteredCards = useMemo(() => filterCards(scopedCards, { project, server: screen === 'sessions' ? 'all' : server, status, priority, search }), [scopedCards, project, server, status, priority, search, screen]);
+  const sectionCards = useMemo(() => scopedCards.filter(card => projectMatchesSection(taskFacts(card).project, projectSection)), [scopedCards, projectSection]);
+  const typedCards = useMemo(() => sectionCards.filter(card => hasRecordType(card, recordType)), [sectionCards, recordType]);
+  const filteredCards = useMemo(() => filterCards(typedCards, { project, server: screen === 'sessions' ? 'all' : server, status, priority, search }), [typedCards, project, server, status, priority, search, screen]);
+  const cardsById = useMemo(() => new Map(cards.map(card => [card.id, card])), [cards]);
   const unresolved = useMemo(() => filteredCards.filter(card => !isClosedCard(card)), [filteredCards]);
   const blockers = useMemo(() => unresolved.filter(hasBlocker), [unresolved]);
   const reviewCards = useMemo(() => unresolved.filter(card => card.column === 'review' || card.needsReview), [unresolved]);
-  const sessions = useMemo(() => getSessions(filteredCards).filter(session => server === 'all' || session.machine === server), [filteredCards, server]);
+  const sessions = useMemo(() => getSessions(filteredCards).filter(session => server === 'all' || session.machine === server).map(session => {
+    const parent = cardsById.get(session.cardId);
+    return { ...session, owner: parent ? taskFacts(parent).owner : UNKNOWN, priority: parent?.priority ?? UNKNOWN };
+  }), [filteredCards, server, cardsById]);
+  const serverOptions = useMemo(() => [...new Set([...filterOptions.servers, ...getSessions(scopedCards).map(session => session.machine)])].sort((a, b) => a.localeCompare(b, 'ru', { numeric: true })), [filterOptions.servers, scopedCards]);
   const activity = useMemo(() => getActivity(filteredCards), [filteredCards]);
   const decisions = useMemo(() => getDecisions(filteredCards), [filteredCards]);
-  const releases = useMemo(() => getReleases(filteredCards), [filteredCards]);
+  const releases = useMemo(() => getReleases(filteredCards).filter(release => recordType !== 'pr' && recordType !== 'deployment' || release.kind === recordType), [filteredCards, recordType]);
   const attentionCards = useMemo(() => [...unresolved].sort(attentionOrder), [unresolved]);
   const selectedCard = selectedCardId ? cards.find(card => card.id === selectedCardId) : undefined;
   const currentNav = NAV.find(item => item.id === screen)!;
-  const hasFilters = project !== 'all' || server !== 'all' || status !== 'all' || priority !== 'all' || Boolean(search.trim());
+  const hasFilters = project !== 'all' || projectSection !== 'all' || recordType !== 'all' || sessionFilter !== 'all' || server !== 'all' || status !== 'all' || priority !== 'all' || Boolean(search.trim());
+  const selectedSection = PRIMARY_PROJECTS.find(item => item.id === projectSection);
+  const selectedType = RECORD_TYPES.find(item => item.id === recordType)!;
+  const matchingProjectNames = allProjects.filter(name => projectMatchesSection(name, projectSection) && name !== UNKNOWN);
+  const defaultProject = project !== 'all' && project !== UNKNOWN ? project : projectSection !== 'all' && matchingProjectNames.length === 1 ? matchingProjectNames[0] : '';
   const closedCount = filteredCards.filter(isClosedCard).length;
   const ready = !loading && identityReady && Boolean(username) && (!error || cards.length > 0);
   const dark = !mounted || resolvedTheme !== 'light';
   const today = mounted ? moscowDay(new Date()) : null;
   const dueSoon = unresolved.filter(card => moscowDay(card.dueAt) && (!today || moscowDay(card.dueAt)! >= today)).sort((a, b) => Date.parse(a.dueAt!) - Date.parse(b.dueAt!)).slice(0, 4);
 
-  const clearFilters = () => { setProject('all'); setServer('all'); setStatus('all'); setPriority('all'); setSearch(''); setSessionFilter('all'); setBlockerFilter('all'); };
+  const clearFilters = () => { setProject('all'); setProjectSection('all'); setRecordType('all'); setServer('all'); setStatus('all'); setPriority('all'); setSearch(''); setSessionFilter('all'); setBlockerFilter('all'); };
   const navigate = (next: Screen) => { setScreen(next); setMobileMenu(false); };
+  const chooseRecordType = (next: RecordType) => {
+    setRecordType(next);
+    const nextScreen = recordTypeScreen(next);
+    if (nextScreen) navigate(nextScreen);
+  };
+  const chooseProject = (name: string) => { setProject(name); setProjectSection('all'); };
+  const chooseProjectSection = (section: ProjectSection) => { setProjectSection(section); setProject('all'); navigate('kanban'); };
+  const checkSession = async (session: KonturSession) => {
+    if (sessionRequests.current.has(session.id) || session.operationId === UNKNOWN) return;
+    const controller = new AbortController();
+    sessionRequests.current.set(session.id, controller);
+    setCheckingSessions(previous => new Set(previous).add(session.id));
+    const timeout = setTimeout(() => controller.abort(), 25_000);
+    let observation: SessionObservation;
+    try {
+      const response = await fetch(`/api/kanban/cards/${encodeURIComponent(session.cardId)}/execution?session=status&operationId=${encodeURIComponent(session.operationId)}`, {
+        method: 'GET', credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
+      });
+      const data: unknown = response.headers.get('content-type')?.toLowerCase().includes('application/json') ? await response.json().catch(() => null) : null;
+      const checked = sessionObservation(data, session);
+      if (!response.ok || !checked) {
+        const failure = data && typeof data === 'object' ? data as Record<string, unknown> : null;
+        const message = typeof failure?.error === 'string' ? failure.error.slice(0, 1000)
+          : checked?.reason || (response.ok ? 'Ответ не подтверждает состояние этой сессии.' : `Состояние не получено. HTTP ${response.status}.`);
+        throw new Error(message);
+      }
+      observation = checked;
+    } catch (failure) {
+      observation = { cardVersion: session.cardVersion, sessionId: session.sessionId === UNKNOWN ? null : session.sessionId,
+        state: 'unknown', source: null, checkedAt: null, lastActivityAt: null,
+        reason: controller.signal.aborted ? 'Проверка не завершилась за 25 секунд. Состояние неизвестно.' : failure instanceof Error ? failure.message : 'Проверка не удалась. Состояние неизвестно.' };
+    } finally { clearTimeout(timeout); }
+    if (sessionRequests.current.get(session.id) !== controller) return;
+    sessionRequests.current.delete(session.id);
+    setSessionObservations(previous => ({ ...previous, [session.id]: observation }));
+    setCheckingSessions(previous => { const next = new Set(previous); next.delete(session.id); return next; });
+  };
   const openCard = (card: KanbanCard) => setSelectedCardId(card.id);
   const newTask = (column: string = 'inbox') => { setDefaultColumn(column); setShowAdd(true); };
   const copy = useCallback((text: string, label: string) => {
@@ -300,7 +424,7 @@ export function KonturBoard() {
       recordDiagnostic('create', 0, 'verification_result_evidence_confirmation_required');
       throw new BoardMutationError('Новую задачу нельзя сразу создать завершённой. Выбери незавершённое состояние, сохрани задачу и проверь результат в её карточке. Введённые данные остались в форме.');
     }
-    const saved = await createCard(title, description, column, cardPriority, tags, cardProject, assignees, dueAt, planning);
+    const saved = await createWithReviewGate(planning?.column ?? column, true, () => createCard(title, description, column, cardPriority, tags, cardProject, assignees, dueAt, planning));
     if (saved) { setSelectedCardId(saved.id); notify('Задача создана. Открыта сохранённая карточка.'); }
     return saved;
   }, [createCard, notify]);
@@ -347,7 +471,15 @@ export function KonturBoard() {
   const listCards = [...filteredCards].sort((a, b) => listSort === 'updated'
     ? (Date.parse(b.updated) || 0) - (Date.parse(a.updated) || 0)
     : listSort === 'due' ? (Date.parse(a.dueAt ?? '') || Infinity) - (Date.parse(b.dueAt ?? '') || Infinity) || attentionOrder(a, b) : attentionOrder(a, b));
-  const visibleSessions = sessions.filter(session => sessionFilter === 'all' || (sessionFilter === 'check' ? ['running', 'waiting', 'unknown'].includes(session.state) : session.state === sessionFilter));
+  const observedSessionState = (session: KonturSession) => {
+    const observation = sessionObservations[session.id];
+    if (!observation) return session.state;
+    if (observation.cardVersion !== session.cardVersion || observation.sessionId !== (session.sessionId === UNKNOWN ? null : session.sessionId)) return 'unknown';
+    return observation.state;
+  };
+  const visibleSessions = sessions.filter(session => sessionFilter === 'all'
+    || (sessionFilter === 'check' ? !sessionObservations[session.id] || observedSessionState(session) === 'unknown'
+      : sessionFilter !== 'stalled' && observedSessionState(session) === sessionFilter));
   const visibleBlockers = blockers.filter(card => blockerFilter === 'all' || errorKind(card) === blockerFilter);
   const columns = DEFAULT_COLUMNS.filter(column => (status === 'all' || status === column.id) && (includeClosed || status === column.id || !['done', 'archived'].includes(column.id)));
 
@@ -358,7 +490,7 @@ export function KonturBoard() {
       <span className="k-attention-tail">{extra ?? <StatusBadge status={card.column} />}<ChevronRight size={16} /></span>
     </button>;
   };
-  const projectCounts = allProjects.map(name => ({ name, cards: unresolved.filter(card => taskFacts(card).project === name) })).filter(item => project === 'all' || item.name === project);
+  const projectCounts = allProjects.map(name => ({ name, cards: unresolved.filter(card => taskFacts(card).project === name) })).filter(item => (project === 'all' || item.name === project) && projectMatchesSection(item.name, projectSection));
   const navCount = (id: Screen) => id === 'blockers' ? scopedCards.filter(card => !isClosedCard(card) && hasBlocker(card)).length : id === 'sessions' ? getSessions(scopedCards).length : id === 'kanban' ? scopedCards.filter(card => !isClosedCard(card)).length : undefined;
 
   return <div className={`kontur-shell${mobileMenu ? ' menu-open' : ''}`} data-theme={dark ? 'dark' : 'light'}>
@@ -367,24 +499,31 @@ export function KonturBoard() {
     <aside className="k-sidebar" ref={sidebarRef} aria-label="Основная навигация" inert={Boolean(isMobile && !mobileMenu) || undefined}>
       <div className="k-brand-row"><button type="button" className="k-brand" onClick={() => navigate('overview')} aria-label="Контур, сводка"><span className="k-logo">К<span /></span><span><strong>контур<span>.</span></strong><small>РАБОЧЕЕ ПРОСТРАНСТВО</small></span></button><button type="button" className="k-icon-button k-mobile-close" onClick={() => setMobileMenu(false)} aria-label="Закрыть меню"><X size={18} /></button></div>
       <span className="k-nav-label">ОБЗОР РАБОТЫ</span>
-      <nav className="k-navigation">{NAV.map(({ id, label, icon: Icon }) => <button type="button" key={id} className={screen === id ? 'is-active' : ''} aria-current={screen === id ? 'page' : undefined} onClick={() => navigate(id)}><Icon size={17} strokeWidth={1.7} /><span>{label}</span>{navCount(id) !== undefined && <span className="k-nav-count">{loading ? '…' : navCount(id)}</span>}</button>)}</nav>
-      <div className="k-sidebar-project-head"><span className="k-nav-label">ПРОЕКТЫ</span><span>{allProjects.length}</span></div>
-      <div className="k-project-navigation">{allProjects.map(name => <button type="button" key={name} className={project === name ? 'is-selected' : ''} onClick={() => { setProject(name); navigate('kanban'); }} title={name}><span className="k-project-dot" data-tone={projectTone(name)} /><span>{name}</span><small>{scopedCards.filter(card => taskFacts(card).project === name && !isClosedCard(card)).length}</small></button>)}{!allProjects.length && <p className="k-sidebar-empty">{loading ? 'Загружаю проекты…' : 'Проекты появятся из задач'}</p>}</div>
+      <nav className="k-navigation">{NAV.map(({ id, label, icon: Icon }) => <button type="button" key={id} className={screen === id ? 'is-active' : ''} aria-current={screen === id ? 'page' : undefined} onClick={() => navigate(id)}><Icon size={17} strokeWidth={1.7} /><span>{label}</span>{navCount(id) !== undefined && <span className="k-nav-count">{loading || !identityReady ? '…' : ready ? navCount(id) : UNKNOWN}</span>}</button>)}</nav>
+      <div className="k-sidebar-project-head"><span className="k-nav-label">ОСНОВНЫЕ ПРОЕКТЫ</span><span>{PRIMARY_PROJECTS.length}</span></div>
+      <div className="k-project-navigation">
+        {PRIMARY_PROJECTS.map(section => <button type="button" key={`section:${section.id}`} className={projectSection === section.id ? 'is-selected' : ''} aria-pressed={projectSection === section.id} onClick={() => chooseProjectSection(section.id)} title={`Раздел ${section.name}`}><span className="k-project-dot" data-tone={projectTone(section.name)} /><span>{section.name}</span><small>{ready ? scopedCards.filter(card => projectMatchesSection(taskFacts(card).project, section.id) && !isClosedCard(card)).length : loading || !identityReady ? '…' : UNKNOWN}</small></button>)}
+        <p className="k-nav-label k-native-project-label">ИМЕНА ИЗ ДОСКИ</p>
+        {allProjects.map(name => <button type="button" key={`project:${name}`} className={project === name && projectSection === 'all' ? 'is-selected' : ''} onClick={() => { chooseProject(name); navigate('kanban'); }} title={name}><span className="k-project-dot" data-tone={projectTone(name)} /><span>{name}</span><small>{ready ? scopedCards.filter(card => taskFacts(card).project === name && !isClosedCard(card)).length : loading || !identityReady ? '…' : UNKNOWN}</small></button>)}
+        {!allProjects.length && <p className="k-sidebar-empty">{loading || !identityReady ? 'Загружаю проекты…' : 'Имена проектов пока неизвестны'}</p>}
+      </div>
       <div className="k-sidebar-bottom"><a className="k-classic-link" href="/classic"><Columns3 size={14} />Классическая доска<ArrowUpRight size={13} /></a><div className="k-user"><span className="k-user-avatar"><UserRound size={17} /></span><span><strong>{username ?? UNKNOWN}</strong><small>Твой аккаунт доски</small></span><LockKeyhole size={13} /></div></div>
     </aside>
 
     <div className="k-workspace" inert={Boolean(isMobile && mobileMenu) || undefined}>
-      <header className="k-topbar"><div className="k-breadcrumb"><button type="button" ref={menuRef} className="k-icon-button k-mobile-menu" aria-label="Открыть меню" aria-expanded={mobileMenu} onClick={() => setMobileMenu(true)}><Menu size={20} /></button><span>Рабочее пространство</span><ChevronRight size={13} /><strong>{currentNav.label}</strong></div><div className="k-topbar-actions"><span className={`k-read-status${error ? ' is-stale' : ''}`} title={lastLoadedAt ? `Доска прочитана ${formatStamp(lastLoadedAt)} по Москве` : 'Последнее успешное чтение неизвестно'}><i />{refreshing ? 'Обновляю' : error ? 'Нужно обновить' : lastLoadedAt ? 'Данные доски' : 'Загрузка'}</span><button type="button" className="k-icon-button" aria-label={dark ? 'Включить светлую тему' : 'Включить тёмную тему'} onClick={() => setTheme(dark ? 'light' : 'dark')}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button></div></header>
+      <header className="k-topbar"><div className="k-breadcrumb"><button type="button" ref={menuRef} className="k-icon-button k-mobile-menu" aria-label="Открыть меню" aria-expanded={mobileMenu} onClick={() => setMobileMenu(true)}><Menu size={20} /></button><span>Рабочее пространство</span><ChevronRight size={13} /><strong>{currentNav.label}</strong></div><div className="k-topbar-actions"><details className="k-services-menu" onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }}><summary aria-label="Связанные сервисы"><ExternalLink size={15} /><span>Сервисы</span></summary><div className="k-services-dropdown"><ServiceLinks /></div></details><span className={`k-read-status${error ? ' is-stale' : ''}`} title={lastLoadedAt ? `Доска прочитана ${formatStamp(lastLoadedAt)} по Москве` : 'Последнее успешное чтение неизвестно'}><i />{refreshing ? 'Обновляю' : error ? 'Нужно обновить' : lastLoadedAt ? 'Данные доски' : 'Загрузка'}</span><button type="button" className="k-icon-button" aria-label={dark ? 'Включить светлую тему' : 'Включить тёмную тему'} onClick={() => setTheme(dark ? 'light' : 'dark')}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button></div></header>
       <main id="kontur-main" className="k-main" tabIndex={-1}>
         <div className="k-page-heading"><div><div className="k-eyebrow"><span className="k-lime-dot" />ЕДИНАЯ ТОЧКА ПРОДОЛЖЕНИЯ</div><h1>{currentNav.label}</h1><p>{currentNav.description}</p></div><div className="k-heading-actions">{screen === 'overview' && <button type="button" className={`k-button${daily ? ' is-selected' : ''}`} aria-pressed={daily} onClick={() => setDaily(value => !value)}><Sparkles size={15} />На каждый день</button>}<button type="button" className="k-button" disabled={loading || refreshing} onClick={() => void refresh()} aria-label="Обновить данные доски"><RefreshCw size={15} className={refreshing ? 'k-spin' : ''} /><span className="k-refresh-label">Обновить</span></button><button type="button" className="k-button k-button-primary" disabled={!username || loading} onClick={() => newTask()}><Plus size={17} />Новая задача</button></div></div>
 
         <div className="k-filter-bar"><div className="k-filter-selects">
-          <label className="k-select"><FolderKanban size={14} /><select aria-label="Фильтр по проекту" value={project} onChange={event => setProject(event.target.value)}><option value="all">Все проекты</option>{allProjects.map(name => <option key={name} value={name}>{name}</option>)}{project !== 'all' && !allProjects.includes(project) && <option value={project}>{project}</option>}</select><ChevronDown size={12} /></label>
-          <label className="k-select"><Server size={14} /><select aria-label="Фильтр по серверу или машине" value={server} onChange={event => setServer(event.target.value)}><option value="all">Все машины</option>{filterOptions.servers.map(name => <option key={name} value={name}>{name}</option>)}{server !== 'all' && !filterOptions.servers.includes(server) && <option value={server}>{server}</option>}</select><ChevronDown size={12} /></label>
+          <label className="k-select"><FolderKanban size={14} /><select aria-label="Фильтр по проекту" value={project} onChange={event => chooseProject(event.target.value)}><option value="all">Все проекты</option>{allProjects.map(name => <option key={name} value={name}>{name}</option>)}{project !== 'all' && !allProjects.includes(project) && <option value={project}>{project}</option>}</select><ChevronDown size={12} /></label>
+          <label className="k-select"><Server size={14} /><select aria-label="Фильтр по серверу или машине" value={server} onChange={event => setServer(event.target.value)}><option value="all">Все машины</option>{serverOptions.map(name => <option key={name} value={name}>{name}</option>)}{server !== 'all' && !serverOptions.includes(server) && <option value={server}>{server}</option>}</select><ChevronDown size={12} /></label>
           <label className="k-select"><Circle size={12} /><select aria-label="Фильтр по статусу задачи" value={status} onChange={event => setStatus(event.target.value)}><option value="all">Все статусы</option>{DEFAULT_COLUMNS.map(column => <option key={column.id} value={column.id}>{column.title}</option>)}</select><ChevronDown size={12} /></label>
           <label className="k-select"><Flag size={13} /><select aria-label="Фильтр по приоритету" value={priority} onChange={event => setPriority(event.target.value)}><option value="all">Приоритет</option>{Object.entries(PRIORITIES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><ChevronDown size={12} /></label>
+          <label className="k-select"><FileText size={13} /><select aria-label="Фильтр по типу записи" value={recordType} onChange={event => chooseRecordType(event.target.value as RecordType)}>{RECORD_TYPES.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</select><ChevronDown size={12} /></label>
           {hasFilters && <button type="button" className="k-reset-filters" title="Сбросить фильтры" aria-label="Сбросить фильтры" onClick={clearFilters}><X size={14} /></button>}
         </div><label className="k-search"><Search size={15} /><input ref={searchRef} aria-label="Поиск по задачам и контексту" value={search} onChange={event => setSearch(event.target.value)} placeholder="Поиск по задачам" /><kbd>⌘ K</kbd></label></div>
+        {(selectedSection || recordType !== 'all') && <div className="k-filter-context" role="status">{selectedSection && <button type="button" onClick={() => setProjectSection('all')} aria-label={`Убрать раздел ${selectedSection.name}`}>Раздел: {selectedSection.name}<X size={11} /></button>}{recordType !== 'all' && <button type="button" onClick={() => setRecordType('all')} aria-label="Убрать фильтр типа записи">Тип: {selectedType.label}<X size={11} /></button>}{recordType !== 'all' && <span>В других представлениях показаны связанные задачи и записи.</span>}</div>}
         <div className="k-scope-row"><div className="k-segmented k-scope-switch" aria-label="Область задач">{([['mine', 'Моё'], ['shared', 'Общее'], ['all', 'Всё']] as const).map(([value, label]) => <button type="button" key={value} aria-pressed={workspace === value} onClick={() => setWorkspace(value)}><Users size={12} />{label}</button>)}</div><span>{lastLoadedAt ? <>Прочитано <time dateTime={lastLoadedAt}>{formatStamp(lastLoadedAt)}</time> · МСК</> : 'Время успешного чтения неизвестно'}</span></div>
 
         {error && <div className="k-alert" role="alert"><TriangleAlert size={18} /><div><strong>Не удалось обновить доску</strong><p>{error}</p>{cards.length > 0 && <small>Ниже сохранён последний успешно загруженный результат.</small>}</div><button type="button" className="k-button k-button-small" onClick={() => void refresh()} disabled={refreshing}>Повторить чтение</button></div>}
@@ -403,11 +542,11 @@ export function KonturBoard() {
           </section>
           <div className="k-overview-grid"><div className="k-overview-primary">
             <section className="k-panel"><div className="k-panel-head"><div><h2><span className="k-focus-dot" />В фокусе сегодня</h2><p>Приёмка, блокеры и ближайшие следующие шаги</p></div><button type="button" className="k-text-button" onClick={() => navigate('list')}>Все задачи<ArrowRight size={14} /></button></div>{attentionCards.length ? attentionCards.slice(0, daily ? 6 : 5).map(card => cardButton(card)) : <Empty title="Открытых целей по фильтрам нет" clear={hasFilters ? clearFilters : undefined}>Завершённые задачи и история доступны в списке.</Empty>}</section>
-            {!daily && <section className="k-panel"><div className="k-panel-head"><div><h2>Проекты<span className="k-count">{projectCounts.length}</span></h2><p>Работа и незавершённые цели</p></div><FolderKanban size={18} /></div><div className="k-project-table"><div className="k-project-table-header"><span>Проект</span><span>Открыто</span><span>Требует внимания</span></div>{projectCounts.map(item => <button type="button" key={item.name} className="k-project-row" onClick={() => { setProject(item.name); navigate('kanban'); }}><span><ProjectMark project={item.name} /><strong>{item.name}</strong></span><span>{item.cards.length}<small>целей</small></span><span>{item.cards.some(hasBlocker) ? <><TriangleAlert size={13} />Есть блокеры</> : item.cards.some(card => card.column === 'review') ? <><ShieldCheck size={13} />Есть результат</> : <><Circle size={10} />{item.cards.length ? 'В работе с целями' : 'Нет открытых целей'}</>}<ArrowUpRight size={14} /></span></button>)}{!projectCounts.length && <Empty title="Проекты не найдены" clear={hasFilters ? clearFilters : undefined}>Проекты появятся из реальных задач доски.</Empty>}</div></section>}
+            {!daily && <section className="k-panel"><div className="k-panel-head"><div><h2>Проекты<span className="k-count">{projectCounts.length}</span></h2><p>Работа и незавершённые цели</p></div><FolderKanban size={18} /></div><div className="k-project-table"><div className="k-project-table-header"><span>Проект</span><span>Открыто</span><span>Требует внимания</span></div>{projectCounts.map(item => <button type="button" key={item.name} className="k-project-row" onClick={() => { chooseProject(item.name); navigate('kanban'); }}><span><ProjectMark project={item.name} /><strong>{item.name}</strong></span><span>{item.cards.length}<small>целей</small></span><span>{item.cards.some(hasBlocker) ? <><TriangleAlert size={13} />Есть блокеры</> : item.cards.some(card => card.column === 'review') ? <><ShieldCheck size={13} />Есть результат</> : <><Circle size={10} />{item.cards.length ? 'В работе с целями' : 'Нет открытых целей'}</>}<ArrowUpRight size={14} /></span></button>)}{!projectCounts.length && <Empty title="Проекты не найдены" clear={hasFilters ? clearFilters : undefined}>Проекты появятся из реальных задач доски.</Empty>}</div></section>}
             {daily && <section className="k-panel"><div className="k-panel-head"><div><h2>Последние результаты</h2><p>Открой доказательства перед приёмкой</p></div><ShieldCheck size={18} /></div>{reviewCards.length ? reviewCards.slice(0, 4).map(card => cardButton(card, <span className="k-text-violet">Проверить</span>)) : <Empty title="Результатов на проверке нет">Новые результаты появятся после работы исполнителя.</Empty>}</section>}
           </div><aside className="k-overview-secondary">
             <section className="k-panel k-next-dates"><div className="k-panel-head"><div><h2><CalendarDays size={16} />Ближайшие сроки</h2><p>По Москве</p></div><button type="button" className="k-icon-button" aria-label="Открыть календарь" onClick={() => navigate('calendar')}><ArrowUpRight size={17} /></button></div>{dueSoon.length ? dueSoon.map(card => <button type="button" key={card.id} onClick={() => openCard(card)}><span className="k-date-chip">{new Intl.DateTimeFormat('ru', { day: 'numeric', timeZone: 'Europe/Moscow' }).format(new Date(card.dueAt!))}<small>{new Intl.DateTimeFormat('ru', { month: 'short', timeZone: 'Europe/Moscow' }).format(new Date(card.dueAt!))}</small></span><span><strong>{card.title}</strong><small>{taskFacts(card).project}</small></span></button>) : <p className="k-section-note">Ближайшие сроки неизвестны. Их можно указать в карточках.</p>}<button type="button" className="k-panel-footer-link" onClick={() => navigate('calendar')}>Весь календарь<ArrowRight size={14} /></button></section>
-            <section className="k-panel k-services"><div className="k-panel-head"><h2>Рабочие сервисы</h2><ExternalLink size={15} /></div>{SERVICES.map(({ name, host, href, icon: Icon }) => <a key={href} href={href} target="_blank" rel="noopener noreferrer"><span className="k-service-icon"><Icon size={17} /></span><span><strong>{name}</strong><small>{host}</small></span><ArrowUpRight size={15} /></a>)}</section>
+            <section className="k-panel k-services"><div className="k-panel-head"><h2>Рабочие сервисы</h2><ExternalLink size={15} /></div><ServiceLinks /></section>
             <section className="k-continuation"><Command size={23} /><span className="k-eyebrow">КОНТЕКСТ СОХРАНЁН</span><h2>Продолжить<br />с того же места.</h2><p>Результат, остаток работы и следующий шаг остаются в карточке задачи.</p><button type="button" onClick={() => navigate('kanban')}>Открыть незавершённое<ArrowRight size={15} /></button></section>
             {!daily && <section className="k-panel"><div className="k-panel-head"><h2>Последние действия</h2><Clock3 size={16} /></div><div className="k-mini-timeline">{activity.slice(0, 4).map(item => <button type="button" key={item.id} onClick={() => { const card = cards.find(candidate => candidate.id === item.cardId); if (card) openCard(card); }}><span className="k-timeline-dot" /><span><small>{formatStamp(item.at)}</small><strong>{item.title}</strong><p>{item.cardTitle}</p></span></button>)}{!activity.length && <p className="k-section-note">В доступных карточках пока нет записей о действиях.</p>}</div><button type="button" className="k-panel-footer-link" onClick={() => navigate('activity')}>Вся история<ArrowRight size={14} /></button></section>}
           </aside></div>
@@ -426,7 +565,37 @@ export function KonturBoard() {
 
         {ready && screen === 'calendar' && <KonturCalendar cards={filteredCards} onOpen={openCard} />}
 
-        {ready && screen === 'sessions' && <section><div className="k-section-toolbar"><div className="k-scroll-tabs">{([['all', 'Все записи'], ['running', 'В работе'], ['waiting', 'Ожидают'], ['stopped', 'Остановлены'], ['result', 'С результатом'], ['check', 'Проверить состояние']] as const).map(([value, label]) => <button type="button" key={value} aria-pressed={sessionFilter === value} onClick={() => setSessionFilter(value)}>{label}</button>)}</div><span className="k-count">{visibleSessions.length}</span></div><div className="k-notice"><CircleHelp size={17} /><p>Показано состояние из последней сохранённой записи. Текущая активность и зависание без проверки неизвестны. Открой задачу для управления или сессию в Agent Herder.</p></div><div className="k-session-grid">{visibleSessions.map(session => <article className="k-panel k-session-card" key={session.id}><div className="k-session-head"><ProjectMark project={session.project} /><span className="k-session-state" data-state={session.state}><i />{session.stateLabel}</span></div><span className="k-eyebrow">{session.project}</span><h2>{session.cardTitle}</h2><div className="k-session-facts"><span><Terminal size={13} />{session.harness}</span><span><Server size={13} />{session.machine}</span></div><dl className="k-session-ids"><div><dt>Сессия</dt><dd>{session.sessionId}</dd></div><div><dt>Текущее состояние</dt><dd className="k-unknown">{session.liveState}</dd></div></dl><p className="k-session-time"><Clock3 size={12} />Запись от {formatStamp(session.updatedAt)}</p><div className="k-session-actions"><button type="button" className="k-button k-button-small" onClick={() => { const card = cards.find(item => item.id === session.cardId); if (card) openCard(card); }}>Открыть задачу<ArrowRight size={13} /></button>{session.href && <a className="k-text-button" href={session.href} target="_blank" rel="noopener noreferrer">Сессия<ArrowUpRight size={14} /></a>}</div></article>)}</div>{!visibleSessions.length && <Empty title="Записи о сессиях не найдены" clear={hasFilters || sessionFilter !== 'all' ? clearFilters : undefined}>Запусти агента из карточки задачи. Его подтверждённая привязка появится здесь.</Empty>}</section>}
+        {ready && screen === 'sessions' && <section>
+          <div className="k-section-toolbar"><div className="k-scroll-tabs">{SESSION_FILTERS.map(([value, label]) => <button type="button" key={value} aria-pressed={sessionFilter === value} onClick={() => setSessionFilter(value)}>{label}</button>)}</div><span className="k-count" aria-label={sessionFilter === 'stalled' ? 'Количество зависших сессий неизвестно' : undefined}>{sessionFilter === 'stalled' ? UNKNOWN : visibleSessions.length}</span></div>
+          <div className="k-notice"><CircleHelp size={17} /><p>Показаны сессии, связанные с карточками. Вкладки используют последнюю проверку, а до неё сохранённую запись. Это не непрерывный мониторинг. Давность записи не означает зависание.</p></div>
+          <div className="k-session-grid">{visibleSessions.map(session => {
+            const observation = sessionObservations[session.id];
+            const changed = Boolean(observation && (observation.cardVersion !== session.cardVersion || observation.sessionId !== (session.sessionId === UNKNOWN ? null : session.sessionId)));
+            const liveState = changed ? 'unknown' : observation?.state ?? 'unknown';
+            const checking = checkingSessions.has(session.id);
+            return <article className="k-panel k-session-card" key={session.id}>
+              <div className="k-session-head"><ProjectMark project={session.project} /><span className="k-session-state" data-state={session.state}><i />{session.stateLabel}</span></div>
+              <span className="k-eyebrow">{session.project}</span><h2>{session.cardTitle}</h2>
+              <div className="k-session-owner"><span title="Владелец связанной задачи"><UserRound size={13} />{session.owner}</span><PriorityBadge priority={session.priority} /></div>
+              <div className="k-session-facts"><span><Terminal size={13} />{session.harness}</span><span><Server size={13} />{session.machine}</span></div>
+              <dl className="k-session-ids">
+                <div><dt>Сессия</dt><dd>{session.sessionId}</dd></div>
+                <div><dt>По проверке</dt><dd className={`k-session-observed${liveState === 'unknown' ? ' k-unknown' : ''}`} data-state={liveState}>{LIVE_SESSION_LABELS[liveState]}</dd></div>
+                <div><dt>Проверено</dt><dd>{observation?.checkedAt ? formatStamp(observation.checkedAt) : UNKNOWN}</dd></div>
+                {observation?.lastActivityAt && <div><dt>Последняя активность</dt><dd>{formatStamp(observation.lastActivityAt)}</dd></div>}
+              </dl>
+              <p className="k-session-time"><Clock3 size={12} />Сохранённая запись от {formatStamp(session.updatedAt)}</p>
+              {observation?.source && <p className="k-session-source">Источник проверки: Agent Herder</p>}
+              {changed ? <p className="k-session-check-note">После проверки карточка изменилась. Проверь состояние ещё раз.</p> : observation?.reason ? <p className="k-session-check-note">{observation.reason}</p> : !observation && <p className="k-session-source">Текущее состояние ещё не проверено.</p>}
+              <div className="k-session-actions">
+                <button type="button" className="k-button k-button-small" onClick={() => { const card = cardsById.get(session.cardId); if (card) openCard(card); }}>Открыть задачу<ArrowRight size={13} /></button>
+                <button type="button" className="k-button k-button-small" disabled={checking || session.operationId === UNKNOWN} onClick={() => void checkSession(session)} aria-label={`Проверить состояние сессии задачи ${session.cardTitle}`}><RefreshCw size={12} className={checking ? 'k-spin' : ''} />{checking ? 'Проверяю' : 'Проверить состояние'}</button>
+                {session.href && <a className="k-text-button" href={session.href} target="_blank" rel="noopener noreferrer">Сессия<ArrowUpRight size={14} /></a>}
+              </div>
+            </article>;
+          })}</div>
+          {!visibleSessions.length && <Empty title={sessionFilter === 'stalled' ? 'Подтверждённых зависших сессий нет' : 'Записи о сессиях не найдены'} clear={hasFilters || sessionFilter !== 'all' ? clearFilters : undefined}>{sessionFilter === 'stalled' ? 'Источник не сообщает подтверждённое зависание. Наличие зависших сессий неизвестно; возраст записи не используется как доказательство.' : 'По выбранным фильтрам нет сохранённых привязок. Сессии вне доступных карточек и их текущее состояние неизвестны.'}</Empty>}
+        </section>}
 
         {ready && screen === 'blockers' && <section><div className="k-error-filters">{([['all', 'Все блокеры'], ['ACL', 'Доступ · ACL'], ['429', 'Квоты · 429'], ['ENAMETOOLONG', 'Файлы · ENAMETOOLONG'], ['other', 'Другие']] as const).map(([value, label]) => <button type="button" key={value} aria-pressed={blockerFilter === value} onClick={() => setBlockerFilter(value)}>{label}<span>{blockers.filter(card => value === 'all' || errorKind(card) === value).length}</span></button>)}</div><div className="k-notice"><Clock3 size={16} /><p>Блокеры взяты из открытых карточек. Последнее изменение указано рядом; оно не подтверждает, что ошибка воспроизводится сейчас.</p></div><div className="k-blocker-list">{visibleBlockers.map(card => { const facts = taskFacts(card); return <article className="k-panel k-blocker-card" key={card.id}><span className="k-blocker-icon"><TriangleAlert size={21} /></span><div><div className="k-blocker-meta"><span>{facts.project}</span><span>·</span><span>{facts.machine}</span>{errorKind(card) !== 'other' && <span className="k-error-tag">{errorKind(card)}</span>}</div><button type="button" className="k-blocker-title" onClick={() => openCard(card)}>{card.title}</button><p>{facts.blocker}</p><div className="k-blocker-next"><ArrowRight size={13} /><span>{facts.nextStep}</span></div></div><div className="k-blocker-tail"><StatusBadge status={card.column} /><small>{formatStamp(card.updated)}</small><button type="button" className="k-text-button" onClick={() => openCard(card)}>Открыть<ArrowUpRight size={14} /></button></div></article>; })}</div>{!visibleBlockers.length && <Empty title="Блокеры по фильтрам не найдены" clear={hasFilters || blockerFilter !== 'all' ? clearFilters : undefined}>Здесь появятся задачи с указанным блокером или состоянием «Заблокировано».</Empty>}</section>}
 
@@ -437,11 +606,11 @@ export function KonturBoard() {
         {ready && screen === 'activity' && <section><div className="k-section-toolbar"><h2 className="k-section-title">История работы<span className="k-count">{activity.length}</span></h2><span className="k-subtle">Время по Москве</span></div><div className="k-panel k-activity-list">{activity.slice(0, journalLimit).map(item => <details key={item.id} className="k-activity-entry"><summary><span className="k-activity-icon"><Activity size={16} /></span><span className="k-activity-summary"><small>{item.project} · {formatStamp(item.at)}</small><strong>{item.title}</strong><span>{item.cardTitle}</span></span><ChevronDown size={15} /></summary><div className="k-activity-detail"><p>{item.detail || UNKNOWN}</p><small>Автор: {item.actor || UNKNOWN}</small><Evidence refs={item.refs} /><button type="button" className="k-text-button" onClick={() => { const card = cards.find(candidate => candidate.id === item.cardId); if (card) openCard(card); }}>Открыть задачу<ArrowRight size={14} /></button></div></details>)}{!activity.length && <Empty title="История по фильтрам не найдена" clear={hasFilters ? clearFilters : undefined}>Новые результаты, решения и записи выполнения появятся здесь.</Empty>}{activity.length > journalLimit && <button type="button" className="k-load-more" onClick={() => setJournalLimit(value => value + 50)}>Показать ещё · осталось {activity.length - journalLimit}</button>}</div></section>}
 
         <div className="k-native-diagnostics" hidden={screen !== 'blockers'}><BoardDiagnosticsPanel identity={username} /></div>
-        <footer className="k-footer"><span><LockKeyhole size={12} />{username ? `${filteredCards.length} задач в выбранной области` : 'Доступ к доске проверяется'}<span className="k-footer-dot">·</span>Цели и история сохраняются</span><button type="button" className="k-text-button" onClick={() => copy(window.location.href, 'Ссылка на текущее представление скопирована')}><Copy size={12} />Ссылка на вид</button></footer>
+        <footer className="k-footer"><span><LockKeyhole size={12} />{username ? ready ? `${filteredCards.length} задач в выбранной области` : 'Количество задач неизвестно' : 'Доступ к доске проверяется'}<span className="k-footer-dot">·</span>Цели и история сохраняются</span><button type="button" className="k-text-button" onClick={() => copy(window.location.href, 'Ссылка на текущее представление скопирована')}><Copy size={12} />Ссылка на вид</button></footer>
       </main>
     </div>
 
-    <AddCardDialog projectOptions={projectOptions} relatedCards={scopedCards} defaultProject={project !== 'all' && project !== UNKNOWN ? project : ''} ownerPreview={username} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
+    <AddCardDialog requireReviewBeforeDone projectOptions={projectOptions} relatedCards={scopedCards} defaultProject={defaultProject} ownerPreview={username} roles={roles} open={showAdd} onOpenChange={setShowAdd} defaultColumn={defaultColumn} onCreate={handleCreate} />
     {selectedCard && <CardEditDialog requireReviewBeforeDone projectOptions={projectOptions} relatedCards={scopedCards} breadcrumbCards={scopedCards} roles={roles} card={selectedCard} username={username} onRefresh={refresh} open onOpenChange={open => { if (!open) setSelectedCardId(null); }} onUpdate={handleUpdate} onDelete={handleDelete} onReviewDecision={handleReview} onSelectCard={openCard} />}
     {conflict && <ConflictDialog conflict={conflict} onResolve={async useServer => {
       if (!useServer && conflict.clientCard.column === 'done' && conflict.serverCard.column !== 'done') {

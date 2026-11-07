@@ -195,6 +195,14 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
         setCalendarMessage('Календарь не подключён или синхронизация ещё не подтверждена.');
         return;
       }
+      if (response.status === 409 && data?.error === 'project_calendar_not_configured') {
+        setCalendarMessage('Для проекта карточки календарь не настроен. Событие не создано.');
+        return;
+      }
+      if (response.status === 409 && data?.error === 'calendar_rebind_manual_required') {
+        setCalendarMessage('Проект или календарь изменился. Нужна ручная сверка существующего события в Keeper.');
+        return;
+      }
       setCalendarMessage('Не удалось создать событие. Попробуйте позже.');
     } catch {
       setCalendarMessage('Не удалось связаться с сервером календаря.');
@@ -378,7 +386,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             </select>
           </label>
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Владелец
-            <Input aria-label="Владелец карточки" value={taskPersonLabel(card.owner ?? 'nikita')} readOnly className="w-full min-w-0 bg-muted/40" />
+            <Input aria-label="Владелец карточки" value={(card.owner?.trim() ? taskPersonLabel(card.owner) : requireReviewBeforeDone ? 'неизвестно' : taskPersonLabel('nikita'))} readOnly className="w-full min-w-0 bg-muted/40" />
           </label>
           <div className="min-w-0 space-y-1 text-xs text-muted-foreground">Исполнитель(и)
             <Input aria-label="Исполнители" value={assignees} onChange={e => setAssignees(e.target.value)} placeholder="Не назначен" className="w-full min-w-0" />
@@ -395,6 +403,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
           <CardCalendarSection
             className="col-span-2 min-w-0 space-y-1 sm:col-span-3 lg:col-span-6"
             dueAt={card.dueAt}
+            project={card.project}
             status={calendarStatus}
             durationMinutes={calendarDuration}
             onDurationChange={setCalendarDuration}
@@ -422,7 +431,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               <span className="text-xs text-muted-foreground">Состояние</span>
               <Badge variant="outline">{DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column}</Badge>
               {card.needsReview && <Badge>Требуется приёмка</Badge>}
-              <span className="text-xs text-muted-foreground">Владелец: {taskPersonLabel(card.owner ?? 'nikita')}</span>
+              <span className="text-xs text-muted-foreground">Владелец: {(card.owner?.trim() ? taskPersonLabel(card.owner) : requireReviewBeforeDone ? 'неизвестно' : taskPersonLabel('nikita'))}</span>
             </div>
             {card.nextAction && <p className="text-sm"><span className="font-medium">Следующий шаг:</span> {card.nextAction}</p>}
             {card.blockerReason && <p className="text-sm"><span className="font-medium">Что мешает:</span> {card.blockerReason}</p>}
