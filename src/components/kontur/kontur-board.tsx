@@ -335,10 +335,18 @@ export function KonturBoard() {
     const sidebar = sidebarRef.current;
     const elements = () => Array.from(sidebar?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], select, input') ?? [])
       .filter(element => element.tabIndex >= 0 && !element.matches(':disabled') && element.getClientRects().length > 0 && getComputedStyle(element).visibility === 'visible');
-    // The visibility transition must start before the browser can focus the menu.
-    let focusFrame = requestAnimationFrame(() => {
-      focusFrame = requestAnimationFrame(() => elements()[0]?.focus());
-    });
+    // Focus only once the opening transition makes a control focusable.
+    // Two fixed frames can still land while CSS visibility is hidden.
+    let focusFrame = 0;
+    const focusDeadline = performance.now() + 1000;
+    const focusMenu = () => {
+      if (!sidebar || sidebar.contains(document.activeElement)) return;
+      elements()[0]?.focus({ preventScroll: true });
+      if (!sidebar.contains(document.activeElement) && performance.now() < focusDeadline) {
+        focusFrame = requestAnimationFrame(focusMenu);
+      }
+    };
+    focusFrame = requestAnimationFrame(focusMenu);
     const keyboard = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); setMobileMenu(false); return; }
       if (event.key !== 'Tab') return;
