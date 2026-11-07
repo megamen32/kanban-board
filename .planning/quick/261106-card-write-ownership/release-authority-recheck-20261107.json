@@ -1,0 +1,28 @@
+{
+  "checked_at_utc": "2026-11-07T02:37:19.556872+00:00",
+  "origin_main": "d5ceef143c6ae9beacea135bdb5eb3afafbf57f1",
+  "pr8": "MERGED 2026-11-06T23:20:39Z",
+  "pr9": "MERGED; current origin/main contains documentation receipt",
+  "candidate_tree_equal_to_task_head": true,
+  "runtime_image": "sha256:aa1a16beee8c18f3f98aaa1295ed75f469ea6f44c601f3686be6b8e3a4b62ae3",
+  "runtime_started_at": "2026-11-06T18:43:42.57189446Z",
+  "deployment": "not attempted",
+  "official_release_admin_status": {
+    "success": true,
+    "lease": null,
+    "deploymentInProgress": false,
+    "nextFence": 11
+  },
+  "authority_verified": "Running authority process effective HOME and absent ledger override independently verified; canonical existing ledger, not symlink. No ledger contents or capabilities published.",
+  "identity": "Native session_info(identity) returned caller_session_unavailable. MCP correlation id is not registered native session. No foreign or invented owner used.",
+  "remaining_gate": "Verified current release owner or existing validated binding required before acquire; live revision/CAS also remains mandatory.",
+  "tests": "Existing same-code proof: build/typecheck/focused lint passed; 61 focused tests passed; full suite 29 known failures and 867 passed. Not rerun and no full-green claim.",
+  "safety": "No runtime restart, no credential/binding creation, no direct main push retry, no foreign Herder changes, no Airlock VPS access, no ForEnergo work.",
+  "card_update": {
+    "target": "existing ownership incident card",
+    "operation": "Airlock apps.exmanager.tools.board_read",
+    "result": "unauthorized; INVALID_ARGUMENT; isError true",
+    "mutation_attempted": false,
+    "retry_or_alternate_access": false
+  }
+}
