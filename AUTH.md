@@ -161,3 +161,19 @@ Responses are private and uncached; the client validates relationships against
 the same snapshot, clears them on 401/403 and refreshes after task writes and
 when the tab regains attention. Team member IDs, board logins, write grants and
 private source diagnostics are excluded from this display projection.
+
+## Verified owner registration of empty projects
+
+`POST /api/kanban/projects` is available to the same configured native Airlock
+owner and verified Board owner session. The native assertion binds the exact
+POST route and body; a configured same-origin browser action is required.
+The endpoint accepts only `{externalKey,name}`, applies an 8 KiB body limit,
+and writes through the existing durable work project registry. It returns
+201 for a new identity, 200 for the same exact key/name and 409 for a conflicting
+name. It creates no cards, teams, memberships or project access grants.
+
+Service principals and unsigned owner cookies do not authorize this endpoint.
+A failed or unavailable identity check fails closed. Registration metadata is
+private and uncached. Use the same stable external key when reconciling an
+uncertain result; never manufacture an Exmanager signed scope to register an
+independent project.
