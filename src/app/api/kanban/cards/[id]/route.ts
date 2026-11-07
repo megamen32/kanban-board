@@ -7,6 +7,7 @@ import { ownerBrowserReadAllowed } from '@/lib/auth/owner-browser-read';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import type { NativeProjectAccessContext } from '@/lib/kanban/native-project-access';
 import { normalizeDueAt } from '@/lib/kanban/due-at';
+import { normalizeProvenanceUrl } from '@/lib/kanban/provenance-links';
 import { dispatchCardEvent } from '@/lib/notifications/push';
 import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
 import { validateTransition } from '@/lib/kanban/transition-policy';
@@ -128,6 +129,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       return NextResponse.json({ error: 'request body must be an object' }, { status: 400 });
     }
     const { title, description, column, priority, tags, order, project, assignees, expectedVersion } = body;
+    let sourceMessageUrl: string | null | undefined;
+    let sourceSessionUrl: string | null | undefined;
+    try {
+      sourceMessageUrl = normalizeProvenanceUrl(body.sourceMessageUrl, 'sourceMessageUrl');
+      sourceSessionUrl = normalizeProvenanceUrl(body.sourceSessionUrl, 'sourceSessionUrl');
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'source link is invalid' }, { status: 400 });
+    }
     if (body.blockerReason !== undefined && body.blockerReason !== null
         && (typeof body.blockerReason !== 'string' || body.blockerReason.length > 2000)) {
       return NextResponse.json({ error: 'blocker_reason_invalid' }, { status: 400 });
@@ -176,6 +185,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       scheduledAt: body.scheduledAt,
       todayRank: body.todayRank,
       source: body.source,
+      sourceMessageUrl,
+      sourceSessionUrl,
       needsReview: body.needsReview,
       suggestedAssignee: body.suggestedAssignee,
       waitingFor: body.waitingFor,

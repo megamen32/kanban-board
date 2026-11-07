@@ -33,7 +33,11 @@ available for audited legacy callers; it is not the Airlock connector.
 
 Current source exposes `kanban.list`, `kanban.read`, `kanban.capture_inbox`,
 `kanban.change`, and `kanban.delete`. Check the deployed tools/list after a
-release. Read before editing and preserve `expectedVersion`, assignment,
+release. Both change (new/edit) and capture accept the optional display URLs
+`sourceMessageUrl` and `sourceSessionUrl`. They are described in the native tool
+schemas and initialization instructions. Omitted values preserve existing links;
+null clears a link. See [the field contract and synthetic examples](docs/card-provenance-links.md).
+Links do not grant source, execution or completion authority. Read before editing and preserve `expectedVersion`, assignment,
 approval, deadline, weekly-plan, and completion transition policies.
 
 ## X-manager service connection

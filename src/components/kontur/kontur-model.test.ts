@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { KanbanCard, TaskExecutionContinuation, TaskExecutionReceipt, TaskResult } from '../../lib/kanban/types';
 import {
   UNKNOWN, filterCards, getActivity, getDecisions, getFilterOptions, getReleases, getSessions,
-  safeExternalUrl, taskFacts,
+  safeExternalUrl, taskFacts, cardProvenanceLinks,
 } from './kontur-model';
 
 const FIRST = '2026-01-10T09:00:00Z';
@@ -52,7 +52,7 @@ describe('Kontur task facts', () => {
     expect(taskFacts(value)).toEqual({
       id: value.id, version: 7, title: value.title, project: value.project, status: 'todo', priority: 'medium',
       done: UNKNOWN, remaining: UNKNOWN, nextStep: UNKNOWN, evidence: [], blocker: UNKNOWN,
-      command: UNKNOWN, owner: UNKNOWN, machine: UNKNOWN,
+      command: UNKNOWN, sourceMessageUrl: UNKNOWN, sourceSessionUrl: UNKNOWN, sessionUrl: UNKNOWN, owner: UNKNOWN, machine: UNKNOWN,
     });
     expect(getReleases([value])).toEqual([]);
     expect(getSessions([value])).toEqual([]);
@@ -313,4 +313,55 @@ describe('Kontur native filters', () => {
     expect(values).toEqual(before);
     expect(filterCards(values)[0]).toBe(values[0]);
   });
+});
+
+
+describe('explicit card provenance links', () => {
+  it('keeps missing message and session references unknown', () => {
+    expect(cardProvenanceLinks(card())).toEqual({ sourceMessageUrl: null, sourceSessionUrl: null, sessionUrl: null });
+  });
+
+  it('preserves explicit message and source session links without inventing a run', () => {
+    const value = card({ sourceMessageUrl: 'https://messages.example.test/message/42',
+      sourceSessionUrl: 'https://agent.example.test/session/fixture' });
+    expect(taskFacts(value)).toMatchObject({
+      sourceMessageUrl: value.sourceMessageUrl, sourceSessionUrl: value.sourceSessionUrl, sessionUrl: value.sourceSessionUrl,
+    });
+    expect(getSessions([value])).toEqual([]);
+    expect(getReleases([value])).toEqual([]);
+  });
+
+  it('keeps the last known managed session when the newest launch has no session', () => {
+    const known = receipt();
+    const pending = receipt({ operationId: '2'.repeat(64), nativeSessionId: undefined, phase: 'intent' });
+    const expected = getSessions([card({ taskExecutionHistory: [known] })])[0].href;
+    const value = card({ sourceSessionUrl: 'https://agent.example.test/source',
+      taskExecutionHistory: [known, pending] });
+    expect(cardProvenanceLinks(value)).toMatchObject({ sessionUrl: expected,
+      sourceSessionUrl: 'https://agent.example.test/source' });
+    expect(taskFacts(value).command).toBe(expected);
+  });
+
+  it('uses the latest valid dot session without losing the source session', () => {
+    const value = card({ sourceSessionUrl: 'https://agent.example.test/source', taskExecutionHistory: [
+      receipt(), receipt({ operationId: '3'.repeat(64), provider: 'dot',
+        sessionUrl: 'https://chat.example.test/session/fixture', nativeSessionId: undefined }),
+    ] });
+    expect(cardProvenanceLinks(value).sessionUrl).toBe('https://chat.example.test/session/fixture');
+  });
+
+  it('does not turn opaque message IDs or arbitrary source URLs into message permalinks', () => {
+    const value = card({ source: 'https://example.test/context',
+      sourceMessageUrl: 'telegram:123|456:789' });
+    expect(cardProvenanceLinks(value).sourceMessageUrl).toBeNull();
+    expect(taskFacts(value).command).toBe(value.source);
+  });
+
+  it.each(['javascript:alert(1)', 'https://user:secret@example.test/', 'https://example.test/\nnext', '//example.test/x', 'https://example.test/%0a', 'https://example.test/' + 'x'.repeat(2048)])(
+    'rejects an unsafe stored reference: %s', value => {
+      expect(cardProvenanceLinks(card({ sourceMessageUrl: value, sourceSessionUrl: value }))).toEqual({
+        sourceMessageUrl: null, sourceSessionUrl: null, sessionUrl: null,
+      });
+    },
+  );
 });

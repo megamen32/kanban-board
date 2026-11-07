@@ -744,3 +744,25 @@
   .kontur-shell .k-catalog-card .k-project-mark > span,
   .kontur-shell .k-catalog-card .k-team-mark > svg { filter: none; }
 }
+
+
+/* Explicit task references and the visible planning queue. */
+.kontur-shell .k-reference-links { margin: 10px 0; }
+.kontur-shell .k-reference-links a { color: var(--k-violet); border-color: var(--k-line); background: var(--k-input); text-decoration: none; }
+.kontur-shell .k-reference-links a:hover { border-color: var(--k-violet-solid); text-decoration: underline; }
+.kontur-shell .k-calendar-context { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 16px; color: var(--k-muted); }
+.kontur-shell .k-calendar-attention { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
+.kontur-shell .k-calendar-attention > * { min-width: 0; }
+.kontur-shell .k-calendar-attention > :only-child { grid-column: 1 / -1; }
+.kontur-shell .k-calendar-kind { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid var(--k-line); border-radius: 5px; font-size: 10px; line-height: 1.3; white-space: nowrap; }
+.kontur-shell .k-calendar-kind[data-kind="deadline"] { color: var(--k-amber); background: var(--k-amber-bg); }
+.kontur-shell .k-calendar-kind[data-kind="plan"] { color: var(--k-violet); background: var(--k-violet-bg); }
+.kontur-shell .k-calendar-invalid { color: var(--k-red); font-size: 11px; }
+@media (max-width: 760px) {
+  .kontur-shell .k-calendar-attention { grid-template-columns: minmax(0, 1fr); }
+}
+@media (forced-colors: active) {
+  .kontur-shell .k-reference-links a { color: LinkText; border-color: ButtonText; background: Canvas; }
+  .kontur-shell .k-calendar-kind[data-kind] { color: CanvasText; border-color: CanvasText; background: Canvas; }
+  .kontur-shell .k-calendar-invalid { color: CanvasText; }
+}

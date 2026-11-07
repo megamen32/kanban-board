@@ -2,6 +2,7 @@ import type {
   KanbanCard, KanbanColumn, Priority, TaskExecutionContinuation, TaskExecutionReceipt,
 } from '../../lib/kanban/types';
 import { taskSessionUrl } from '../../lib/kanban/task-execution';
+import { isSafeProvenanceUrl } from '../../lib/kanban/provenance-links';
 
 export const UNKNOWN = 'неизвестно' as const;
 
@@ -20,6 +21,9 @@ export interface TaskFacts {
   blocker: string;
   /** An explicit source/run/session link; no shell command is synthesized. */
   command: string;
+  sourceMessageUrl: string;
+  sourceSessionUrl: string;
+  sessionUrl: string;
   owner: string;
   machine: string;
 }
@@ -158,6 +162,25 @@ function sessionHref(receipt: TaskExecutionReceipt | undefined): string | null {
     : null;
 }
 
+export interface CardProvenanceLinks {
+  sourceMessageUrl: string | null;
+  sourceSessionUrl: string | null;
+  sessionUrl: string | null;
+}
+
+/** Display references never create an execution receipt or grant task access. */
+export function cardProvenanceLinks(card: KanbanCard): CardProvenanceLinks {
+  const sourceMessageUrl = isSafeProvenanceUrl(card.sourceMessageUrl) ? safeExternalUrl(card.sourceMessageUrl) : null;
+  const sourceSessionUrl = isSafeProvenanceUrl(card.sourceSessionUrl) ? safeExternalUrl(card.sourceSessionUrl) : null;
+  // A newer pending or failed launch must not hide a previously known session.
+  let sessionUrl: string | null = null;
+  for (const receipt of [...(card.taskExecutionHistory ?? [])].reverse()) {
+    sessionUrl = sessionHref(receipt);
+    if (sessionUrl) break;
+  }
+  return { sourceMessageUrl, sourceSessionUrl, sessionUrl: sessionUrl ?? sourceSessionUrl };
+}
+
 function manualVerification(card: KanbanCard): { result: string; evidence: string; checkedAt: string; actor: string } | undefined {
   for (const item of [...(card.completionEvidence ?? [])].reverse()) {
     if (item.type !== 'manual_result_verification' || item.origin !== 'human-ui'
@@ -197,8 +220,9 @@ export function taskFacts(card: KanbanCard): TaskFacts {
     ?? present(question?.deliveryError)
     ?? (waiting.length ? `Ожидает: ${waiting.join(', ')}` : undefined)
     ?? UNKNOWN;
+  const links = cardProvenanceLinks(card);
   const command = safeExternalUrl(card.source) ?? safeExternalUrl(result?.runRef)
-    ?? (useVerified ? safeExternalUrl(verified.evidence) : null) ?? sessionHref(receipt) ?? UNKNOWN;
+    ?? (useVerified ? safeExternalUrl(verified.evidence) : null) ?? links.sessionUrl ?? links.sourceMessageUrl ?? UNKNOWN;
   return {
     id: card.id,
     version: card.version,
@@ -213,6 +237,9 @@ export function taskFacts(card: KanbanCard): TaskFacts {
     evidence: useVerified ? [verified.evidence] : refs(result ? result.evidenceRefs : receipt?.evidenceRefs),
     blocker,
     command,
+    sourceMessageUrl: links.sourceMessageUrl ?? UNKNOWN,
+    sourceSessionUrl: links.sourceSessionUrl ?? UNKNOWN,
+    sessionUrl: links.sessionUrl ?? UNKNOWN,
     owner: known(card.owner),
     machine: known(receipt?.hostId),
   };

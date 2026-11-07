@@ -35,6 +35,10 @@ export interface KanbanCard {
   scheduledAt?: string;
   todayRank?: 1 | 2 | 3;
   source?: string;
+  /** Optional display permalink to the source message; never an admission proof. */
+  sourceMessageUrl?: string;
+  /** Optional display link to the originating agent session, separate from execution receipts. */
+  sourceSessionUrl?: string;
   needsReview?: boolean;
   suggestedAssignee?: string;
   waitingFor?: string[];
@@ -373,6 +377,8 @@ export interface ExecutorResultInput {
 export const PLANNING_VERSION = 1 as const;
 
 export type KanbanCardUpdates = Partial<Pick<KanbanCard, 'title' | 'description' | 'column' | 'priority' | 'tags' | 'order' | 'project' | 'assignees' | 'owner' | 'shared' | 'planningVersion' | 'type' | 'role' | 'accountable' | 'assignee' | 'important' | 'urgent' | 'week' | 'bigRock' | 'parent' | 'scheduledAt' | 'todayRank' | 'source' | 'needsReview' | 'suggestedAssignee' | 'waitingFor' | 'requiresApprovalFrom' | 'completedBy' | 'completedAt' | 'completionEvidence' | 'approvalEvidence' | 'resultHistory' | 'reviewHistory' | 'taskExecutionHistory' | 'pendingQuestion'>> & {
+  sourceMessageUrl?: string | null;
+  sourceSessionUrl?: string | null;
   executor?: 'dot' | null;
   blockerReason?: string | null;
   dueAt?: string | null;

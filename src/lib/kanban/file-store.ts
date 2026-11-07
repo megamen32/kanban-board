@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { DEFAULT_COLUMNS, parseCatalogTaskLink, PLANNING_VERSION } from './types';
 import { cancelSourceOperationForCardLocked, withSourceOperationLock } from './source-operation';
 import { approvalListForProject } from './project-reviewers';
+import { isSafeProvenanceUrl, normalizeProvenanceUrl } from './provenance-links';
 import { validateCardParentRelations, validateParentRelation } from './parent-relations';
 import type { CatalogTaskLink, KanbanCard, KanbanCardUpdates as TypedKanbanCardUpdates, KanbanColumn, PlanningEvidence, PlanningType, Priority, SourceAdmissionBinding, TaskDecisionAnswerProposal, TaskExecutionContinuation, TaskExecutionQuestionProof, TaskExecutionQuestionContinuation, TaskExecutionReceipt, TaskExecutionSessionControl, TaskExecutionSessionControls, TaskExecutionQuestionChoice, TaskResult, TaskReviewRecord, PendingQuestion } from './types';
 
@@ -14,7 +15,7 @@ const KNOWN_FRONTMATTER_KEYS = new Set([
   'id', 'title', 'column', 'priority', 'tags', 'order', 'created', 'updated', 'dueAt',
   'version', 'project', 'assignees', 'owner', 'executor', 'blocker_reason', 'shared', 'planning_version', 'type', 'role', 'accountable',
   'assignee', 'important', 'urgent', 'week', 'big_rock', 'parent', 'scheduled_at',
-  'today_rank', 'source', 'needs_review', 'suggested_assignee', 'waiting_for',
+  'today_rank', 'source', 'source_message_url', 'source_session_url', 'needs_review', 'suggested_assignee', 'waiting_for',
   'requires_approval_from', 'completed_by', 'completed_at', 'completion_evidence',
   'approval_evidence', 'result_history', 'review_history', 'next_action',
   'source_admission', 'catalog_task_link', 'catalog_task_links', 'task_execution_history', 'pending_question',
@@ -115,8 +116,13 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
       || new Set(catalogLinks.map(link => link.subjectKey)).size !== catalogLinks.length) {
     throw new Error('canonical catalog link task or subject key does not match Markdown card');
   }
+  // Unusable imported links stay as raw legacy metadata; they do not hide the card.
+  const knownFrontmatterKeys = new Set(KNOWN_FRONTMATTER_KEYS);
+  for (const key of ['source_message_url', 'source_session_url']) {
+    if (Object.hasOwn(data, key) && !isSafeProvenanceUrl(data[key])) knownFrontmatterKeys.delete(key);
+  }
   const rawFrontmatter = Object.fromEntries(
-    Object.entries(data).filter(([key]) => !KNOWN_FRONTMATTER_KEYS.has(key)),
+    Object.entries(data).filter(([key]) => !knownFrontmatterKeys.has(key)),
   ) as RawFrontmatter;
   Object.defineProperty(rawFrontmatter, LEGACY_CARD, {
     value: !Object.keys(data).some(key => PLANNING_FRONTMATTER_KEYS.has(key)),
@@ -124,7 +130,7 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     writable: true,
   });
   Object.defineProperty(rawFrontmatter, RAW_UNKNOWN_FRONTMATTER, {
-    value: extractUnknownFrontmatter(raw, KNOWN_FRONTMATTER_KEYS),
+    value: extractUnknownFrontmatter(raw, knownFrontmatterKeys),
     enumerable: false,
     writable: true,
   });
@@ -153,6 +159,8 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
     blockerReason: optionalString(data, 'blocker_reason'),
     shared: booleanField(data, 'shared', false),
     ...planning,
+    ...(isSafeProvenanceUrl(data.source_message_url) ? { sourceMessageUrl: data.source_message_url } : {}),
+    ...(isSafeProvenanceUrl(data.source_session_url) ? { sourceSessionUrl: data.source_session_url } : {}),
     ...(data.source_admission && typeof data.source_admission === 'object' ? { sourceAdmission: data.source_admission as SourceAdmissionBinding } : {}),
     ...(catalogLink ? { catalogLink } : {}),
     ...(catalogLinks.length ? { catalogLinks } : {}),
@@ -165,6 +173,8 @@ export function readCardFile(filePath: string, tasksDir = TASKS_DIR): KanbanCard
 export interface CreateCardOptions {
   parent?: string;
   owner?: string;
+  sourceMessageUrl?: string | null;
+  sourceSessionUrl?: string | null;
 }
 
 export function createCard(title: string, description: string = '', column: KanbanColumn = 'inbox', priority: Priority = 'medium', tags: string[] = [], project?: string, assignees: string[] = [], tasksDir = TASKS_DIR, dueAt?: string, options: CreateCardOptions = {}): KanbanCard {
@@ -173,6 +183,8 @@ export function createCard(title: string, description: string = '', column: Kanb
 
 function createCardRecord(title: string, description: string, column: KanbanColumn, priority: Priority, tags: string[], project: string | undefined, assignees: string[], tasksDir: string, dueAt?: string, id = uuidv4(), sourceAdmission?: SourceAdmissionBinding, sourceOutcome?: { source: string; needsReview: boolean }, requiresApprovalFrom?: string[], options: CreateCardOptions = {}): KanbanCard {
   if (!project?.trim()) throw new Error('project is required for new cards');
+  const sourceMessageUrl = normalizeProvenanceUrl(options.sourceMessageUrl, 'sourceMessageUrl');
+  const sourceSessionUrl = normalizeProvenanceUrl(options.sourceSessionUrl, 'sourceSessionUrl');
   ensureDir(tasksDir);
   const now = new Date().toISOString();
   const existingCards = getAllCards(tasksDir);
@@ -199,6 +211,8 @@ function createCardRecord(title: string, description: string, column: KanbanColu
     shared: false,
     ...defaultPlanningMetadata(),
     ...(options.parent !== undefined ? { parent: options.parent } : {}),
+    ...(sourceMessageUrl ? { sourceMessageUrl } : {}),
+    ...(sourceSessionUrl ? { sourceSessionUrl } : {}),
     ...(requiresApprovalFrom?.length ? { requiresApprovalFrom } : {}),
     ...(sourceOutcome ? { source: sourceOutcome.source, needsReview: sourceOutcome.needsReview } : {}),
   };
@@ -249,8 +263,17 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
 
   const { dueAt: dueAtUpdate, ...otherUpdates } = updates;
   const normalizedUpdates = Object.fromEntries(
-    Object.entries(otherUpdates).map(([key, value]) => [key, key === 'nextAction' ? value : value === null ? undefined : value]),
-  ) as Omit<KanbanCardUpdates, 'dueAt' | 'blockerReason' | 'executor'> & { blockerReason?: string; executor?: 'dot' };
+    Object.entries(otherUpdates)
+      .filter(([key, value]) => !['sourceMessageUrl', 'sourceSessionUrl'].includes(key) || value !== undefined)
+      .map(([key, value]) => [key, key === 'nextAction' ? value : value === null ? undefined : value]),
+  ) as Omit<KanbanCardUpdates, 'dueAt' | 'blockerReason' | 'executor' | 'sourceMessageUrl' | 'sourceSessionUrl'> & {
+    blockerReason?: string; executor?: 'dot'; sourceMessageUrl?: string; sourceSessionUrl?: string;
+  };
+  for (const key of ['sourceMessageUrl', 'sourceSessionUrl'] as const) {
+    if (Object.hasOwn(normalizedUpdates, key)) {
+      normalizedUpdates[key] = normalizeProvenanceUrl(normalizedUpdates[key], key) ?? undefined;
+    }
+  }
   if (normalizedUpdates.taskExecutionHistory !== undefined) {
     normalizedUpdates.taskExecutionHistory = taskExecutionHistoryField(normalizedUpdates.taskExecutionHistory);
     validateUncreatedStopUpdates(card.taskExecutionHistory ?? [], normalizedUpdates.taskExecutionHistory);
@@ -280,6 +303,7 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
     version: card.version + 1,
   };
   if (dueAtUpdate === null) delete updated.dueAt;
+  clearUpdatedProvenanceRawFields(updated, normalizedUpdates);
 
   // Validate before removing a renamed file so malformed planning updates are atomic.
   buildFrontmatter(updated);
@@ -486,6 +510,8 @@ function sameCatalogTaskLink(a: CatalogTaskLink, b: CatalogTaskLink): boolean {
 
 function buildFrontmatter(card: KanbanCard): string {
   validatePlanningMetadata(card);
+  const sourceMessageUrl = normalizeProvenanceUrl(card.sourceMessageUrl, 'sourceMessageUrl');
+  const sourceSessionUrl = normalizeProvenanceUrl(card.sourceSessionUrl, 'sourceSessionUrl');
   enumField(card.column, 'column', DEFAULT_COLUMNS.map(item => item.id), 'inbox');
   enumField(card.priority, 'priority', ['low', 'medium', 'high', 'critical'] as const, 'medium');
   const data: Record<string, unknown> = {
@@ -534,6 +560,8 @@ function buildFrontmatter(card: KanbanCard): string {
   if (card.scheduledAt !== undefined) data.scheduled_at = card.scheduledAt;
   if (card.todayRank !== undefined) data.today_rank = card.todayRank;
   if (card.source !== undefined) data.source = card.source;
+  if (sourceMessageUrl) data.source_message_url = sourceMessageUrl;
+  if (sourceSessionUrl) data.source_session_url = sourceSessionUrl;
   if (card.suggestedAssignee !== undefined) data.suggested_assignee = card.suggestedAssignee;
   if (card.completedBy !== undefined) data.completed_by = card.completedBy;
   if (card.completedAt !== undefined) data.completed_at = card.completedAt;
@@ -624,6 +652,25 @@ function defaultPlanningMetadata(): PlanningMetadata {
     resultHistory: [],
     reviewHistory: [],
   };
+}
+
+function clearUpdatedProvenanceRawFields(card: KanbanCard, updates: object): void {
+  const keys = new Set<string>();
+  if (Object.hasOwn(updates, 'sourceMessageUrl')) keys.add('source_message_url');
+  if (Object.hasOwn(updates, 'sourceSessionUrl')) keys.add('source_session_url');
+  const original = card.rawFrontmatter as RawFrontmatter | undefined;
+  if (!keys.size || !original) return;
+  const copy = { ...original } as RawFrontmatter;
+  for (const key of keys) delete copy[key];
+  const rawUnknown = original[RAW_UNKNOWN_FRONTMATTER];
+  Object.defineProperty(copy, LEGACY_CARD, {
+    value: original[LEGACY_CARD], enumerable: false, writable: true,
+  });
+  Object.defineProperty(copy, RAW_UNKNOWN_FRONTMATTER, {
+    value: rawUnknown ? extractUnknownFrontmatter('---\n' + rawUnknown + '\n---\n', keys) : rawUnknown,
+    enumerable: false, writable: true,
+  });
+  card.rawFrontmatter = copy;
 }
 
 /** Mark a legacy card as explicitly planning-edited without exposing an internal YAML key. */

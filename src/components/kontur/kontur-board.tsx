@@ -24,6 +24,8 @@ import { filterWorkspaceCards, getProjectOptions, isClosedCard, resolveInitialWo
 import { parseBoardUrlState } from '@/components/kanban/board-url-state';
 import { UNKNOWN, filterCards, getActivity, getDecisions, getFilterOptions, getReleases, getSessions, safeExternalUrl, taskFacts, type KonturSession } from './kontur-model';
 import { KonturCalendar, formatStamp, moscowDay } from './kontur-calendar';
+import { TaskReferenceLinks } from '@/components/kanban/task-reference-links';
+import { legacyCardReferences, legacyReferenceLabel } from '@/lib/kanban/legacy-card-references';
 import { KONTUR_SERVICES, LEGACY_PROJECT_SECTIONS, RECORD_TYPES, isRecordType, projectMatchesSection, recordTypeScreen, type ProjectSection, type RecordType } from './kontur-config';
 import { UNKNOWN_TEAM_FILTER, buildProjectCatalog, buildTeamCatalog, filterCardsByTeam, legacySectionForProject, projectMatchesTeam, projectTeamLabel, readCatalogUrlState, resolveTeamFilter, writeCatalogUrlState, type KonturProject } from './kontur-catalog';
 import './kontur.css';
@@ -150,13 +152,16 @@ function teamSnapshotDate(value: string) {
 }
 function continuation(card: KanbanCard, projectInfo?: KonturProject) {
   const facts = taskFacts(card);
-  return [`Задача: ${facts.title}`, `ID: ${card.id}; версия: ${card.version}`, `Проект: ${facts.project}`, `Команды проекта: ${projectTeamLabel(projectInfo)}`, ...(projectInfo?.teamSnapshot ? [`Сведения о командах: снимок eXmanager от ${teamSnapshotDate(projectInfo.teamSnapshot.observedAt)} (МСК). Автоматическое обновление не подключено.`, 'Доступ к задачам проверяется отдельно.'] : []), `Состояние: ${statusLabel(card.column)}`, `Владелец: ${facts.owner}`, `Машина: ${facts.machine}`, '', `Что сделано: ${facts.done}`, `Что осталось: ${facts.remaining}`, `Следующий шаг: ${facts.nextStep}`, `Доказательство: ${facts.evidence.join('\n') || UNKNOWN}`, `Блокер: ${facts.blocker}`, `Команда/ссылка: ${facts.command}`, '', 'Сохранить незавершённую цель. Закрывать задачу только после проверки результата человеком.'].join('\n');
+  return [`Задача: ${facts.title}`, `ID: ${card.id}; версия: ${card.version}`, `Проект: ${facts.project}`, `Команды проекта: ${projectTeamLabel(projectInfo)}`, ...(projectInfo?.teamSnapshot ? [`Сведения о командах: снимок eXmanager от ${teamSnapshotDate(projectInfo.teamSnapshot.observedAt)} (МСК). Автоматическое обновление не подключено.`, 'Доступ к задачам проверяется отдельно.'] : []), `Состояние: ${statusLabel(card.column)}`, `Владелец: ${facts.owner}`, `Машина: ${facts.machine}`, '', `Что сделано: ${facts.done}`, `Что осталось: ${facts.remaining}`, `Следующий шаг: ${facts.nextStep}`, `Доказательство: ${facts.evidence.join('\n') || UNKNOWN}`, `Блокер: ${facts.blocker}`, `Исходное сообщение: ${facts.sourceMessageUrl}`, `Сессия агента: ${facts.sessionUrl}`, `Исходная сессия: ${facts.sourceSessionUrl}`, ...legacyCardReferences(card).map(reference => `${legacyReferenceLabel(reference)}: ${reference.href}`), `Команда/ссылка: ${facts.command}`, '', 'Сохранить незавершённую цель. Закрывать задачу только после проверки результата человеком.'].join('\n');
 }
 function CardFacts({ card, projectInfo, onCopy }: { card: KanbanCard; projectInfo?: KonturProject; onCopy: (text: string, label: string) => void }) {
   const facts = taskFacts(card);
   const commandUrl = safeExternalUrl(facts.command);
   return <div className="k-card-facts">
     <dl>
+      <div><dt>Исходное сообщение</dt><dd><Evidence refs={known(facts.sourceMessageUrl) ? [facts.sourceMessageUrl] : []} /></dd></div>
+      <div><dt>Сессия агента</dt><dd><Evidence refs={known(facts.sessionUrl) ? [facts.sessionUrl] : []} /></dd></div>
+      {known(facts.sourceSessionUrl) && facts.sourceSessionUrl !== facts.sessionUrl && <div><dt>Исходная сессия</dt><dd><Evidence refs={[facts.sourceSessionUrl]} /></dd></div>}
       <div><dt>Команды проекта</dt><dd className={!projectInfo?.teams.length ? 'k-unknown' : undefined}>{projectTeamLabel(projectInfo)}</dd></div>
       {projectInfo?.teamSnapshot && <div><dt>Источник команд</dt><dd>eXmanager, снимок от <time dateTime={projectInfo.teamSnapshot.observedAt}>{teamSnapshotDate(projectInfo.teamSnapshot.observedAt)}</time> · МСК. Автоматическое обновление не подключено.</dd></div>}
       <div><dt>Что сделано</dt><dd className={!known(facts.done) ? 'k-unknown' : undefined}>{facts.done}</dd></div>
@@ -166,6 +171,7 @@ function CardFacts({ card, projectInfo, onCopy }: { card: KanbanCard; projectInf
       <div><dt>Блокер</dt><dd className={!known(facts.blocker) ? 'k-unknown' : undefined}>{facts.blocker}</dd></div>
       <div><dt>Команда/ссылка</dt><dd>{commandUrl ? <a href={commandUrl} target="_blank" rel="noopener noreferrer">{facts.command}<ExternalLink size={12} /></a> : <code className={!known(facts.command) ? 'k-unknown' : undefined}>{facts.command}</code>}{known(facts.command) && <button type="button" className="k-copy-inline" aria-label="Скопировать команду или ссылку" onClick={() => onCopy(facts.command, 'Команда или ссылка скопирована')}><Copy size={13} /></button>}</dd></div>
     </dl>
+    <TaskReferenceLinks card={card} compact legacyOnly />
     <button type="button" className="k-text-button" onClick={() => onCopy(continuation(card, projectInfo), 'Контекст для продолжения скопирован')}><Copy size={13} />Контекст для продолжения</button>
   </div>;
 }
@@ -179,6 +185,7 @@ function TaskCard({ card, projectInfo, onOpen, onCopy, onDragStart, onDragEnd, b
     <div className="k-task-top"><span className="k-project-label"><ProjectMark project={facts.project} small />{facts.project}</span><PriorityBadge priority={card.priority} /></div>
     <p className="k-task-team"><Users size={11} /><span>Команды проекта: {projectTeamLabel(projectInfo)}</span></p>
     <button type="button" className="k-task-title" onClick={() => onOpen(card)}>{card.title}<ArrowUpRight size={14} /></button>
+    <TaskReferenceLinks card={card} compact />
     <p className="k-task-next"><span>Следующий шаг</span>{facts.nextStep}</p>
     {hasBlocker(card) && <div className="k-card-blocker"><TriangleAlert size={12} /><span>{facts.blocker}</span></div>}
     <div className="k-task-meta"><span><UserRound size={12} />{facts.owner}</span><span><Server size={12} />{facts.machine}</span></div>

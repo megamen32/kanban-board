@@ -25,6 +25,7 @@ import { CardExecutionOverview } from './card-execution-overview';
 import { MarkdownText } from './markdown-text';
 import { CardBriefPanel } from './card-brief-panel';
 import { CardCalendarSection, type CalendarBridgeStatus } from './card-calendar-section';
+import { TaskReferenceLinks } from './task-reference-links';
 import { hasCardHistory } from './card-history';
 import { CardHierarchyPanel } from './card-hierarchy-panel';
 import { getEligibleParentCards } from './card-hierarchy';
@@ -369,6 +370,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
         <DialogHeader className="shrink-0 border-b px-4 py-3 pr-14 text-left sm:px-6">
           <DialogTitle>Редактировать задачу</DialogTitle>
         </DialogHeader>
+        {card && <TaskReferenceLinks card={card} />}
 
         <section aria-label="Быстрые настройки задачи" className="grid shrink-0 grid-cols-2 gap-2 border-b bg-muted/20 p-3 sm:grid-cols-3 lg:grid-cols-6 lg:gap-3 lg:px-6">
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Проект
@@ -398,8 +400,9 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             )}
           </div>
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Срок
-            <Input aria-label="Срок" type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} className="w-full min-w-0" />
+            <Input aria-label="Срок" aria-describedby="card-date-timezone" type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} className="w-full min-w-0" />
           </label>
+          <p id="card-date-timezone" className="col-span-2 text-xs text-muted-foreground sm:col-span-3 lg:col-span-6">Время вводится в часовом поясе браузера: {Intl.DateTimeFormat().resolvedOptions().timeZone || 'локальный'}. Календарь Контура показывает московское время.</p>
           <CardCalendarSection
             className="col-span-2 min-w-0 space-y-1 sm:col-span-3 lg:col-span-6"
             dueAt={card.dueAt}
