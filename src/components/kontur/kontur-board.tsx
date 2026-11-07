@@ -103,7 +103,7 @@ function hasRecordType(card: KanbanCard, type: RecordType) {
 function statusLabel(status: string) { return DEFAULT_COLUMNS.find(column => column.id === status)?.title ?? UNKNOWN; }
 function projectTone(project: string) { return [...project].reduce((sum, character) => sum + character.charCodeAt(0), 0) % 4; }
 function ProjectMark({ project, small = false }: { project: string; small?: boolean }) {
-  return <span className={`k-project-mark${small ? ' is-small' : ''}`} data-tone={projectTone(project)} aria-hidden="true">{project === UNKNOWN ? '?' : project.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2).toUpperCase() || '?'}</span>;
+  return <span className={`k-project-mark${small ? ' is-small' : ''}`} data-tone={projectTone(project)} aria-hidden="true"><span>{project === UNKNOWN ? '?' : project.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2).toUpperCase() || '?'}</span></span>;
 }
 function StatusBadge({ status }: { status: string }) { return <span className="k-status" data-status={status}><i />{statusLabel(status)}</span>; }
 function PriorityBadge({ priority }: { priority: string }) { return <span className="k-priority" data-priority={priority}><Flag size={11} />{PRIORITIES[priority] ?? UNKNOWN}</span>; }

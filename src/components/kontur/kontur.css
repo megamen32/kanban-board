@@ -725,9 +725,20 @@
 .kontur-shell .k-button-primary:hover:not(:disabled) { background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22128%22%20height%3D%2264%22%20viewBox%3D%220%200%20128%2064%22%20preserveAspectRatio%3D%22none%22%3E%3Crect%20width%3D%22128%22%20height%3D%2264%22%20fill%3D%22%23d2ff4a%22%2F%3E%3C%2Fsvg%3E"); }
 .kontur-shell .k-button-primary > span,
 .kontur-shell .k-button-primary > svg { filter: brightness(0); }
+/* Catalogue identity badges keep the same vivid accents in Chrome Auto Dark. */
+.kontur-shell .k-catalog-card .k-project-mark { color: #160b20; background-color: #a855f7; background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22128%22%20height%3D%2264%22%20viewBox%3D%220%200%20128%2064%22%20preserveAspectRatio%3D%22none%22%3E%3Crect%20width%3D%22128%22%20height%3D%2264%22%20fill%3D%22%23a855f7%22%2F%3E%3C%2Fsvg%3E"); }
+.kontur-shell .k-catalog-card .k-project-mark[data-tone="1"],
+.kontur-shell .k-catalog-card .k-project-mark[data-tone="3"],
+.kontur-shell .k-catalog-card .k-team-mark { color: #1b2300; background-color: var(--k-lime); background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22128%22%20height%3D%2264%22%20viewBox%3D%220%200%20128%2064%22%20preserveAspectRatio%3D%22none%22%3E%3Crect%20width%3D%22128%22%20height%3D%2264%22%20fill%3D%22%23c1ff00%22%2F%3E%3C%2Fsvg%3E"); }
+.kontur-shell .k-catalog-card .k-project-mark > span,
+.kontur-shell .k-catalog-card .k-team-mark > svg { filter: brightness(0); }
 @media (forced-colors: active) {
   .kontur-shell .k-button-primary,
-  .kontur-shell .k-button-primary:hover:not(:disabled) { background-image: none; }
+  .kontur-shell .k-button-primary:hover:not(:disabled),
+  .kontur-shell .k-catalog-card .k-project-mark,
+  .kontur-shell .k-catalog-card .k-team-mark { background-image: none; }
   .kontur-shell .k-button-primary > span,
-  .kontur-shell .k-button-primary > svg { filter: none; }
+  .kontur-shell .k-button-primary > svg,
+  .kontur-shell .k-catalog-card .k-project-mark > span,
+  .kontur-shell .k-catalog-card .k-team-mark > svg { filter: none; }
 }
