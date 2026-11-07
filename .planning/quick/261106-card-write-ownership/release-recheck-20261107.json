@@ -1,0 +1,21 @@
+{
+  "checked_at": "2026-11-07T00:50:33.854135+00:00",
+  "origin_main": "75e2dccf5c8e9ff6e403ed31b5c5804e230c562c",
+  "implementation": "a38ec14c0147872607ed1eda1b90f7eee5745894",
+  "pr": "https://github.com/megamen32/kanban-board/pull/8",
+  "task_head_before_receipt": "1ec71e5941f494678e269af23233aabfd2c6ce10",
+  "focused_tests": {
+    "passed": 61,
+    "failed": 0,
+    "log_sha256": "e2afbd728f47918e2fde3ff27f5de9c28d618a554a00cd2cf4f2b30e36aa8c7f"
+  },
+  "delivery": "published_without_pr; pr_stage=off",
+  "main_push_retry": "denied before execution; not repeated",
+  "native_lease": "four EOF responses; no lease acquired",
+  "child_restart_receipt": "33d762dd4e67db5638efe0bbe361e0b3",
+  "diagnosis": "ERR_MODULE_NOT_FOUND in target of dist/index.js symlink, missing dist/types/harness-runtime.js",
+  "runtime_image": "sha256:aa1a16beee8c18f3f98aaa1295ed75f469ea6f44c601f3686be6b8e3a4b62ae3",
+  "runtime_started_at": "2026-11-06T18:43:42.57189446Z",
+  "deployment": "not attempted; unchanged",
+  "known_full_suite_failures": 29
+}

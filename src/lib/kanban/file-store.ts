@@ -283,14 +283,32 @@ function updateCardRecord(id: string, updates: KanbanCardUpdates, expectedVersio
   // Validate before removing a renamed file so malformed planning updates are atomic.
   buildFrontmatter(updated);
 
-  // If title changed, rename file
+  // Keep the previous name until the replacement has been safely published.
+  // A failed write (including ownership preservation) must not lose the card.
+  let previousPath: string | undefined;
   if (updates.title && updates.title !== card.title && !card.sourceAdmission) {
-    const oldPath = path.join(tasksDir, card.fileName);
-    if (fs.existsSync(oldPath)) fs.unlinkSync(/*turbopackIgnore: true*/ oldPath);
+    previousPath = path.join(tasksDir, card.fileName);
     updated.fileName = slugify(updates.title, id);
   }
 
-  writeCard(updated, tasksDir);
+  const replacementPath = path.join(tasksDir, updated.fileName);
+  const changedPath = previousPath && previousPath !== replacementPath ? previousPath : undefined;
+  if (changedPath && fs.existsSync(replacementPath)) throw new Error('card_rename_destination_exists');
+  try {
+    writeCard(updated, tasksDir);
+    if (changedPath && fs.existsSync(changedPath)) {
+      fs.unlinkSync(/*turbopackIgnore: true*/ changedPath);
+    }
+  } catch (error) {
+    // Roll back only while the original definitely remains. If unlink succeeded
+    // but a later durability check failed, the replacement is the only copy.
+    if (changedPath && fs.existsSync(changedPath) && fs.existsSync(replacementPath)) {
+      fs.unlinkSync(/*turbopackIgnore: true*/ replacementPath);
+      fsyncDirectory(path.dirname(replacementPath));
+    }
+    throw error;
+  }
+  if (changedPath) fsyncDirectory(path.dirname(changedPath));
   return updated;
 }
 
@@ -542,6 +560,13 @@ function writeCard(card: KanbanCard, tasksDir = TASKS_DIR): void {
   try {
     try {
       fs.writeFileSync(fd, frontmatter + (card.description ? '\n' + card.description : ''));
+      // Bind-mounted task directories belong to their host user. Atomic rename
+      // replaces the inode, so a privileged service must retain that directory's
+      // owner rather than publishing a root-owned 0600 card. Auth stores are separate.
+      if (process.geteuid?.() === 0) {
+        const directory = fs.statSync(path.dirname(filePath));
+        fs.fchownSync(fd, directory.uid, directory.gid);
+      }
       fs.fsyncSync(fd);
     } finally { fs.closeSync(fd); }
     fs.renameSync(tmp, filePath);

@@ -1,0 +1,79 @@
+{
+  "created_at": "2026-11-06T23:10:38+00:00",
+  "details": "В исходной реализации старый файл удаляется до успешного writeCard. Исправление сохраняет старый файл, предотвращает коллизию назначения и покрывает write/rename/unlink/fsync failures.",
+  "events": [
+    {
+      "action": "register",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-06T23:10:38+00:00",
+      "changes": {
+        "details": "В исходной реализации старый файл удаляется до успешного writeCard. Исправление сохраняет старый файл, предотвращает коллизию назначения и покрывает write/rename/unlink/fsync failures.",
+        "source": "bun run test; verified baseline comparison; source and runtime inspection",
+        "status": "open",
+        "title": "При неудаче записи переименованная карточка может быть потеряна"
+      }
+    },
+    {
+      "action": "resolve",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-06T23:12:14+00:00",
+      "changes": {
+        "resolution": {
+          "evidence": {
+            "proof_path": "focused-tests.txt",
+            "result": "61 passed",
+            "sha256": "236ef387ca25d010b153b30dcc775a02b50fd3d2d37b1031698552be72e49a1a",
+            "test_command": "bun run test src/lib/kanban/file-store.test.ts src/lib/mcp/kanban-server.test.ts src/app/mcp/route.test.ts src/lib/auth/store.test.ts"
+          },
+          "kind": "fixed",
+          "reason": "Регрессии на отказ write/chown/rename/unlink/fsync и коллизию назначения прошли; исправление одобрено независимым ревьюером."
+        },
+        "status": "fixed"
+      }
+    },
+    {
+      "action": "update",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-06T23:13:57+00:00",
+      "changes": {
+        "status": "open"
+      },
+      "reason": "Нормализация завершающих пустых строк файла доказательства перед commit; тестовые результаты не изменены."
+    },
+    {
+      "action": "resolve",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-06T23:13:57+00:00",
+      "changes": {
+        "resolution": {
+          "evidence": {
+            "proof_path": "focused-tests.txt",
+            "result": "61 passed",
+            "sha256": "648730b6d42a2a0a8f9e52ebefaa39d0b47be1c5b6ad65bfe254729efdd9dd4a",
+            "test_command": "bun run test src/lib/kanban/file-store.test.ts src/lib/mcp/kanban-server.test.ts src/app/mcp/route.test.ts src/lib/auth/store.test.ts"
+          },
+          "kind": "fixed",
+          "reason": "Регрессии write/chown/rename/unlink/fsync и коллизии назначения прошли, независимое ревью одобрено."
+        },
+        "status": "fixed"
+      }
+    }
+  ],
+  "id": "CARD-RENAME-001",
+  "owner": "/root/advance_board_2105",
+  "reporter": "/root/advance_board_2105",
+  "resolution": {
+    "evidence": {
+      "proof_path": "focused-tests.txt",
+      "result": "61 passed",
+      "sha256": "648730b6d42a2a0a8f9e52ebefaa39d0b47be1c5b6ad65bfe254729efdd9dd4a",
+      "test_command": "bun run test src/lib/kanban/file-store.test.ts src/lib/mcp/kanban-server.test.ts src/app/mcp/route.test.ts src/lib/auth/store.test.ts"
+    },
+    "kind": "fixed",
+    "reason": "Регрессии write/chown/rename/unlink/fsync и коллизии назначения прошли, независимое ревью одобрено."
+  },
+  "source": "bun run test; verified baseline comparison; source and runtime inspection",
+  "status": "fixed",
+  "title": "При неудаче записи переименованная карточка может быть потеряна",
+  "updated_at": "2026-11-06T23:13:57+00:00"
+}
