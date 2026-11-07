@@ -64,7 +64,10 @@ describe('POST /api/kanban/cards owner attribution', () => {
     authenticated.current = null;
     managerAuthorized.current = false;
     tasksDirForScope.mockReturnValue('/scoped/work');
-    createCard.mockReturnValue(card);
+    createCard.mockImplementation((...args: unknown[]) => {
+      const options = args[9] as { owner?: string } | undefined;
+      return { ...card, owner: options?.owner ?? card.owner };
+    });
     updateCard.mockImplementation((_id: string, updates: { owner?: string }) => ({ ...card, ...updates }));
     validateTransition.mockReturnValue({ kind: 'accepted', patch: {} });
     dispatchCardEvent.mockResolvedValue({ sent: 0, failed: 0, removed: 0, skipped: true });
@@ -86,7 +89,9 @@ describe('POST /api/kanban/cards owner attribution', () => {
       expect.objectContaining({ title: 'QA task', project: 'UX QA', owner: 'marina' }),
       expect.objectContaining({ origin: 'human-ui', actor: 'marina', isCreation: true }),
     );
-    expect(updateCard).toHaveBeenCalledWith('created', { owner: 'marina' }, undefined, '/scoped/work');
+    // Owner is stored in the initial atomic create, not a second non-CAS write.
+    expect(createCard.mock.calls[0]?.[9]).toEqual({ owner: 'marina' });
+    expect(updateCard).not.toHaveBeenCalled();
     expect((await response.json()).card.owner).toBe('marina');
   });
 

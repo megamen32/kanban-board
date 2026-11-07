@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => ({ username: 'anonymous', scope: 'work' }),
   identityFromRequest: () => null,
+  automationTokenValid: () => false,
   nativeProjectAccessContextFromRequest: vi.fn(async () => null),
 }));
 vi.mock('../../../../../../lib/auth/board-human', () => ({
