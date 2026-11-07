@@ -9,7 +9,7 @@ import type { KanbanCard } from '@/lib/kanban/types';
 const { findCardById, identity, credential, fetchMock } = vi.hoisted(() => ({
   findCardById: vi.fn(),
   identity: { current: null as { username: string; scope: 'work' | 'personal' } | null },
-  credential: { current: null as null | { bearer: string; calendarId: string } },
+  credential: { current: null as null | { bearer: string; calendarId: string; projectCalendars?: Record<string, string> } },
   fetchMock: vi.fn(),
 }));
 
@@ -59,6 +59,8 @@ function boundRecord(eventId = 'evt_1', overrides: Record<string, unknown> = {})
     startTime: DUE_AT,
     endTime: '2026-11-09T11:00:00.000Z',
     titleHash: TITLE_HASH,
+    project: 'QA',
+    calendarId: 'cal-1',
     syncedAt: '2026-11-06T18:00:00.000Z',
     ...overrides,
   };
@@ -307,6 +309,83 @@ describe('create, idempotent repeat, patch, race and foreign users', () => {
     expect(keeperBindingStore.get('nikita', 'card-1')).toMatchObject({ state: 'pending', phase: 'patch', eventId: 'evt_old' });
   });
 
+  it('routes mapped projects to their own calendars and refuses unmapped ones (strict split)', async () => {
+    credential.current = { bearer: 'kpr_secret', calendarId: 'cal-default', projectCalendars: { QA: 'cal-qa', 'Олег и Никита': 'cal-family' } };
+
+    // Mapped project -> its own calendar.
+    findCardById.mockImplementation(() => baseCard({ project: 'QA' }));
+    okKeeper(201, { id: 'evt_qa' });
+    await payload(post({}), 200);
+    let [url, init] = fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).calendarId).toBe('cal-qa');
+    expect(keeperBindingStore.get('nikita', 'card-1')).toMatchObject({ state: 'bound', eventId: 'evt_qa', project: 'QA', calendarId: 'cal-qa' });
+
+    // Second mapped project -> a different calendar of the same account.
+    findCardById.mockImplementation(() => baseCard({ id: 'card-2', project: 'Олег и Никита' }));
+    okKeeper(201, { id: 'evt_family' });
+    await payload(POST(calendarRequest('POST', {}), { params: Promise.resolve({ id: 'card-2' }) }), 200);
+    [url, init] = fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).calendarId).toBe('cal-family');
+
+    // Unmapped project under a partial mapping refuses WITHOUT any pending
+    // record or extra upstream call: projects must never silently mix.
+    findCardById.mockImplementation(() => baseCard({ id: 'card-3', project: 'Другой проект' }));
+    const refused = await payload(POST(calendarRequest('POST', {}), { params: Promise.resolve({ id: 'card-3' }) }), 409);
+    expect(refused.error).toBe('project_calendar_not_configured');
+    expect(refused.project).toBe('Другой проект');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(keeperBindingStore.get('nikita', 'card-3')).toBeNull();
+  });
+
+  it('never patches an event into another calendar: project change needs explicit rebind', async () => {
+    credential.current = { bearer: 'kpr_secret', calendarId: 'cal-default', projectCalendars: { QA: 'cal-qa', 'Олег и Никита': 'cal-family' } };
+    // Event was created for QA; the card has since moved to another project.
+    keeperBindingStore.set('nikita', 'card-1', boundRecord('evt_qa', { calendarId: 'cal-qa' }));
+    findCardById.mockImplementation(() => baseCard({ project: 'Олег и Никита' }));
+    const body = await payload(post({}), 409);
+    expect(body.error).toBe('calendar_rebind_manual_required');
+    expect(body.storedProject).toBe('QA');
+    expect(body.storedCalendarId).toBe('cal-qa');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(keeperBindingStore.get('nikita', 'card-1')).toMatchObject({ state: 'bound', eventId: 'evt_qa', project: 'QA' });
+
+    // The proven upstream delete rebinds: next sync creates it in the new calendar.
+    okKeeper(200, '');
+    await payload(remove(), 200);
+    expect(keeperBindingStore.get('nikita', 'card-1')).toBeNull();
+    okKeeper(201, { id: 'evt_family' });
+    const created = await payload(post({}), 200);
+    expect((created.event as { eventId: string }).eventId).toBe('evt_family');
+    const [, createInit] = fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit];
+    expect(JSON.parse(String(createInit.body)).calendarId).toBe('cal-family');
+  });
+
+  it('a receipt without a stored project/calendar cannot be silently reused or patched', async () => {
+    const { calendarId: _drop, project: _drop2, ...legacy } = boundRecord('evt_legacy');
+    keeperBindingStore.set('nikita', 'card-1', legacy);
+    const body = await payload(post({}), 409);
+    expect(body.error).toBe('calendar_rebind_manual_required');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(keeperBindingStore.get('nikita', 'card-1')).toMatchObject({ state: 'bound', eventId: 'evt_legacy' });
+  });
+
+  it('reuse requires a live credential even when the card window is unchanged', async () => {
+    keeperBindingStore.set('nikita', 'card-1', boundRecord());
+    credential.current = null;
+    const body = await payload(post({}), 409);
+    expect(body.error).toBe('keeper_not_connected');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(body.reused).toBeUndefined();
+  });
+
+  it('unchanged card with a valid credential and matching calendar reuses without upstream', async () => {
+    const titleHash = createHash('sha256').update('Созвон с клиентом').digest('hex');
+    keeperBindingStore.set('nikita', 'card-1', { ...boundRecord(), titleHash });
+    okKeeper(201, { id: 'evt_WOULD_DUPLICATE' });
+    const body = await payload(post({}), 200);
+    expect(body.reused).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   it('another user never sees, reuses or removes the first user event', async () => {
     keeperBindingStore.set('nikita', 'card-1', boundRecord('evt_nikita'));
 

@@ -11,8 +11,14 @@ import type { CalendarEventBinding } from './keeper-bindings';
 export interface KeeperCredential {
   /** Per-user Keeper bearer token (kpr_...), server-side only. */
   bearer: string;
-  /** The connected user's own calendar id from GET /api/v1/calendars. */
+  /** The connected user's own default calendar id from GET /api/v1/calendars. */
   calendarId: string;
+  /**
+   * Optional explicit per-project calendar mapping (exact board project name
+   * -> that user's own calendar id). Absent keys fall back to `calendarId`.
+   * Never mixes accounts: the whole credential is one user's.
+   */
+  projectCalendars?: Record<string, string>;
 }
 
 export type KeeperCredentialLookup = (username: string) => Promise<KeeperCredential | null>;
@@ -151,4 +157,28 @@ export function calendarSyncDecision(existing: CalendarEventBinding | undefined,
     && existing.endTime === input.endTime
     && titleMatches;
   return sameWindow ? { action: 'none', binding: existing } : { action: 'patch', binding: existing };
+}
+
+export class ProjectCalendarNotConfiguredError extends Error {
+  constructor(readonly project: string) {
+    super(`project calendar is not configured for ${project}`);
+    this.name = 'ProjectCalendarNotConfiguredError';
+  }
+}
+
+/**
+ * Project-aware calendar routing inside ONE user's credential. Strict mode:
+ * once the operator configures ANY per-project mapping, every unmapped
+ * project fails closed instead of silently landing in the default calendar —
+ * projects must never mix. Only a credential WITHOUT projectCalendars (plain
+ * legacy connection) may use the default calendar for everything.
+ */
+export function resolveCalendarId(credential: KeeperCredential, project: string): string {
+  const mapping = credential.projectCalendars;
+  if (mapping && Object.keys(mapping).length > 0) {
+    const mapped = mapping[project];
+    if (typeof mapped !== 'string' || !mapped.trim()) throw new ProjectCalendarNotConfiguredError(project);
+    return mapped;
+  }
+  return credential.calendarId;
 }

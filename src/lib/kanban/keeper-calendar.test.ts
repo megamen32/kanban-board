@@ -7,6 +7,8 @@ import {
   keeperDeleteEvent,
   keeperUpdateEvent,
   noKeeperCredentials,
+  ProjectCalendarNotConfiguredError,
+  resolveCalendarId,
 } from './keeper-calendar';
 
 const BASE = 'http://192.168.2.100:43349';
@@ -87,6 +89,36 @@ describe('keeper calendar adapter (official REST contract)', () => {
     await keeperDeleteEvent(BASE, 'kpr_secret', 'a/b c');
     const [url] = fetchMock.mock.calls[0] as unknown as [string];
     expect(url).toBe(`${BASE}/api/v1/events/a%2Fb%20c`);
+  });
+});
+
+describe('project-aware calendar routing (strict, no silent mixing)', () => {
+  const credential = { bearer: 'kpr_secret', calendarId: 'cal-default', projectCalendars: { QA: 'cal-qa', 'Олег и Никита': 'cal-family' } };
+
+  test('explicit project mapping wins', () => {
+    expect(resolveCalendarId(credential, 'QA')).toBe('cal-qa');
+    expect(resolveCalendarId(credential, 'Олег и Никита')).toBe('cal-family');
+  });
+
+  test('a partial mapping fails closed for unmapped projects instead of silently mixing', () => {
+    expect(() => resolveCalendarId(credential, 'Другой проект')).toThrow(ProjectCalendarNotConfiguredError);
+    expect(() => resolveCalendarId(credential, 'qa')).toThrow(ProjectCalendarNotConfiguredError);
+    try {
+      resolveCalendarId(credential, 'Никогда');
+    } catch (error) {
+      expect((error as ProjectCalendarNotConfiguredError).project).toBe('Никогда');
+    }
+  });
+
+  test('a credential without any mapping keeps the legacy default-calendar behavior', () => {
+    expect(resolveCalendarId({ bearer: 'x', calendarId: 'cal-default' }, 'QA')).toBe('cal-default');
+    expect(resolveCalendarId({ bearer: 'x', calendarId: 'cal-default', projectCalendars: {} }, 'QA')).toBe('cal-default');
+  });
+
+  test('routing never crosses credentials', () => {
+    const other = { bearer: 'kpr_b', calendarId: 'cal-b', projectCalendars: { QA: 'cal-b-qa' } };
+    expect(resolveCalendarId(other, 'QA')).toBe('cal-b-qa');
+    expect(resolveCalendarId(credential, 'QA')).toBe('cal-qa');
   });
 });
 

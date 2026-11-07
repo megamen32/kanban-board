@@ -355,6 +355,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
           <CardCalendarSection
             className="col-span-2 min-w-0 space-y-1 sm:col-span-3 lg:col-span-6"
             dueAt={card.dueAt}
+            project={card.project}
             status={calendarStatus}
             durationMinutes={calendarDuration}
             onDurationChange={setCalendarDuration}
