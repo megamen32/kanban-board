@@ -1,3 +1,18 @@
+# Проверенный статус на 7 ноября 2026, 03:55 UTC
+
+Постоянное исправление прав установлено в production: main d5ceef143c6ae9beacea135bdb5eb3afafbf57f1, image 0d8a300a9c48a3ddbe26c7cafc2b15cf494a00b7633d80fb5b75951497a9166a. Новый контейнер запущен в 03:52:06 UTC. Код получен из свежего origin/main; чужой primary WIP сохранён.
+
+Штатный target-bound lease fence 13 и ReleaseGate защитили выпуск OS-lock, проверкой token/fence/TTL и точным live-container/image CAS. Lease освобождён. Сохранены все четыре mounts, лимиты 512 MiB RAM / 768 MiB RAM+swap / 2 CPU / 256 PID и порт 43327. HTTP 200, MCP без credentials 401. Старый образ сохранён для отката.
+
+61 профильный тест, build/typecheck и аудит образа прошли. Настоящий compiled HTTP MCP на том же immutable image в отдельной network-none изоляции создал, изменил, переименовал и прочёл синтетическую карточку. Root writer сохранил UID/GID 1000 и mode 0600; обычный roomhacker прочёл файл. Тестовый сервис удалён, синтетический token отозван и удалён. Независимая проверка текущего production подтвердила revision/image/hash, health, mounts и ограничения; restart count 0.
+
+Ошибки приёмочного helper зарегистрированы как RELEASE-QA-001/002 и исправлены: порядок Docker mounts не означает изменения подключений; исходный TS нельзя запускать вместо compiled standalone. Два ранних rollout безопасно откатились, итоговый прошёл. Прежний identity blocker был ошибочной трактовкой: owner lease является атрибуцией исполнителя, а не wake-binding аутентификацией.
+
+CARD-OWNER-001, RELEASE-GATE-001 и RELEASE-QA-001/002 закрыты с проверенными доказательствами. BOARD-CONSUMER-001 остаётся blocked: production Airlock board_read ранее вернул unauthorized; вызов не повторялся и не обходился. Исходная карточка не обновлена. Полная suite ранее имела 29 известных падений; полный зелёный цикл или Done не объявляется.
+
+Доказательства: production-release-proof-20261107.json, compiled-mcp-canary-proof.json, mount-order-regression-proof.json, independent-runtime-recheck.json.
+
+## История предыдущих проверок
 # Проверенный статус на 7 ноября 2026, 02:37 UTC
 Исправление исходников уже включено в main: PR8, a38ec14c; свежий origin/main d5ceef143c6ae9beacea135bdb5eb3afafbf57f1 также включает PR9 с журналом. Дерево собственного worktree совпадает с main. Канонический checkout eeb10ad содержит чужой WIP и не менялся.
 

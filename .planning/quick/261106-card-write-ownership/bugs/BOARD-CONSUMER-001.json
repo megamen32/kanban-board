@@ -1,0 +1,35 @@
+{
+  "blocker": "Restore existing authorized Airlock consumer access through its supported owner flow, then read the current card and perform versioned edit/read. Do not bypass unauthorized or invent credentials.",
+  "created_at": "2026-11-07T03:55:24+00:00",
+  "details": "Existing ownership-card native apps.exmanager.tools.board_read returned unauthorized / INVALID_ARGUMENT / isError=true at 02:38 UTC before mutation. Not retried through another route. Filesystem fix is deployed and verified on same-image compiled MCP using synthetic-only fixtures. Production Airlock access and original-card update remain unconfirmed. Real auth was not inspected or changed.",
+  "events": [
+    {
+      "action": "register",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-07T03:55:24+00:00",
+      "changes": {
+        "details": "Existing ownership-card native apps.exmanager.tools.board_read returned unauthorized / INVALID_ARGUMENT / isError=true at 02:38 UTC before mutation. Not retried through another route. Filesystem fix is deployed and verified on same-image compiled MCP using synthetic-only fixtures. Production Airlock access and original-card update remain unconfirmed. Real auth was not inspected or changed.",
+        "source": "Native board_read failure 02:38 UTC and production-release-proof-20261107.json",
+        "status": "open",
+        "title": "Authenticated Airlock board acceptance возвращает unauthorized"
+      }
+    },
+    {
+      "action": "update",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-07T03:55:25+00:00",
+      "changes": {
+        "blocker": "Restore existing authorized Airlock consumer access through its supported owner flow, then read the current card and perform versioned edit/read. Do not bypass unauthorized or invent credentials.",
+        "status": "blocked"
+      },
+      "reason": "Separate consumer-access blocker from deployed filesystem fix."
+    }
+  ],
+  "id": "BOARD-CONSUMER-001",
+  "owner": "/root/advance_board_2105",
+  "reporter": "/root/advance_board_2105",
+  "source": "Native board_read failure 02:38 UTC and production-release-proof-20261107.json",
+  "status": "blocked",
+  "title": "Authenticated Airlock board acceptance возвращает unauthorized",
+  "updated_at": "2026-11-07T03:55:25+00:00"
+}

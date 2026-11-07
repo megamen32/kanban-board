@@ -1,0 +1,63 @@
+{
+  "blocker": "Устранено для этого дефекта; подтверждение сохранено в compiled-mcp-canary-proof.json",
+  "created_at": "2026-11-07T03:48:33+00:00",
+  "details": "Fenced rollout 03:46 passed exact source revision, HTTP200, unauthenticated MCP401, unchanged mounts/limits/ports. Raw TS canary import failed Cannot find package gray-matter because production bundles dependencies. Strict helper rolled back; product did not crash. Replace invalid canary with real compiled MCP exercised on isolated synthetic-only data, with no production auth/data or external network. 07.11 03:52 UTC: Invalid raw TS probe replaced with actual compiled MCP. QA service removed and synthetic token revoked. Proof: compiled-mcp-canary-proof.json",
+  "events": [
+    {
+      "action": "register",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-07T03:48:33+00:00",
+      "changes": {
+        "details": "Fenced rollout 03:46 passed exact source revision, HTTP200, unauthenticated MCP401, unchanged mounts/limits/ports. Raw TS canary import failed Cannot find package gray-matter because production bundles dependencies. Strict helper rolled back; product did not crash. Replace invalid canary with real compiled MCP exercised on isolated synthetic-only data, with no production auth/data or external network.",
+        "source": "Confirmed task 9affb01f757f47b887725c2481b8b003 and rollout receipt",
+        "status": "open",
+        "title": "Canary ошибочно импортировал исходный TS из production standalone"
+      }
+    },
+    {
+      "action": "update",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-07T03:55:23+00:00",
+      "changes": {
+        "blocker": "Устранено для этого дефекта; подтверждение сохранено в compiled-mcp-canary-proof.json",
+        "details": "Fenced rollout 03:46 passed exact source revision, HTTP200, unauthenticated MCP401, unchanged mounts/limits/ports. Raw TS canary import failed Cannot find package gray-matter because production bundles dependencies. Strict helper rolled back; product did not crash. Replace invalid canary with real compiled MCP exercised on isolated synthetic-only data, with no production auth/data or external network. 07.11 03:52 UTC: Invalid raw TS probe replaced with actual compiled MCP. QA service removed and synthetic token revoked. Proof: compiled-mcp-canary-proof.json"
+      },
+      "reason": "Record verified rollout and corrected acceptance."
+    },
+    {
+      "action": "resolve",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-07T03:55:23+00:00",
+      "changes": {
+        "resolution": {
+          "evidence": {
+            "proof_path": "compiled-mcp-canary-proof.json",
+            "result": "passed",
+            "sha256": "59295f601dc4a97ed277b6045c833957a2d4c91231af37ff5608607086f0caf1",
+            "test_command": "Same-image isolated HTTP MCP initialize/tools-list/create/edit/rename/read and host UID/mode/readback"
+          },
+          "kind": "fixed",
+          "reason": "Invalid raw TS probe replaced with actual compiled MCP. QA service removed and synthetic token revoked."
+        },
+        "status": "fixed"
+      }
+    }
+  ],
+  "id": "RELEASE-QA-002",
+  "owner": "/root/advance_board_2105",
+  "reporter": "/root/advance_board_2105",
+  "resolution": {
+    "evidence": {
+      "proof_path": "compiled-mcp-canary-proof.json",
+      "result": "passed",
+      "sha256": "59295f601dc4a97ed277b6045c833957a2d4c91231af37ff5608607086f0caf1",
+      "test_command": "Same-image isolated HTTP MCP initialize/tools-list/create/edit/rename/read and host UID/mode/readback"
+    },
+    "kind": "fixed",
+    "reason": "Invalid raw TS probe replaced with actual compiled MCP. QA service removed and synthetic token revoked."
+  },
+  "source": "Confirmed task 9affb01f757f47b887725c2481b8b003 and rollout receipt",
+  "status": "fixed",
+  "title": "Canary ошибочно импортировал исходный TS из production standalone",
+  "updated_at": "2026-11-07T03:55:23+00:00"
+}

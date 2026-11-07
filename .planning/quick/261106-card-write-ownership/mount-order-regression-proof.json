@@ -1,0 +1,10 @@
+{
+  "observedAtUtc": "2026-11-07T03:44:07.423856+00:00",
+  "bug": "RELEASE-QA-001",
+  "old_order_comparison_failed": true,
+  "same_complete_mount_set": true,
+  "changed_permission_still_rejected": true,
+  "rollbackConfirmed": true,
+  "proof": "Canonical comparison preserves every mount field and multiplicity, ignoring only array order.",
+  "result": "passed"
+}

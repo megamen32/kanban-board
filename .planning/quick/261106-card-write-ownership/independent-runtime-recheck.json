@@ -1,0 +1,13 @@
+{
+  "result": "passed",
+  "independentReviewer": true,
+  "runtimeMatchesReleaseProof": true,
+  "restartCount": 0,
+  "http": 200,
+  "unauthenticatedMcp": 401,
+  "sameFourMountsAndPort": true,
+  "limitsPreserved": true,
+  "fileStoreHashMatches": true,
+  "caveat": "Synthetic compiled acceptance and production artifact/health verified. Production Airlock acceptance remains unconfirmed; auth state and real cards were not read.",
+  "recordedAtUtc": "2026-11-07T03:56:48.449660+00:00"
+}

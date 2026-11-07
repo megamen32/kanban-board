@@ -1,0 +1,22 @@
+{
+  "result": "passed",
+  "completedAtUtc": "2026-11-07T03:52:10.502189+00:00",
+  "main": "d5ceef143c6ae9beacea135bdb5eb3afafbf57f1",
+  "image": "sha256:0d8a300a9c48a3ddbe26c7cafc2b15cf494a00b7633d80fb5b75951497a9166a",
+  "containerId": "7d8cc761e1bfaa60cfe7cbc4fa7fda8d3506f866d0c03b147119634e4b87ee51",
+  "startedAt": "2026-11-07T03:52:06.131004634Z",
+  "fileStoreSha256": "7855a1bd5a182010712c284b9ae04926638320633a1394cd9f073d8aa5d0f2e9",
+  "productionHTTP": 200,
+  "unauthenticatedMCP": 401,
+  "mountsPreserved": true,
+  "runtimeLimitsPreserved": true,
+  "portsPreserved": true,
+  "officialTargetBoundLeaseFence": 13,
+  "leaseReleased": true,
+  "compiledMcpCanary": "passed on same immutable image in isolated network-none runtime with only synthetic fixtures",
+  "ordinaryUserRead": "passed: writer uid0, file1000:1000, mode0600, created/edited/renamed/read",
+  "nativeProductionAirlock": "not accepted: prior unauthorized, not retried or bypassed",
+  "knownFullSuite": "29 existing failures remain; no full-green completion claim",
+  "rollbackHistory": "First attempt rolled back due unordered mounts comparison; second due invalid raw TS canary. Both verification errors registered, corrected, and independently replaced by compiled MCP evidence.",
+  "provenanceBefore": "Legacy runtime had no verified source label. Rebuilt fresh origin/main under current LHC Publish instruction, kept previous image, checked exact live generation at mutation."
+}

@@ -1,0 +1,63 @@
+{
+  "blocker": "Устранено для этого дефекта; подтверждение сохранено в mount-order-regression-proof.json",
+  "created_at": "2026-11-07T03:45:10+00:00",
+  "details": "03:44 UTC first authorized rollout reached new image and HTTP readiness, but verification compared raw mount arrays. Docker reordered identical entries. Guard rolled back to previous image; data and limits unchanged. Canonical full-row/multiplicity comparison fixes the verifier without weakening actual mount checks. Proof mount-order-regression-proof.json verifies equality and rejects changed RW. 07.11 03:52 UTC: Canonical comparison ignores only array order; actual rollout verified all mount fields. Proof: mount-order-regression-proof.json",
+  "events": [
+    {
+      "action": "register",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-07T03:45:10+00:00",
+      "changes": {
+        "details": "03:44 UTC first authorized rollout reached new image and HTTP readiness, but verification compared raw mount arrays. Docker reordered identical entries. Guard rolled back to previous image; data and limits unchanged. Canonical full-row/multiplicity comparison fixes the verifier without weakening actual mount checks. Proof mount-order-regression-proof.json verifies equality and rejects changed RW.",
+        "source": "Confirmed rollout task 14c7d64f056703669a3cba2049a33eaf and saved receipt",
+        "status": "open",
+        "title": "Проверка релиза ошибочно учитывала порядок неизменных Docker mounts"
+      }
+    },
+    {
+      "action": "update",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-07T03:55:22+00:00",
+      "changes": {
+        "blocker": "Устранено для этого дефекта; подтверждение сохранено в mount-order-regression-proof.json",
+        "details": "03:44 UTC first authorized rollout reached new image and HTTP readiness, but verification compared raw mount arrays. Docker reordered identical entries. Guard rolled back to previous image; data and limits unchanged. Canonical full-row/multiplicity comparison fixes the verifier without weakening actual mount checks. Proof mount-order-regression-proof.json verifies equality and rejects changed RW. 07.11 03:52 UTC: Canonical comparison ignores only array order; actual rollout verified all mount fields. Proof: mount-order-regression-proof.json"
+      },
+      "reason": "Record verified rollout and corrected acceptance."
+    },
+    {
+      "action": "resolve",
+      "actor": "/root/advance_board_2105",
+      "at": "2026-11-07T03:55:22+00:00",
+      "changes": {
+        "resolution": {
+          "evidence": {
+            "proof_path": "mount-order-regression-proof.json",
+            "result": "passed",
+            "sha256": "bb912c6f734606faed82bdaaa7d303445bd6e37ea5254854dfb45f912dac47bf",
+            "test_command": "Canonical complete Docker mount-row comparison with changed-RW negative check"
+          },
+          "kind": "fixed",
+          "reason": "Canonical comparison ignores only array order; actual rollout verified all mount fields."
+        },
+        "status": "fixed"
+      }
+    }
+  ],
+  "id": "RELEASE-QA-001",
+  "owner": "/root/advance_board_2105",
+  "reporter": "/root/advance_board_2105",
+  "resolution": {
+    "evidence": {
+      "proof_path": "mount-order-regression-proof.json",
+      "result": "passed",
+      "sha256": "bb912c6f734606faed82bdaaa7d303445bd6e37ea5254854dfb45f912dac47bf",
+      "test_command": "Canonical complete Docker mount-row comparison with changed-RW negative check"
+    },
+    "kind": "fixed",
+    "reason": "Canonical comparison ignores only array order; actual rollout verified all mount fields."
+  },
+  "source": "Confirmed rollout task 14c7d64f056703669a3cba2049a33eaf and saved receipt",
+  "status": "fixed",
+  "title": "Проверка релиза ошибочно учитывала порядок неизменных Docker mounts",
+  "updated_at": "2026-11-07T03:55:22+00:00"
+}

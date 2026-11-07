@@ -1,0 +1,33 @@
+{
+  "passed": true,
+  "cardId": "ace63bf1-a618-4576-9fa7-45e864a43054",
+  "filename": "Compiled-ownership-renamed-ace63bf1.md",
+  "version": 3,
+  "initialize": "passed",
+  "toolsList": "passed",
+  "createEditRenameRead": "passed",
+  "rootUid": 0,
+  "before": {
+    "uid": 1000,
+    "gid": 1000,
+    "mode": "0o600",
+    "readableByHostUid": 1000
+  },
+  "after": {
+    "uid": 1000,
+    "gid": 1000,
+    "mode": "0o600",
+    "readableByHostUid": 1000,
+    "sha256": "7d60ce84507324815a06273801c30c4c3a32df0fd04be078f95ce7e091035dd6",
+    "bytes": 548
+  },
+  "candidateImage": "sha256:0d8a300a9c48a3ddbe26c7cafc2b15cf494a00b7633d80fb5b75951497a9166a",
+  "sourceRevision": "d5ceef143c6ae9beacea135bdb5eb3afafbf57f1",
+  "isolation": "Separate network-none Compose; only synthetic work/auth, no production auth or data, no external access",
+  "unauthenticatedStatus": 401,
+  "cleanup": {
+    "qaComposeRemoved": true,
+    "syntheticTokenRevokedAndRemoved": true,
+    "temporaryFiles": 0
+  }
+}
