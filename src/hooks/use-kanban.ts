@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { KanbanCard, KanbanCardUpdates, KanbanColumn, ConflictInfo } from '@/lib/kanban/types';
 import type { KanbanProject } from '@/lib/kanban/project-store';
+import { unavailableTeamCatalog, type BoardTeamCatalog } from '@/lib/kanban/team-catalog';
 import type { WeeklyDraft } from '@/lib/kanban/weekly-plan';
 import { retryConflictEdit } from './conflict-choice';
 import { BoardMutationError, boardMutationRequest, readMutationResponse } from '../lib/kanban/mutation-response';
@@ -28,6 +29,7 @@ export interface WeeklyPlanResult extends WeeklyDraft {
 export function useKanban() {
   const [cards, setCards] = useState<KanbanCard[]>([]);
   const [projects, setProjects] = useState<KanbanProject[]>([]);
+  const [teamCatalog, setTeamCatalog] = useState<BoardTeamCatalog>(() => unavailableTeamCatalog());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +40,7 @@ export function useKanban() {
   const [weeklyError, setWeeklyError] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const boardReader = useRef<BoardReader | null>(null);
-  if (!boardReader.current) {
+  if (boardReader.current === null) {
     boardReader.current = createBoardReader({
       load: async () => {
         const res = await fetch('/api/kanban/cards', {cache: 'no-store', credentials: 'same-origin'});
@@ -47,12 +49,13 @@ export function useKanban() {
       onData: data => {
         setCards(data.cards);
         setProjects(data.projects);
+        setTeamCatalog(data.teamCatalog);
         setError(null);
         setLastLoadedAt(new Date().toISOString());
       },
       onError: failure => {
         if (failure instanceof BoardReadError && [401, 403].includes(failure.status)) {
-          setCards([]); setProjects([]); setLastLoadedAt(null);
+          setCards([]); setProjects([]); setTeamCatalog(unavailableTeamCatalog()); setLastLoadedAt(null);
         }
         setError(failure instanceof BoardReadError ? failure.message : 'Сервер недоступен. Сохранённые на экране записи могут быть устаревшими.');
       },
@@ -86,8 +89,23 @@ export function useKanban() {
     socket.on('file:updated', scheduleRefresh);
     socket.on('file:deleted', scheduleRefresh);
 
+    // Team membership can change in the manager without a task-file event.
+    // Revalidate on return, with one read for overlapping focus/visibility events.
+    let lastAttentionRead = 0;
+    const refreshOnAttention = () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastAttentionRead < 5_000) return;
+      lastAttentionRead = now;
+      void refreshCards();
+    };
+    window.addEventListener('focus', refreshOnAttention);
+    document.addEventListener('visibilitychange', refreshOnAttention);
+
     return () => {
       clearTimeout(refreshTimer);
+      window.removeEventListener('focus', refreshOnAttention);
+      document.removeEventListener('visibilitychange', refreshOnAttention);
       socket.disconnect();
     };
   }, [fetchCards, refreshCards]);
@@ -103,8 +121,9 @@ export function useKanban() {
     if (!saved) throw new BoardMutationError('Сервер не подтвердил создание задачи. Введённые данные не удалены.');
     boardReader.current!.invalidate();
     setCards(prev => mergeCardReceipts(prev, [saved], true));
+    void refreshCards();
     return saved;
-  }, []);
+  }, [refreshCards]);
 
   const updateCard = useCallback(async (id: string, updates: KanbanUpdateRequest, expectedVersion?: number) => {
     const res = await boardMutationRequest(`/api/kanban/cards/${id}`, {
@@ -127,8 +146,9 @@ export function useKanban() {
     if (!saved) throw new BoardMutationError('Сервер не подтвердил сохранение карточки. Введённые данные не удалены.');
     boardReader.current!.invalidate();
     setCards(prev => mergeCardReceipts(prev, [saved]));
+    void refreshCards();
     return saved;
-  }, []);
+  }, [refreshCards]);
 
   const deleteCard = useCallback(async (id: string) => {
     const response = await boardMutationRequest(`/api/kanban/cards/${id}`, { method: 'DELETE' }, 'delete');
@@ -136,8 +156,9 @@ export function useKanban() {
     if (!data.success) throw new BoardMutationError('Сервер не подтвердил удаление. Карточка не скрыта.');
     boardReader.current!.invalidate();
     setCards(prev => prev.filter(c => c.id !== id));
+    void refreshCards();
     return true;
-  }, []);
+  }, [refreshCards]);
 
   const moveCard = useCallback(async (id: string, column: string, order?: number) => {
     const current = cards.find(card => card.id === id);
@@ -215,6 +236,7 @@ export function useKanban() {
   return {
     cards,
     projects,
+    teamCatalog,
     loading,
     refreshing,
     error,

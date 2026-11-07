@@ -134,3 +134,30 @@ Static preview metadata and `/link-preview` contain no task or owner data.
 The external UI remains behind the existing SSO gateway and `/mcp` remains
 Bearer-authenticated. Public crawler ingress routing is a separate reviewed
 infrastructure change; application metadata alone does not prove Telegram preview.
+
+## Team and project metadata in Kontur
+
+The project catalog uses the complete authorized cards and registered projects,
+including empty projects. Mine/Shared/All only filters responsibility; it does
+not remove project identities from navigation and does not define a team.
+
+The cards GET snapshot includes a display-only `teamCatalog` with
+`coverage: visible-projects`. Native callers receive exact project/team
+relationships from the existing Exmanager project-scope resolver. The verified
+owner browser grant still controls the owner's cards; bounded metadata lookups
+cannot remove authorized cards when the team source is unavailable. Other
+native callers receive metadata only from their successful project grants.
+Legacy identities receive only relay-catalog relationships for their already
+allowed projects. No new access grant is derived from catalog metadata.
+
+Native team IDs are namespaced exact team names. Legacy relay IDs use a separate
+namespace. The UI does not merge teams by display name or infer relationships
+from project prefixes, aliases, participants or work/personal scopes. Missing
+relationships remain unknown. The contract supports several explicit teams per
+project, without changing the upstream membership model or creating bindings.
+
+Catalog status distinguishes complete, partial and unavailable metadata.
+Responses are private and uncached; the client validates relationships against
+the same snapshot, clears them on 401/403 and refreshes after task writes and
+when the tab regains attention. Team member IDs, board logins, write grants and
+private source diagnostics are excluded from this display projection.

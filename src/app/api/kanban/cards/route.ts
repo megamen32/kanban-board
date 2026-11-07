@@ -6,6 +6,11 @@ import { boardHumanIdentityFromRequest } from '@/lib/auth/board-human';
 import { ownerBrowserReadAllowed } from '@/lib/auth/owner-browser-read';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { listProjects } from '../../../../lib/kanban/project-store';
+import type { KanbanProject } from '@/lib/kanban/project-store';
+import type { NativeProjectAccess } from '@/lib/kanban/native-project-access';
+import { unavailableTeamCatalog, type BoardTeamCatalog } from '@/lib/kanban/team-catalog';
+import { nativeTeamCatalog, relayTeamCatalog, resolveNativeTeamCatalog } from '@/lib/kanban/team-catalog.server';
+import { loadRelayScopeCatalog, relayScopeCatalogFile } from '@/lib/kanban/project-reviewers';
 import { normalizeDueAt } from '@/lib/kanban/due-at';
 import { dispatchCardEvent } from '@/lib/notifications/push';
 import { startDueReminderScheduler } from '@/lib/notifications/scheduler';
@@ -49,15 +54,51 @@ function qaTestLoginCardReadAllowed(req: NextRequest, identity: { username: stri
     && qaRequestHost(req) === 'qa-board.bezrabotnyi.com'
     && identity?.scope === 'work' && identity.username === 'testlogin';
 }
+function visibleProjectNames(cards: readonly KanbanCard[], projects: readonly KanbanProject[]): string[] {
+  return [...new Set([
+    ...cards.map(card => card.project.trim()),
+    ...projects.map(project => project.name.trim()),
+  ].filter(Boolean))];
+}
+
+function boardSnapshot(cards: KanbanCard[], projects: KanbanProject[], teamCatalog: BoardTeamCatalog) {
+  return NextResponse.json({ cards, projects, teamCatalog }, {
+    headers: { 'Cache-Control': 'private, no-store' },
+  });
+}
+
+/** Metadata failure cannot hide tasks the existing identity checks already authorized. */
+function legacyBoardSnapshot(cards: KanbanCard[], projects: KanbanProject[]) {
+  const names = visibleProjectNames(cards, projects);
+  let catalog: BoardTeamCatalog;
+  try {
+    catalog = relayTeamCatalog(names, loadRelayScopeCatalog(relayScopeCatalogFile()));
+  } catch {
+    catalog = unavailableTeamCatalog(names);
+  }
+  return boardSnapshot(cards, projects, catalog);
+}
+
 export async function GET(req: NextRequest) {
   try {
     const ownerBrowserRead = await ownerBrowserReadAllowed(req);
-    const nativeContext = ownerBrowserRead ? null : await nativeProjectAccessContextFromRequest(req);
     startDueReminderScheduler();
     if (ownerBrowserRead) {
       const tasksDir = tasksDirForScope('work');
-      return NextResponse.json({ cards: getAllCards(tasksDir), projects: listProjects(tasksDir) });
+      const cards = getAllCards(tasksDir);
+      const projects = listProjects(tasksDir);
+      const names = visibleProjectNames(cards, projects);
+      let teamCatalog = unavailableTeamCatalog(names);
+      try {
+        const context = await nativeProjectAccessContextFromRequest(req);
+        if (context) teamCatalog = await resolveNativeTeamCatalog(names, context);
+      } catch {
+        // The owner grant is already verified. An unavailable team source is
+        // metadata uncertainty, never a reason to drop these authorized tasks.
+      }
+      return boardSnapshot(cards, projects, teamCatalog);
     }
+    const nativeContext = await nativeProjectAccessContextFromRequest(req);
     if (nativeContext) {
       const tasksDir = tasksDirForScope('work');
       const cards = getAllCards(tasksDir);
@@ -68,10 +109,15 @@ export async function GET(req: NextRequest) {
         ...projects.map(project => project.name.trim()),
       ].filter(Boolean))];
       const readable = new Set<string>();
+      const successfulAccess: NativeProjectAccess[] = [];
       for (const project of candidates) {
         if (hint && project !== hint) continue;
         try {
-          if ((await nativeContext.forProject(project)).readAllowed) readable.add(project);
+          const access = await nativeContext.forProject(project);
+          if (access.readAllowed) {
+            readable.add(project);
+            successfulAccess.push(access);
+          }
         } catch (error) {
           if (error instanceof Error && error.message === 'native_project_access_denied') continue;
           // A hint-less listing fails closed per project: one unverifiable
@@ -81,10 +127,11 @@ export async function GET(req: NextRequest) {
           return NextResponse.json({ error: 'project access could not be verified' }, { status: 503 });
         }
       }
-      return NextResponse.json({
-        cards: cards.filter(card => readable.has(card.project.trim())),
-        projects: projects.filter(project => readable.has(project.name.trim())),
-      });
+      return boardSnapshot(
+        cards.filter(card => readable.has(card.project.trim())),
+        projects.filter(project => readable.has(project.name.trim())),
+        nativeTeamCatalog([...readable], successfulAccess),
+      );
     }
     const authenticatedIdentity = await boardHumanIdentityFromRequest(req);
     const allowedProject = authenticatedIdentity ? boardReadProject(authenticatedIdentity) : null;
@@ -92,20 +139,20 @@ export async function GET(req: NextRequest) {
       const tasksDir = tasksDirForScope('work');
       const cards = getAllCards(tasksDir).filter(card => card.project.trim() === QA_UX_PROJECT);
       const projects = listProjects(tasksDir).filter(project => project.name.trim() === QA_UX_PROJECT);
-      return NextResponse.json({ cards, projects });
+      return legacyBoardSnapshot(cards, projects);
     }
     if (!allowedProject && qaTestLoginCardReadAllowed(req, authenticatedIdentity)) {
       const tasksDir = tasksDirForScope('work');
       const allowedFixtureIds = qaUxFixtureIds();
       const cards = getAllCards(tasksDir).filter(card => allowedFixtureIds.has(card.id.toLowerCase()) && card.project.trim() === QA_UX_PROJECT);
       const projects = listProjects(tasksDir).filter(project => project.name.trim() === QA_UX_PROJECT);
-      return NextResponse.json({ cards, projects });
+      return legacyBoardSnapshot(cards, projects);
     }
-    if (!allowedProject) return NextResponse.json({ cards: [], projects: [] });
+    if (!allowedProject) return boardSnapshot([], [], unavailableTeamCatalog());
     const tasksDir = tasksDirForScope(authenticatedIdentity!.scope);
     const cards = getAllCards(tasksDir).filter(card => card.project.trim() === allowedProject);
     const projects = listProjects(tasksDir).filter(project => project.name.trim() === allowedProject);
-    return NextResponse.json({ cards, projects });
+    return legacyBoardSnapshot(cards, projects);
   } catch (e) {
     const reason = e instanceof Error ? e.message : '';
     const status = reason === 'native_identity_unconfigured' ? 503
