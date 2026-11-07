@@ -184,6 +184,14 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
         setCalendarMessage('Календарь не подключён или синхронизация ещё не подтверждена.');
         return;
       }
+      if (response.status === 409 && data?.error === 'project_calendar_not_configured') {
+        setCalendarMessage('Для проекта карточки календарь не настроен. Событие не создано.');
+        return;
+      }
+      if (response.status === 409 && data?.error === 'calendar_rebind_manual_required') {
+        setCalendarMessage('Проект или календарь изменился. Нужна ручная сверка существующего события в Keeper.');
+        return;
+      }
       setCalendarMessage('Не удалось создать событие. Попробуйте позже.');
     } catch {
       setCalendarMessage('Не удалось связаться с сервером календаря.');

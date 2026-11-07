@@ -112,7 +112,7 @@ describe('project-aware calendar routing (strict, no silent mixing)', () => {
 
   test('a credential without any mapping keeps the legacy default-calendar behavior', () => {
     expect(resolveCalendarId({ bearer: 'x', calendarId: 'cal-default' }, 'QA')).toBe('cal-default');
-    expect(resolveCalendarId({ bearer: 'x', calendarId: 'cal-default', projectCalendars: {} }, 'QA')).toBe('cal-default');
+    expect(() => resolveCalendarId({ bearer: 'x', calendarId: 'cal-default', projectCalendars: {} }, 'QA')).toThrow(ProjectCalendarNotConfiguredError);
   });
 
   test('routing never crosses credentials', () => {

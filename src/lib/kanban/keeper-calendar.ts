@@ -175,8 +175,8 @@ export class ProjectCalendarNotConfiguredError extends Error {
  */
 export function resolveCalendarId(credential: KeeperCredential, project: string): string {
   const mapping = credential.projectCalendars;
-  if (mapping && Object.keys(mapping).length > 0) {
-    const mapped = mapping[project];
+  if (mapping !== undefined) {
+    const mapped = Object.hasOwn(mapping, project) ? mapping[project] : undefined;
     if (typeof mapped !== 'string' || !mapped.trim()) throw new ProjectCalendarNotConfiguredError(project);
     return mapped;
   }
