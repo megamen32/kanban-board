@@ -5,7 +5,7 @@ import { boardHumanIdentityFromRequest } from '@/lib/auth/board-human';
 import { tasksDirForScope } from '@/lib/auth/data-scope';
 import { calendarBridgeUsername, keeperCalendarApiUrl, keeperCalendarEnabled, keeperCalendarPublicUrl } from '@/lib/kanban/keeper-config';
 import { KeeperCredentialStoreError, keeperCredentialForUser } from '@/lib/kanban/keeper-credentials';
-import { calendarSyncDecision, KeeperApiError, keeperCreateEvent, keeperDeleteEvent, keeperUpdateEvent, type CalendarSyncInput } from '@/lib/kanban/keeper-calendar';
+import { calendarSyncDecision, KeeperApiError, keeperCreateEvent, keeperDeleteEvent, keeperUpdateEvent, ProjectCalendarNotConfiguredError, resolveCalendarId, type CalendarSyncInput } from '@/lib/kanban/keeper-calendar';
 import { acquireCalendarSyncLock, keeperBindingStore, withCalendarSyncLock, type CalendarSyncRecord } from '@/lib/kanban/keeper-bindings';
 import type { KanbanCard } from '@/lib/kanban/types';
 
@@ -146,15 +146,46 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       const existing = keeperBindingStore.get(username, id);
       if (existing?.state === 'pending') return pendingResponse(existing);
 
-      const decision = calendarSyncDecision(existing?.state === 'bound' ? existing : undefined, input.input);
-      if (decision.action === 'none') {
-        return NextResponse.json({ reused: true, event: decision.binding, publicUrl: keeperCalendarPublicUrl() });
-      }
-
+      // Credentials and strict project routing are checked BEFORE the reuse
+      // fast-path: an unchanged card must never report success after its token
+      // is gone or its project was remapped.
       const resolved = await credentialFor(username);
       if ('response' in resolved) return resolved.response;
       const credential = resolved.credential;
       if (!credential) return NextResponse.json({ error: 'keeper_not_connected' }, { status: 409 });
+
+      let targetCalendarId: string;
+      try {
+        targetCalendarId = resolveCalendarId(credential, card.card.project);
+      } catch (error) {
+        if (error instanceof ProjectCalendarNotConfiguredError) {
+          return NextResponse.json({ error: 'project_calendar_not_configured', project: card.card.project }, { status: 409 });
+        }
+        throw error;
+      }
+
+      const decision = calendarSyncDecision(existing?.state === 'bound' ? existing : undefined, input.input);
+      // A bound event lives in ONE calendar under ONE project. A missing or
+      // different stored project/calendar (including legacy receipts) must
+      // never be silently reused or patched across: explicit proven delete,
+      // then the next sync creates it in the right calendar.
+      if (decision.action !== 'create') {
+        const bound = decision.binding;
+        if (bound.project !== card.card.project || bound.calendarId !== targetCalendarId) {
+          return NextResponse.json(
+            {
+              error: 'calendar_rebind_manual_required',
+              project: card.card.project,
+              ...(bound.project ? { storedProject: bound.project } : {}),
+              ...(bound.calendarId ? { storedCalendarId: bound.calendarId } : {}),
+            },
+            { status: 409 },
+          );
+        }
+      }
+      if (decision.action === 'none') {
+        return NextResponse.json({ reused: true, event: decision.binding, publicUrl: keeperCalendarPublicUrl() });
+      }
 
       // Persist the pending marker BEFORE any upstream call: a crash or unknown
       // outcome after this point refuses further creates instead of duplicating.
@@ -168,7 +199,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
       const baseUrl = keeperCalendarApiUrl()!;
       const eventInput = {
-        calendarId: credential.calendarId,
+        calendarId: decision.action === 'patch' ? decision.binding.calendarId! : targetCalendarId,
         title: input.input.title,
         startTime: input.input.startTime,
         endTime: input.input.endTime,
@@ -193,6 +224,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         startTime: input.input.startTime,
         endTime: input.input.endTime,
         titleHash: input.input.titleHash,
+        project: card.card.project,
+        calendarId: targetCalendarId,
         syncedAt: new Date().toISOString(),
       };
       keeperBindingStore.set(username, id, bound);

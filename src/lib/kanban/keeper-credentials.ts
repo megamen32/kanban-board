@@ -29,11 +29,28 @@ export class KeeperCredentialStoreError extends Error {
 
 interface CredentialsFile {
   version: 1;
-  credentials: Record<string, { bearer: string; calendarId: string }>;
+  credentials: Record<string, { bearer: string; calendarId: string; projectCalendars?: Record<string, string> }>;
 }
 
 function validSecret(value: unknown, maxLength: number): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function validProjectCalendars(value: unknown): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new KeeperCredentialStoreError('keeper credentials file has an invalid entry');
+  if (Object.keys(value).includes('__proto__') || Object.keys(value).includes('constructor')) {
+    throw new KeeperCredentialStoreError('keeper credentials file has an invalid entry');
+  }
+  // Prototype-less: hostile keys like __proto__ can never collide with Object.prototype.
+  const mapping: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const [project, calendarId] of Object.entries(value)) {
+    if (!validSecret(project, 200) || !validSecret(calendarId, 256)) {
+      throw new KeeperCredentialStoreError('keeper credentials file has an invalid entry');
+    }
+    mapping[project] = calendarId;
+  }
+  return mapping;
 }
 
 export function authRootDir(): string {
@@ -69,14 +86,19 @@ function loadCredentialsFile(): CredentialsFile | null {
   if (file.version !== 1 || !file.credentials || typeof file.credentials !== 'object' || Array.isArray(file.credentials)) {
     throw new KeeperCredentialStoreError('keeper credentials file is corrupt');
   }
-  const credentials: Record<string, { bearer: string; calendarId: string }> = {};
+  const credentials: Record<string, { bearer: string; calendarId: string; projectCalendars?: Record<string, string> }> = {};
   for (const [user, entry] of Object.entries(file.credentials)) {
     if (!validSecret(user, 64) || !entry || typeof entry !== 'object'
       || !validSecret((entry as { bearer?: unknown }).bearer, 512)
       || !validSecret((entry as { calendarId?: unknown }).calendarId, 256)) {
       throw new KeeperCredentialStoreError('keeper credentials file has an invalid entry');
     }
-    credentials[user] = { bearer: (entry as { bearer: string }).bearer, calendarId: (entry as { calendarId: string }).calendarId };
+    const projectCalendars = validProjectCalendars((entry as { projectCalendars?: unknown }).projectCalendars);
+    credentials[user] = {
+      bearer: (entry as { bearer: string }).bearer,
+      calendarId: (entry as { calendarId: string }).calendarId,
+      ...(projectCalendars ? { projectCalendars } : {}),
+    };
   }
   return { version: 1, credentials };
 }
