@@ -94,7 +94,8 @@ describe('integrator task dashboard card brief', () => {
       canAssignReviewer: false, onAssignReviewer: async () => null,
     }));
 
-    expect(html).toContain('Действие:');
+    expect(html).not.toContain('Действие:');
+    expect(html).toContain('Исполнитель:');
     expect(html).toContain('Markdown QA');
     expect(html).not.toContain('Blocker');
     expect(html).not.toContain('First item');

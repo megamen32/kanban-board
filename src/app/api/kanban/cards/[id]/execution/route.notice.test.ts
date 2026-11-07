@@ -18,6 +18,7 @@ const harness = vi.hoisted(() => ({
 vi.mock('@/lib/auth/request', () => ({
   boardIdentityFromRequest: () => harness.identity,
   identityFromRequest: () => harness.identity,
+  automationTokenValid: () => false,
   nativeProjectAccessContextFromRequest: async () => null,
 }));
 vi.mock('@/lib/auth/data-scope', () => ({ tasksDirForScope: () => harness.tasksDir }));

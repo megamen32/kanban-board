@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   nativeError: { value: undefined as unknown },
   callOwnerHerderTool: vi.fn(),
   nativeIdentity: {
+    automationTokenValid: () => false,
     boardIdentityFromRequest: () => ({ username: 'nikita', scope: 'work' }),
     identityFromRequest: () => ({ username: 'nikita', scope: 'work' }),
     nativeProjectAccessContextFromRequest: vi.fn(async (): Promise<unknown> => null),
@@ -98,6 +99,10 @@ function toolResult(tool: string, args: Record<string, unknown>) {
       ...(projectExecution ? { projectReadinessContract: args.projectReadinessContract, projectExecution } : {}),
     }, content: [] };
   }
+  if (tool === 'agent_info') return { structuredContent: { session: {
+    id: sessionId, harness: args.harness, hostId: 'roomhacker-server-100',
+    cwd: scopedProjectRoot, model: 'gpt-6-luna', status: 'idle', needsPermission: false,
+  } }, content: [] };
   if (tool === 'fleet_session_view') {
     return { structuredContent: {
       hostId: 'roomhacker-server-100', details: {

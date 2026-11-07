@@ -27,12 +27,20 @@ function tabPanels(boardSource: string): TabPanel[] {
 }
 
 const boardSource = source('./kanban-board.tsx');
-const pageSource = source('../../app/page.tsx');
+const pageSource = source('../../app/classic/page.tsx');
+const konturPageSource = source('../../app/page.tsx');
+const konturStyles = source('../kontur/kontur.css');
 
 describe('board tab panel scroll contract', () => {
   it('keeps the fixed-height page shell that makes panel scrolling mandatory', () => {
     expect(pageSource).toContain('overflow-hidden');
-    expect(pageSource).toContain('h-screen');
+    expect(pageSource).toContain('h-dvh');
+  });
+
+  it('allows the new Kontur page to scroll independently of the fixed Classic view', () => {
+    expect(konturPageSource).toContain('KonturBoard');
+    expect(konturStyles).toContain('min-height: 100dvh');
+    expect(konturStyles).toContain('.k-main');
   });
 
   it('gives every tab panel its own vertical scroll container', () => {

@@ -8,8 +8,7 @@ describe('CardBriefPanel', () => {
       id: 'synthetic-card', title: 'Сверить тестовый расчёт', description: '', assignees: ['Тестовый исполнитель'],
       assignee: undefined, dueAt: undefined, nextAction: null, column: 'todo',
     }} />);
-    expect(html).toContain('Действие:');
-    expect(html).toContain('Сверить тестовый расчёт');
+    expect(html).not.toContain('Действие:');
     expect(html).toContain('Исполнитель:');
     expect(html).toContain('Тестовый исполнитель');
     expect(html).toContain('Срок:');
@@ -32,6 +31,6 @@ describe('CardBriefPanel', () => {
       assignees: [], assignee: undefined, dueAt: undefined, nextAction: null, column: 'todo',
     }} />);
     expect(html).not.toContain('synthetic full description');
-    expect(html).toContain('Действие:');
+    expect(html).not.toContain('Действие:');
   });
 });
