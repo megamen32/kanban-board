@@ -177,3 +177,35 @@ A failed or unavailable identity check fails closed. Registration metadata is
 private and uncached. Use the same stable external key when reconciling an
 uncertain result; never manufacture an Exmanager signed scope to register an
 independent project.
+
+
+## Observed owner team catalog
+
+The verified native owner view may read a private, operator-imported Exmanager
+directory from `.metadata/exmanager-team-catalog.json` in the existing work
+task mount. Both the signed native identity and the configured Board owner
+session must verify before the file is read. Other native users, legacy
+sessions and unauthenticated requests never receive this owner directory.
+
+The strict, bounded snapshot contains only a source app ID, source revision,
+original UTC observation time, exact team IDs/names and explicit project/team
+links. Only links to projects already authorized in the same owner snapshot
+are returned. Unknown relations are never inferred from names. Known teams
+without a confirmed visible project remain visible with unknown relations.
+
+The response labels this projection `coverage: owner-catalog` and each link
+`source: exmanager-snapshot`; provenance retains the original observation
+time and source revision. The UI shows that automatic refresh is not connected.
+Refreshing the board rereads the imported file; it does not claim a new
+upstream observation. A valid imported directory avoids repeated calls to a
+known-unavailable upstream resolver. Missing or invalid files fall back to
+the existing metadata resolver without removing already authorized tasks.
+
+This display cache does not grant task access, memberships, reviewer roles
+or write permissions. It does not contain member IDs, logins, credentials,
+task text or permission claims. No HTTP import endpoint is exposed.
+
+Unfinished integration goal: replace the operator import with a supported,
+current-user Exmanager metadata channel after the installed Airlock SDK
+provides an admitted app-to-app invocation. Keep the dated snapshot notice
+until an authenticated end-to-end refresh is implemented and verified.

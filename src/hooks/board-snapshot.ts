@@ -25,13 +25,29 @@ function invalidSnapshot(): never {
   throw new BoardReadError('Сервер не вернул данные доски. Возможно, требуется повторный вход.', 502);
 }
 
+function utcTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.toISOString() === value;
+}
+
 /** Validate relationships against this snapshot, never against a global client cache. */
 function readTeamCatalog(value: unknown, projectNames: ReadonlySet<string>): BoardTeamCatalog {
   if (!isRecord(value) || typeof value.status !== 'string' || !['ready', 'partial', 'unavailable'].includes(value.status)
-    || value.coverage !== 'visible-projects'
+    || (value.coverage !== 'visible-projects' && value.coverage !== 'owner-catalog')
     || !Array.isArray(value.teams) || value.teams.length > 4096
     || !Array.isArray(value.projectTeams) || value.projectTeams.length > 16384
     || !Array.isArray(value.unknownProjectNames) || value.unknownProjectNames.length > 16384) invalidSnapshot();
+
+  const ownerCatalog = value.coverage === 'owner-catalog';
+  let provenance: BoardTeamCatalog['provenance'];
+  if (ownerCatalog) {
+    const source = value.provenance;
+    if (!isRecord(source) || source.mode !== 'snapshot' || source.source !== 'exmanager'
+      || !utcTimestamp(source.observedAt) || typeof source.sourceRevision !== 'string'
+      || !/^[a-f0-9]{40}$/.test(source.sourceRevision) || value.status === 'unavailable') invalidSnapshot();
+    provenance = {mode: 'snapshot', source: 'exmanager', observedAt: source.observedAt, sourceRevision: source.sourceRevision};
+  } else if (value.provenance !== undefined) invalidSnapshot();
 
   const teamIds = new Set<string>();
   const teams = value.teams.map(team => {
@@ -44,29 +60,40 @@ function readTeamCatalog(value: unknown, projectNames: ReadonlySet<string>): Boa
   const links = new Set<string>();
   const projectTeams = value.projectTeams.map((link): BoardTeamCatalog['projectTeams'][number] => {
     if (!isRecord(link) || !label(link.project) || !projectNames.has(link.project)
-      || !label(link.teamId, 1024) || !teamIds.has(link.teamId)
-      || (link.source !== 'native-access' && link.source !== 'relay-scope')) invalidSnapshot();
+      || !label(link.teamId, 1024) || !teamIds.has(link.teamId)) invalidSnapshot();
+    let source: BoardTeamCatalog['projectTeams'][number]['source'];
+    if (ownerCatalog) {
+      if (link.source !== 'exmanager-snapshot') invalidSnapshot();
+      source = 'exmanager-snapshot';
+    } else {
+      if (link.source !== 'native-access' && link.source !== 'relay-scope') invalidSnapshot();
+      source = link.source;
+    }
     const key = JSON.stringify([link.project, link.teamId]);
     if (links.has(key)) invalidSnapshot();
     links.add(key);
     linkedTeams.add(link.teamId);
     linkedProjects.add(link.project);
-    return {project: link.project, teamId: link.teamId, source: link.source};
+    return {project: link.project, teamId: link.teamId, source};
   });
   const unknown = new Set<string>();
   for (const name of value.unknownProjectNames) {
     if (!label(name) || !projectNames.has(name) || linkedProjects.has(name) || unknown.has(name)) invalidSnapshot();
     unknown.add(name);
   }
-  if (teams.some(team => !linkedTeams.has(team.id))
-    || [...projectNames].some(name => !linkedProjects.has(name) && !unknown.has(name))
+  const orphanTeams = teams.some(team => !linkedTeams.has(team.id));
+  if ([...projectNames].some(name => !linkedProjects.has(name) && !unknown.has(name))) invalidSnapshot();
+  if (ownerCatalog) {
+    if (value.status !== (unknown.size > 0 || orphanTeams ? 'partial' : 'ready')) invalidSnapshot();
+  } else if (orphanTeams
     || (value.status === 'ready' && unknown.size > 0)
     || (value.status === 'partial' && (!linkedProjects.size || !unknown.size))
     || (value.status === 'unavailable' && linkedProjects.size > 0)) invalidSnapshot();
 
   return {
     status: value.status as BoardTeamCatalog['status'],
-    coverage: 'visible-projects',
+    coverage: ownerCatalog ? 'owner-catalog' : 'visible-projects',
+    ...(provenance ? {provenance} : {}),
     teams,
     projectTeams,
     unknownProjectNames: [...unknown],

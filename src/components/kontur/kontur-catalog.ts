@@ -14,12 +14,20 @@ export interface KonturProject {
   openTaskCount: number;
   teams: Team[];
   teamUnknown: boolean;
+  teamSnapshot?: BoardTeamCatalog['provenance'];
 }
 
 export interface KonturTeam extends Team {
   projects: KonturProject[];
-  taskCount: number;
-  openTaskCount: number;
+  projectAssociationUnknown: boolean;
+  taskCount: number | null;
+  openTaskCount: number | null;
+}
+
+function snapshotProvenance(catalog: BoardTeamCatalog | undefined) {
+  const provenance = catalog?.provenance;
+  return catalog?.coverage === 'owner-catalog' && catalog.status !== 'unavailable'
+    && provenance?.mode === 'snapshot' && provenance.source === 'exmanager' ? provenance : undefined;
 }
 
 function projectName(card: Pick<KanbanCard, 'project'>) {
@@ -40,10 +48,12 @@ export function buildProjectCatalog(
   teamCatalog: BoardTeamCatalog,
 ): KonturProject[] {
   const projects = new Map<string, KonturProject>();
+  const provenance = snapshotProvenance(teamCatalog);
   const ensure = (name: string) => {
     let project = projects.get(name);
     if (!project) {
       project = { name, registered: false, taskCount: 0, openTaskCount: 0, teams: [], teamUnknown: true };
+      if (provenance) project.teamSnapshot = provenance;
       projects.set(name, project);
     }
     return project;
@@ -78,18 +88,29 @@ export function buildProjectCatalog(
   return [...projects.values()].sort((a, b) => orderNames(a.name, b.name));
 }
 
-export function buildTeamCatalog(projects: readonly KonturProject[]): KonturTeam[] {
+export function buildTeamCatalog(projects: readonly KonturProject[], catalog?: BoardTeamCatalog): KonturTeam[] {
   const teams = new Map<string, KonturTeam>();
+  if (snapshotProvenance(catalog) && catalog) {
+    const linkedTeams = new Set(catalog.projectTeams.map(link => link.teamId));
+    // An observed owner roster can include teams whose project associations are
+    // unknown. A project filter must not turn other, known links into unknown ones.
+    for (const entry of catalog.teams) {
+      if (!linkedTeams.has(entry.id)) teams.set(entry.id, {
+        ...entry, projects: [], projectAssociationUnknown: true, taskCount: null, openTaskCount: null,
+      });
+    }
+  }
   for (const project of projects) {
     for (const entry of project.teams) {
       let team = teams.get(entry.id);
       if (!team) {
-        team = { ...entry, projects: [], taskCount: 0, openTaskCount: 0 };
+        team = { ...entry, projects: [], projectAssociationUnknown: false, taskCount: 0, openTaskCount: 0 };
         teams.set(entry.id, team);
       }
+      team.projectAssociationUnknown = false;
       team.projects.push(project);
-      team.taskCount += project.taskCount;
-      team.openTaskCount += project.openTaskCount;
+      team.taskCount = (team.taskCount ?? 0) + project.taskCount;
+      team.openTaskCount = (team.openTaskCount ?? 0) + project.openTaskCount;
     }
   }
   return [...teams.values()].sort((a, b) => orderNames(a.name, b.name) || a.id.localeCompare(b.id));
@@ -103,7 +124,10 @@ export function projectMatchesTeam(project: KonturProject, team: string): boolea
 
 /** Preserve the selected team in the URL while a failed metadata read cannot hide tasks. */
 export function resolveTeamFilter(team: string, catalog: BoardTeamCatalog): string {
-  return catalog.status === 'unavailable' ? 'all' : team;
+  if (catalog.status === 'unavailable') return 'all';
+  if (snapshotProvenance(catalog) && catalog.teams.some(entry => entry.id === team)
+    && !catalog.projectTeams.some(link => link.teamId === team)) return 'all';
+  return team;
 }
 
 export function filterCardsByTeam(
