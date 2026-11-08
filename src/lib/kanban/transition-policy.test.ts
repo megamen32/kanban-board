@@ -416,3 +416,35 @@ describe('kanban transition policy', () => {
     });
   });
 });
+
+describe('board owner archive authority', () => {
+  const card: KanbanCard = { ...baseCard, owner: 'qa_exmanager_a', column: 'review',
+    needsReview: true, requiresApprovalFrom: ['qa_reviewer'],
+    completionEvidence: [{ type: 'existing-result' }] };
+  test.each(['human-ui', 'mcp'] as const)('archives delegated QA with verified %s board-owner context', origin => {
+    const context = { origin, actor: origin === 'human-ui' ? 'nikita' : 'mcp',
+      ...(origin === 'mcp' ? { ownerAuthorization: { actor: 'nikita',
+        evidence: { type: 'signed_owner_archive' } } } : {}) };
+    const result = validateTransition(card, { column: 'archived' }, context);
+    expect(result.kind).toBe('accepted');
+    if (result.kind !== 'accepted') return;
+    expect(Object.keys(result.patch).sort()).toEqual(['approvalEvidence', 'column']);
+    const archived: KanbanCard = { ...card, column: 'archived', approvalEvidence: result.patch.approvalEvidence };
+    expect(archived.owner).toBe('qa_exmanager_a');
+    expect(archived.needsReview).toBe(true);
+    expect(archived.completionEvidence).toEqual(card.completionEvidence);
+    expect(validateTransition(archived, { column: 'review' }, context)).toMatchObject({
+      kind: 'accepted', patch: { column: 'review' } });
+    expect(validateTransition(archived, { column: 'done' }, context)).toMatchObject({ kind: 'rejected' });
+    expect(validateTransition(card, { column: 'archived', needsReview: false }, context))
+      .toMatchObject({ kind: 'rejected' });
+  });
+  test('does not grant archive to task owners, automation or unconfirmed MCP', () => {
+    for (const context of [
+      { origin: 'human-ui' as const, actor: 'qa_exmanager_a' },
+      { origin: 'mcp' as const, actor: 'nikita' },
+      { origin: 'automation' as const, actor: 'nikita' },
+    ]) expect(validateTransition(card, { column: 'archived' }, context))
+      .toMatchObject({ kind: 'rejected', reason: 'archive_requires_exact_owner_decision' });
+  });
+});

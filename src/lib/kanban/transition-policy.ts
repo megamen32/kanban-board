@@ -83,9 +83,10 @@ export function validateTransition(
   const archiveChange = requested.column !== undefined && requested.column !== before.column
     && (requested.column === 'archived' || before.column === 'archived');
   if (archiveChange) {
-    const owner = before.owner === NIKITA_ACTOR
-      && ((context.origin === 'human-ui' && context.actor === NIKITA_ACTOR)
-        || (context.origin === 'mcp' && hasOwnerAuthorization(context)));
+    // Board ownership is authenticated in the server context, not the card's
+    // task-owner field. QA and delegated cards retain their original owners.
+    const owner = (context.origin === 'human-ui' && context.actor === NIKITA_ACTOR)
+      || (context.origin === 'mcp' && hasOwnerAuthorization(context));
     if (!owner || Object.keys(requested).length !== 1) {
       return { kind: 'rejected', reason: 'archive_requires_exact_owner_decision' };
     }
