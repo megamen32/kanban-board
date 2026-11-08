@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authStore, SESSION_COOKIE } from '@/lib/auth/request';
+import { publicOrigin } from '@/lib/auth/origin';
 import { airlockRelayConfig } from '../../../lib/auth/airlock-relay';
 
-function safeReturnTo(request: NextRequest, value: string | null): string {
-  if (!value) return '/';
+function safeReturnTo(request: NextRequest, value: string | null): URL {
+  const base = new URL('/', publicOrigin(request));
   try {
-    const target = new URL(value, request.url);
-    return target.origin === new URL(request.url).origin ? `${target.pathname}${target.search}${target.hash}` : '/';
-  } catch { return '/'; }
+    const target = new URL(value || '/', base);
+    if (target.origin !== base.origin) return base;
+    target.username = '';
+    target.password = '';
+    return target;
+  } catch { return base; }
 }
 
 function escapeHtml(value: string): string {
@@ -15,7 +19,8 @@ function escapeHtml(value: string): string {
 }
 
 export async function GET(request: NextRequest) {
-  const returnTo = safeReturnTo(request, request.nextUrl.searchParams.get('return_to'));
+  const target = safeReturnTo(request, request.nextUrl.searchParams.get('return_to'));
+  const returnTo = `${target.pathname}${target.search}${target.hash}`;
   const relayLink = airlockRelayConfig().enabled
     ? `<p><a href="/api/auth/airlock/login?next=${encodeURIComponent(returnTo)}">Войти через Airlock</a></p>`
     : '';
@@ -27,7 +32,7 @@ export async function POST(request: NextRequest) {
   const form = await request.formData();
   const session = authStore().authenticate(String(form.get('username') || '').trim(), String(form.get('password') || ''), String(form.get('totp') || '').trim());
   if (!session) return new NextResponse('Неверные учётные данные или код 2FA', { status: 401 });
-  const response = NextResponse.redirect(new URL(safeReturnTo(request, String(form.get('return_to') || '/')), request.url));
+  const response = NextResponse.redirect(safeReturnTo(request, String(form.get('return_to') || '/')), 303);
   response.cookies.set(SESSION_COOKIE, session, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 8 * 60 * 60 });
   return response;
 }
