@@ -65,3 +65,40 @@ It is not the active shared work path while `KANBAN_SCOPE_ROOT=/app/data/scopes`
 Do not remove legacy mounts without auditing their callers. See `AUTH.md` for
 authentication and the current scope behavior, and `CODE_DATA_SPLIT.md` for
 code/data ownership.
+
+## Prepared fenced Compose entrypoint (not yet live-accepted)
+
+`scripts/release-todo.py` composes the existing three launch files with a temporary
+image-only override. It never builds or pulls and requires immutable local image
+IDs, source revision labels, and a candidate admitted by Herder's existing
+`ReleaseGate.candidate_descends_from` (published main and ancestry).
+
+Before invoking it, independently verify the running owner-fleet authority's
+hostname, effective HOME/ledger override, canonical existing ledger and installed
+release gate directory. Acquire the existing project lease using the documented
+Herder operator CLI, for project `/home/roomhacker/excode/.git` and deployment target
+`{"fleetDir":"/home/roomhacker/services/kanban-board","unit":"kanban-board-kanban-1"}`.
+Keep the returned proof private (0600), renew during preparation, and release it
+in the operator's finally path. Do not create a ledger or use the separate root
+MCP child's authority. The script does not acquire, renew or release leases.
+
+Arguments: `--proof`, `--ledger`, `--release-gate-dir`, `--expected-image`,
+`--expected-revision`, `--candidate-image`, `--candidate-revision`. All are required.
+Build the candidate separately from reviewed source before entering this short
+release window; preserve the previous image for explicitly authorized rollback.
+
+The existing Herder gate holds project and target OS locks for the entire change.
+Immediately before Compose it checks token/fence/expiry, compares the current
+container image and source label to the operator's expected revision, and checks
+the fence again. A cooperative release must use this same authority and target.
+Direct Docker writers cannot be made transactional by an advisory release lock;
+resolve other active writers before execution.
+
+After Compose, verify exact installed image/revision and loopback HTTP health.
+A successful receipt explicitly leaves user-path acceptance pending. Perform
+separate authenticated UI checks before calling the feature complete. Any failure
+or uncertain command stops without retry or automatic rollback; inspect live
+state first. This preparation does not override pending publication permissions
+or authorize live deployment by itself.
+
+Unit checks: `python3 -m unittest discover -s scripts -p test_release_todo.py`.
