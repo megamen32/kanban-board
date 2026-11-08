@@ -79,7 +79,7 @@ describe('kanban.change MCP transition policy', () => {
     let cursor: string | undefined;
     let omitted = false;
     for (let page = 0; page < 10; page++) {
-      const response = await client.callTool({ name: 'kanban.list', arguments: { limit: 2, ...(cursor ? { cursor } : {}) } });
+      const response = await client.callTool({ name: 'kanban.list', arguments: { paged: true, limit: 2, ...(cursor ? { cursor } : {}) } });
       const data = JSON.parse(textFromResult(response));
       expect(Buffer.byteLength(textFromResult(response))).toBeLessThan(18_000);
       expect(data.total).toBe(7);

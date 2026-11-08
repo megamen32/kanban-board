@@ -275,20 +275,21 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
 
   server.registerTool('kanban.list', {
     title: 'List Kanban cards',
-    description: 'List one bounded page from the authorized board. Continue with nextCursor and identical filters until complete. Large cards may omit details; read them with kanban.read before editing. A page is not a snapshot across concurrent writes.',
+    description: 'Use paged=true for one bounded page from the authorized board. Legacy calls retain their existing response. Continue with nextCursor and identical filters until complete. Large cards may omit details; read them with kanban.read before editing. A page is not a snapshot across concurrent writes.',
     inputSchema: {
       project: z.string().optional(),
       column: z.enum(COLUMNS).optional(),
       tag: z.string().optional(),
       dueWithinHours: z.number().optional(),
       limit: z.number().int().min(1).max(1000).optional(),
+      paged: z.boolean().optional(),
       cursor: z.string().min(1).max(256).optional(),
       summary: z.boolean().optional(),
       exmanagerScope: z.object({ payload: z.string().min(1).max(24_000), signature: z.string().min(1).max(128) }).strict().optional(),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async ({ project, column, tag, dueWithinHours, limit, cursor, summary, exmanagerScope }) => {
-    const args = Object.fromEntries(Object.entries({ project, column, tag, dueWithinHours, limit, cursor, summary }).filter(([, value]) => value !== undefined));
+  }, async ({ project, column, tag, dueWithinHours, limit, paged, cursor, summary, exmanagerScope }) => {
+    const args = Object.fromEntries(Object.entries({ project, column, tag, dueWithinHours, limit, paged, cursor, summary }).filter(([, value]) => value !== undefined));
     const callerScope = verifyReadScope(options, exmanagerScope, 'kanban.list', args);
     if (callerScope && project && !callerScope.owner && !callerScope.projects.includes(project)) {
       throw new Error('Todo project is outside the caller scope');
@@ -297,6 +298,10 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     const authorizedCards = callerScope && !callerScope.owner
       ? allCards.filter(card => callerScope.projects.includes(card.project))
       : allCards;
+    if (!paged && !cursor && summary === undefined) {
+      const cards = filterCards(authorizedCards, { project, column, tag, dueWithinHours, limit });
+      return textResult({ cards, count: cards.length, scope });
+    }
     const filtered = filterCards(authorizedCards, { project, column, tag, dueWithinHours })
       .sort((a, b) => a.id.localeCompare(b.id, 'en'));
     const remaining = cursor ? filtered.filter(card => card.id.localeCompare(cursor, 'en') > 0) : filtered;
