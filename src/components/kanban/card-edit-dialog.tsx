@@ -31,6 +31,7 @@ import { CardHierarchyPanel } from './card-hierarchy-panel';
 import { getEligibleParentCards } from './card-hierarchy';
 import { canCompleteDirectly, canTakeOwnReview } from './card-completion';
 import { ResultVerification } from './result-verification';
+import { OwnerCloseButton } from './owner-close-button';
 import { IntegratorTaskDashboard } from './integrator-task-dashboard';
 import { isTaskActor, taskPersonLabel } from '@/lib/kanban/task-membership';
 import { usesLegacyNoticeQuestion, shouldRefreshExecutionCard } from './card-question-visibility';
@@ -440,6 +441,9 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             {card.blockerReason && <p className="text-sm"><span className="font-medium">Что мешает:</span> {card.blockerReason}</p>}
             {card.column === 'blocked' && <p className="text-sm text-amber-700 dark:text-amber-300">Укажи причину блокировки ниже, чтобы было ясно, что нужно для продолжения.</p>}
             <CardExecutionOverview card={card} refreshing={refreshing} onRefresh={onRefresh ? () => { void refreshExecution(); } : undefined} />
+            <OwnerCloseButton key={card.id} card={card} username={username} disabled={saving} onSaved={saved => {
+              onSelectCard?.(saved); void onRefresh?.(); onOpenChange(false);
+            }} />
             <div ref={verificationRef}>{verificationOpen && <ResultVerification card={card} onCancel={() => setVerificationOpen(false)} onSaved={saved => {
               onSelectCard?.(saved); void onRefresh?.(); onOpenChange(false);
             }} />}</div>

@@ -17,6 +17,7 @@ import { CardEditDialog } from '@/components/kanban/card-edit-dialog';
 import { ConflictDialog } from '@/components/kanban/conflict-dialog';
 import { BoardDiagnosticsPanel } from '@/components/kanban/board-diagnostics-panel';
 import { DEFAULT_COLUMNS, type KanbanCard, type KanbanCardUpdates, type KanbanColumn, type RoleDefinition } from '@/lib/kanban/types';
+import { isOwnerClosedWithoutVerification } from '@/lib/kanban/owner-close';
 import type { HumanReviewAction } from '@/lib/kanban/transition-policy';
 import { BoardMutationError, boardMutationRequest, mutationErrorMessage, readMutationResponse } from '@/lib/kanban/mutation-response';
 import { recordDiagnostic } from '@/lib/kanban/board-diagnostics';
@@ -37,7 +38,7 @@ type ErrorFilter = 'all' | 'ACL' | '429' | 'ENAMETOOLONG' | 'other';
 const NAV = [
   { id: 'overview', label: 'Сводка', icon: LayoutDashboard, description: 'Что требует внимания и откуда продолжить.' },
   { id: 'catalog', label: 'Проекты и команды', icon: FolderKanban, description: 'Доступные проекты, команды и подтверждённые связи между ними.' },
-  { id: 'kanban', label: 'Kanban', icon: Columns3, description: 'Задачи по состояниям. Завершение после проверки результата.' },
+  { id: 'kanban', label: 'Kanban', icon: Columns3, description: 'Задачи по состояниям. Владелец может закрыть задачу без проверки.' },
   { id: 'list', label: 'Список задач', icon: ListChecks, description: 'Вся работа, исполнители и сроки в одном списке.' },
   { id: 'calendar', label: 'Календарь', icon: CalendarDays, description: 'Сроки задач и связь с календарём Keeper.' },
   { id: 'sessions', label: 'Сессии агентов', icon: Radio, description: 'Сохранённые запуски и продолжения, связанные с задачами.' },
@@ -118,7 +119,7 @@ function errorKind(card: KanbanCard): ErrorFilter {
   if (/\bACL\b|\bEACCES\b|permission denied/i.test(blocker)) return 'ACL';
   return 'other';
 }
-function hasAcceptedReview(card: KanbanCard) { return card.column === 'done' && card.reviewHistory?.at(-1)?.decision === 'accepted'; }
+function hasAcceptedReview(card: KanbanCard) { return card.column === 'done' && !isOwnerClosedWithoutVerification(card) && card.reviewHistory?.at(-1)?.decision === 'accepted'; }
 function attentionOrder(a: KanbanCard, b: KanbanCard) {
   return Number(b.column === 'review' || b.needsReview) - Number(a.column === 'review' || a.needsReview)
     || Number(hasBlocker(b)) - Number(hasBlocker(a))
@@ -629,7 +630,7 @@ export function KonturBoard() {
         {ready && screen === 'list' && <section><div className="k-section-toolbar"><h2 className="k-section-title">Задачи<span className="k-count">{listCards.length}</span></h2><label className="k-select k-sort"><ArrowDownUp size={14} /><select value={listSort} aria-label="Сортировка списка" onChange={event => setListSort(event.target.value as typeof listSort)}><option value="priority">По вниманию и приоритету</option><option value="updated">По последнему изменению</option><option value="due">По сроку</option></select><ChevronDown size={12} /></label></div><div className="k-panel k-task-table-wrap">{listCards.length ? <table className="k-task-table"><thead><tr><th aria-label="Проверка" /><th>Задача</th><th>Состояние</th><th>Владелец / машина</th><th>Приоритет</th><th>Срок · МСК</th><th aria-label="Контекст" /></tr></thead><tbody>{listCards.slice(0, listLimit).map(card => {
           const facts = taskFacts(card); const expanded = expandedRows.has(card.id);
           return <Fragment key={card.id}><tr><td><button type="button" className={`k-review-open${hasAcceptedReview(card) ? ' is-verified' : ''}`} aria-label={`Открыть результат и проверку: ${card.title}`} title={hasAcceptedReview(card) ? 'Сохранено решение о приёмке' : 'Открыть результат и проверку'} onClick={() => openCard(card)}>{hasAcceptedReview(card) ? <CheckCheck size={17} /> : card.column === 'done' ? <Check size={17} /> : <Circle size={17} />}</button></td><td><button type="button" className="k-table-title" onClick={() => openCard(card)}><small><ProjectMark project={facts.project} small />{facts.project}</small><strong>{card.title}</strong><span>{facts.nextStep}</span></button></td><td><StatusBadge status={card.column} /></td><td><span className="k-table-person">{facts.owner}</span><small className="k-table-machine"><Server size={11} />{facts.machine}</small></td><td><PriorityBadge priority={card.priority} /></td><td className="k-table-date">{card.dueAt ? formatStamp(card.dueAt) : UNKNOWN}</td><td><button type="button" className="k-icon-button" aria-expanded={expanded} aria-label={`${expanded ? 'Свернуть' : 'Показать'} контекст: ${card.title}`} onClick={() => toggleRow(card.id)}><ChevronDown size={15} className={expanded ? 'k-rotate' : ''} /></button></td></tr>{expanded && <tr className="k-table-detail"><td colSpan={7}><CardFacts card={card} projectInfo={projectsByName.get(facts.project)} onCopy={copy} /></td></tr>}</Fragment>;
-        })}</tbody></table> : <Empty title="Задачи не найдены" clear={hasFilters ? clearFilters : undefined}>Измени фильтры или создай новую задачу.</Empty>}{listCards.length > listLimit && <button type="button" className="k-load-more" onClick={() => setListLimit(value => value + 60)}>Показать ещё · осталось {listCards.length - listLimit}</button>}</div><p className="k-section-note"><ShieldCheck size={14} />Кнопка проверки открывает задачу. Закрытие требует результата, доказательства и подтверждения человека.</p></section>}
+        })}</tbody></table> : <Empty title="Задачи не найдены" clear={hasFilters ? clearFilters : undefined}>Измени фильтры или создай новую задачу.</Empty>}{listCards.length > listLimit && <button type="button" className="k-load-more" onClick={() => setListLimit(value => value + 60)}>Показать ещё · осталось {listCards.length - listLimit}</button>}</div><p className="k-section-note"><ShieldCheck size={14} />Владелец может закрыть карточку без проверки. Доказательства и приёмка работы AI сохраняются отдельно.</p></section>}
 
         {ready && screen === 'calendar' && <KonturCalendar cards={filteredCards} onOpen={openCard} />}
 
