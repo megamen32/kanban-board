@@ -11,8 +11,8 @@ describe('CardBriefPanel', () => {
     expect(html).not.toContain('Действие:');
     expect(html).toContain('Исполнитель:');
     expect(html).toContain('Тестовый исполнитель');
-    expect(html).toContain('Срок:');
-    expect(html).toContain('Не указан');
+    expect(html).not.toContain('Срок:');
+    expect(html).not.toContain('Не указан');
     expect(html).not.toContain('Следующий шаг:');
   });
 

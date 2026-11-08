@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { KanbanCard } from '@/lib/kanban/types';
 import { taskPersonLabel } from '../../lib/kanban/task-membership';
 import {
   CARD_BRIEF_MIN_DESCRIPTION_RUNES,
@@ -19,9 +18,10 @@ interface Props {
   card: CardBriefSource;
   compact?: boolean;
   autoSummarize?: boolean;
+  summaryOnly?: boolean;
 }
 
-export function CardBriefPanel({ card, compact = false, autoSummarize = false }: Props) {
+export function CardBriefPanel({ card, compact = false, autoSummarize = false, summaryOnly = false }: Props) {
   const assigneesKey = JSON.stringify(card.assignees);
   const source = useMemo<CardBriefSource>(() => ({
     id: card.id,
@@ -74,18 +74,22 @@ export function CardBriefPanel({ card, compact = false, autoSummarize = false }:
   const summaryFailure = projectionState?.sourceKey === sourceKey ? projectionState.failure : null;
   const summaryLoading = projectionState?.sourceKey === sourceKey && projectionState.loading;
 
+  const hasExecutor = card.assignees.some(person => person.trim()) || !!card.assignee?.trim();
+  const hasDeadline = !!card.dueAt && Number.isFinite(new Date(card.dueAt).getTime());
+  if (!currentProjection && !summaryLoading && !summaryFailure && (summaryOnly || (!hasExecutor && !hasDeadline && !facts.nextStep))) return null;
+
   return (
     <section aria-label="Краткая суть задачи" className={compact ? 'mb-2 space-y-1 text-xs' : 'space-y-3 rounded-md border bg-muted/20 p-3'}>
       {currentProjection && <p className="text-sm leading-snug"><span className="font-medium">ИИ-сводка: </span>{currentProjection.summary}</p>}
       {summaryLoading && <p role="status" className="text-xs text-muted-foreground">Готовлю ИИ-сводку…</p>}
       {summaryFailure === 'unavailable' && <p role="status" className="text-xs text-muted-foreground">ИИ-сводка сейчас недоступна; поля карточки и полный исходник доступны ниже.</p>}
       {summaryFailure === 'oversize' && <p role="status" className="text-xs text-muted-foreground">Описание слишком длинное для автоматической сводки; полный исходник доступен ниже.</p>}
-      <dl className={compact ? 'space-y-0.5 text-muted-foreground' : 'grid gap-2 text-sm sm:grid-cols-2'}>
+      {!summaryOnly && <dl className={compact ? 'space-y-0.5 text-muted-foreground' : 'grid gap-2 text-sm sm:grid-cols-2'}>
         {facts.action.trim() !== card.title.trim() && <div><dt className="inline font-medium text-foreground">Действие: </dt><dd className="inline">{facts.action}</dd></div>}
-        <div><dt className="inline font-medium text-foreground">Исполнитель: </dt><dd className="inline">{taskPersonLabel(facts.executor)}</dd></div>
-        <div><dt className="inline font-medium text-foreground">Срок: </dt><dd className="inline">{facts.deadline}</dd></div>
+        {hasExecutor && <div><dt className="inline font-medium text-foreground">Исполнитель: </dt><dd className="inline">{taskPersonLabel(facts.executor)}</dd></div>}
+        {hasDeadline && <div><dt className="inline font-medium text-foreground">Срок: </dt><dd className="inline">{facts.deadline}</dd></div>}
         {facts.nextStep && <div><dt className="inline font-medium text-foreground">Следующий шаг: </dt><dd className="inline">{facts.nextStep}</dd></div>}
-      </dl>
+      </dl>}
     </section>
   );
 }

@@ -95,7 +95,7 @@ describe('integrator task dashboard card brief', () => {
     }));
 
     expect(html).not.toContain('Действие:');
-    expect(html).toContain('Исполнитель:');
+    expect(html).not.toContain('Исполнитель:');
     expect(html).toContain('Markdown QA');
     expect(html).not.toContain('Blocker');
     expect(html).not.toContain('First item');

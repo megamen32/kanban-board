@@ -24,6 +24,7 @@ import { ReviewActionGate, reviewActionAccess } from './review-action-gate';
 import { CardExecutionOverview } from './card-execution-overview';
 import { MarkdownText } from './markdown-text';
 import { CardBriefPanel } from './card-brief-panel';
+import { CARD_BRIEF_MIN_DESCRIPTION_RUNES } from './card-brief';
 import { CardCalendarSection, type CalendarBridgeStatus } from './card-calendar-section';
 import { TaskReferenceLinks } from './task-reference-links';
 import { hasCardHistory } from './card-history';
@@ -32,6 +33,7 @@ import { getEligibleParentCards } from './card-hierarchy';
 import { canCompleteDirectly, canTakeOwnReview } from './card-completion';
 import { ResultVerification } from './result-verification';
 import { OwnerCloseButton } from './owner-close-button';
+import { canOwnerClose } from '@/lib/kanban/owner-close';
 import { IntegratorTaskDashboard } from './integrator-task-dashboard';
 import { isTaskActor, taskPersonLabel } from '@/lib/kanban/task-membership';
 import { usesLegacyNoticeQuestion, shouldRefreshExecutionCard } from './card-question-visibility';
@@ -102,6 +104,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
   const [editingDescription, setEditingDescription] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
   const [nextAction, setNextAction] = useState(card.nextAction ?? '');
   const [blockerReason, setBlockerReason] = useState(card.blockerReason ?? '');
   const [column, setColumn] = useState(card.column);
@@ -131,6 +134,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     setTitle(card.title);
     setDescription(card.description);
     setEditingDescription(false);
+    setShowSummary(false);
     setNextAction(card.nextAction ?? '');
     setBlockerReason(card.blockerReason ?? '');
     setColumn(card.column);
@@ -355,6 +359,10 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   const hasLegacyNoticeQuestion = usesLegacyNoticeQuestion(card);
   const catalogLink = card.catalogLink;
   const reviewAccess = reviewActionAccess(card, username);
+  const showLifecycle = !!executorAttempt || !!card.resultHistory?.length || hasCardHistory(card)
+    || canOwnerClose(card, username) || verificationOpen || !!card.pendingQuestion
+    || (requireReviewBeforeDone && !!onRefresh) || (canTakeOwnReview(card, username) && !!onUpdate)
+    || reviewAccess !== 'not-awaiting-review';
   const refreshExecution = async () => {
     if (!onRefresh || refreshing) return;
     setRefreshing(true);
@@ -364,16 +372,50 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   };
   const parentChoices = getEligibleParentCards(card, relatedCards);
   const currentParentIsHidden = !!planning.parent && !parentChoices.some(item => item.id === planning.parent);
+  const displayedAssignees = splitPeople(assignees);
+  if (!displayedAssignees.length && assignees === baseline.assignees.join(', ') && baseline.assignee?.trim()) {
+    displayedAssignees.push(baseline.assignee.trim());
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="fixed inset-0 left-0 top-0 flex h-dvh w-screen max-w-none min-w-0 translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
-        <DialogHeader className="shrink-0 border-b px-4 py-3 pr-14 text-left sm:px-6">
-          <DialogTitle>Редактировать задачу</DialogTitle>
+        <DialogHeader className="max-h-[30dvh] shrink-0 overflow-y-auto border-b px-4 py-3 pr-14 text-left sm:px-6">
+          <DialogTitle className="break-words text-lg leading-snug [overflow-wrap:anywhere] sm:text-xl">{title || card.title}</DialogTitle>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <span>{project}</span>
+            <Badge variant="outline">{DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column}</Badge>
+            {displayedAssignees.length > 0 && <span>Исполнитель: {displayedAssignees.map(person => taskPersonLabel(person)).join(', ')}</span>}
+            {dueAt && Number.isFinite(Date.parse(dueAt)) && <span>Срок: {new Date(dueAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
+            {card.needsReview && <Badge>Требуется приёмка</Badge>}
+          </div>
         </DialogHeader>
-        {card && <TaskReferenceLinks card={card} />}
 
-        <section aria-label="Быстрые настройки задачи" className="grid shrink-0 grid-cols-2 gap-2 border-b bg-muted/20 p-3 sm:grid-cols-3 lg:grid-cols-6 lg:gap-3 lg:px-6">
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-5">
+        <div className="mx-auto w-full max-w-3xl min-w-0 space-y-4">
+          <div className="flex min-w-0 flex-col gap-4">
+          <div className="min-w-0 space-y-4">
+            <CardHierarchyPanel card={card} relatedCards={relatedCards} breadcrumbCards={breadcrumbCards} onSelectCard={onSelectCard} />
+            {nextAction.trim() && <p className="rounded-xl bg-muted/30 p-4 text-sm"><span className="font-semibold">Следующий шаг: </span>{nextAction}</p>}
+            {blockerReason.trim() && <p className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 text-sm"><span className="font-semibold">Что мешает: </span>{blockerReason}</p>}
+            <details open className="min-w-0 rounded-xl border p-4">
+              <summary className="cursor-pointer text-sm font-semibold">Описание и ожидаемый результат</summary>
+              {Array.from(description).length >= CARD_BRIEF_MIN_DESCRIPTION_RUNES && <div className="mt-3 space-y-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => setShowSummary(value => !value)}>{showSummary ? 'Скрыть сводку' : 'Краткая сводка'}</Button>
+                {showSummary && <CardBriefPanel summaryOnly autoSummarize card={{ ...card, title, description, assignees: splitPeople(assignees), dueAt: dueAt && Number.isFinite(Date.parse(dueAt)) ? new Date(dueAt).toISOString() : undefined, nextAction: nextAction.trim() || null, column }} />}
+              </div>}
+              <div className="mt-3 space-y-3">{editingDescription ? <MarkdownEditor value={description} onChange={setDescription} /> : <div className="max-h-[45vh] overflow-y-auto pr-2">{description.trim() ? <MarkdownText text={description} /> : <p className="text-sm text-muted-foreground">Добавьте, что нужно сделать и какой результат получить.</p>}</div>}
+                <Button type="button" size="sm" variant="outline" onClick={() => setEditingDescription(value => !value)}>{editingDescription ? 'Готово' : 'Редактировать описание'}</Button>
+              </div>
+            </details>
+            <details className="min-w-0 rounded-xl border p-4">
+              <summary className="cursor-pointer text-sm font-medium">Изменить параметры</summary>
+              <p className="mt-2 text-xs text-muted-foreground">Исполнитель и срок необязательны. Здесь можно задать их явно.</p>
+            <div className="min-w-0 space-y-2">
+              <label className="text-sm font-medium" htmlFor="kanban-edit-title">Название задачи</label>
+              <Input id="kanban-edit-title" value={title} onChange={e => setTitle(e.target.value)} className="w-full min-w-0 text-base" />
+            </div>
+        <section aria-label="Быстрые настройки задачи" className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Проект
             <Input aria-label="Проект" list="kanban-edit-projects" value={project} onChange={e => setProject(e.target.value)} className="w-full min-w-0" />
             <datalist id="kanban-edit-projects">{projectOptions.map(name => <option key={name} value={name} />)}</datalist>
@@ -391,8 +433,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Владелец
             <Input aria-label="Владелец карточки" value={(card.owner?.trim() ? taskPersonLabel(card.owner) : requireReviewBeforeDone ? 'неизвестно' : taskPersonLabel('nikita'))} readOnly className="w-full min-w-0 bg-muted/40" />
           </label>
-          <div className="min-w-0 space-y-1 text-xs text-muted-foreground">Исполнитель(и)
-            <Input aria-label="Исполнители" value={assignees} onChange={e => setAssignees(e.target.value)} placeholder="Не назначен" className="w-full min-w-0" />
+          <div className="min-w-0 space-y-1 text-xs text-muted-foreground">Кто делает
+            <Input aria-label="Исполнители" value={assignees} onChange={e => setAssignees(e.target.value)} placeholder="Добавить исполнителя" className="w-full min-w-0" />
             {JSON.stringify(assignees.split(',').map(value => value.trim()).filter(Boolean)) !== JSON.stringify(baseline.assignees) && (
               <label className="flex items-start gap-2 text-xs text-muted-foreground">
                 <Checkbox checked={reassignmentConfirmed} onCheckedChange={value => setReassignmentConfirmed(value === true)} />
@@ -400,12 +442,12 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               </label>
             )}
           </div>
-          <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Срок
+          <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Срок (если нужен)
             <Input aria-label="Срок" aria-describedby="card-date-timezone" type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} className="w-full min-w-0" />
           </label>
-          <p id="card-date-timezone" className="col-span-2 text-xs text-muted-foreground sm:col-span-3 lg:col-span-6">Время вводится в часовом поясе браузера: {Intl.DateTimeFormat().resolvedOptions().timeZone || 'локальный'}. Календарь Контура показывает московское время.</p>
+          <p id="card-date-timezone" className="col-span-1 sm:col-span-2 text-xs text-muted-foreground">Время вводится в часовом поясе браузера: {Intl.DateTimeFormat().resolvedOptions().timeZone || 'локальный'}. Календарь Контура показывает московское время.</p>
           <CardCalendarSection
-            className="col-span-2 min-w-0 space-y-1 sm:col-span-3 lg:col-span-6"
+            className="col-span-1 sm:col-span-2 min-w-0 space-y-1"
             dueAt={card.dueAt}
             project={card.project}
             status={calendarStatus}
@@ -417,29 +459,81 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             message={calendarMessage}
             dueAtUnsaved={(fromDateTimeLocalValue(dueAt) || null) !== (card.dueAt ?? null)}
           />
-          <label className="col-span-2 min-w-0 space-y-1 text-xs text-muted-foreground sm:col-span-1 lg:col-span-2">Следующий шаг
+          <label className="col-span-1 sm:col-span-2 min-w-0 space-y-1 text-xs text-muted-foreground sm:col-span-1 lg:col-span-1 sm:col-span-2">Следующий шаг
             <Input aria-label="Следующий шаг" value={nextAction} onChange={e => setNextAction(e.target.value)} maxLength={4000} placeholder="Например: запросить файл у поставщика" className="w-full min-w-0" />
           </label>
-          {(column === 'blocked' || blockerReason) && <div className="col-span-2 min-w-0 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 sm:col-span-3 lg:col-span-6">
+          {(column === 'blocked' || blockerReason) && <div className="col-span-1 sm:col-span-2 min-w-0 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
             <label className="text-sm font-medium" htmlFor="kanban-blocker-reason">Что блокирует продолжение?</label>
             <Textarea id="kanban-blocker-reason" value={blockerReason} onChange={event => setBlockerReason(event.target.value)} rows={2} maxLength={2000} placeholder="Например: ждём файл от партнёра; ответственный и срок пока неизвестны." />
             <p className="text-xs text-muted-foreground">Эта причина сохраняется отдельно от описания задачи.</p>
           </div>}
         </section>
 
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-5">
-        <div className="mx-auto w-full max-w-5xl min-w-0 space-y-4">
-          <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.45fr)]">
-          <section className="order-2 min-w-0 space-y-2 rounded-md border p-3 lg:order-2" aria-label="Жизненный цикл и результат">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-muted-foreground">Состояние</span>
-              <Badge variant="outline">{DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column}</Badge>
-              {card.needsReview && <Badge>Требуется приёмка</Badge>}
-              <span className="text-xs text-muted-foreground">Владелец: {(card.owner?.trim() ? taskPersonLabel(card.owner) : requireReviewBeforeDone ? 'неизвестно' : taskPersonLabel('nikita'))}</span>
+            </details>
+            <details className="min-w-0 rounded-md border p-3">
+              <summary className="cursor-pointer text-sm font-medium">Планирование и дополнительные настройки</summary>
+              <div className="mt-3 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-muted-foreground">Тип<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.type} onChange={e => setPlanning({ ...planning, type: e.target.value as PlanningType | '' })}><option value="">Не выбран</option><option value="action">Действие</option><option value="outcome">Результат</option></select></label>
+              <label className="text-xs text-muted-foreground">Роль<RolePicker roles={roles} value={planning.role} onChange={role => setPlanning({ ...planning, role })} /></label>
             </div>
-            {card.nextAction && <p className="text-sm"><span className="font-medium">Следующий шаг:</span> {card.nextAction}</p>}
-            {card.blockerReason && <p className="text-sm"><span className="font-medium">Что мешает:</span> {card.blockerReason}</p>}
-            {card.column === 'blocked' && <p className="text-sm text-amber-700 dark:text-amber-300">Укажи причину блокировки ниже, чтобы было ясно, что нужно для продолжения.</p>}
+            <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><Checkbox checked={planning.important} onCheckedChange={value => setPlanning({ ...planning, important: value === true })} /> Важно</label><label className="flex items-center gap-2"><Checkbox checked={planning.urgent} onCheckedChange={value => setPlanning({ ...planning, urgent: value === true })} /> Срочно</label></div>
+            <div className="grid grid-cols-2 gap-3"><label className="text-xs text-muted-foreground">Планировать на дату<Input className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
+            <Input placeholder="Ждём от (ID через запятую)" value={planning.waitingFor} onChange={e => setPlanning({ ...planning, waitingFor: e.target.value })} />
+            <Input placeholder="Требует согласования от (ID через запятую)" value={planning.requiresApprovalFrom} onChange={e => setPlanning({ ...planning, requiresApprovalFrom: e.target.value })} />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Input placeholder="Предложенный исполнитель" value={planning.suggestedAssignee} onChange={e => setPlanning({ ...planning, suggestedAssignee: e.target.value })} />
+              <label className="text-xs text-muted-foreground">Родительская задача
+                <select aria-label="Родительская задача" value={planning.parent} onChange={e => setPlanning({ ...planning, parent: e.target.value })} className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground">
+                  <option value="">Без родителя</option>
+                  {currentParentIsHidden && <option value={planning.parent} disabled>Текущая связь недоступна в этом списке</option>}
+                  {parentChoices.map(parentCard => <option key={parentCard.id} value={parentCard.id}>{parentCard.title}</option>)}
+                </select>
+              </label>
+            </div>
+              </div>
+            </details>
+            {hasLegacyNoticeQuestion && <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />}
+            {catalogLink && <details className="min-w-0 rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Источник и ссылки</summary><div className="mt-3"><CatalogLinkPanel link={catalogLink} /></div></details>}
+          <details className="rounded-xl border p-4">
+            <summary className="cursor-pointer text-sm font-medium">Теги</summary>
+            <div className="mt-3">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Теги</label>
+            <div className="flex flex-wrap gap-1 mb-2">
+              {tags.map(tag => (
+                <Badge key={tag} variant="secondary" className="gap-1">
+                  {tag}
+                  <X className="h-3 w-3 cursor-pointer" onClick={() => setTags(tags.filter(t => t !== tag))} />
+                </Badge>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Новый тег"
+                value={tagInput}
+                onChange={e => setTagInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addTag())}
+                className="h-8"
+              />
+              <Button variant="outline" size="sm" onClick={addTag}><Plus className="h-3 w-3" /></Button>
+            </div>
+          </div>
+            </div>
+          </details>
+
+          <details className="rounded-xl border p-4">
+            <summary className="cursor-pointer text-sm font-medium">Источники и технические данные</summary>
+            <div className="mt-3 space-y-3">
+              <TaskReferenceLinks card={card} />
+          <div className="text-[10px] text-muted-foreground/60">
+            ID: {card.id} · Файл: {card.fileName} · Версия: {card.version}
+          </div>
+            </div>
+          </details>
+          </div>
+          {showLifecycle && <section className="min-w-0 space-y-2 rounded-md border p-3" aria-label="Жизненный цикл и результат">
+            <h2 className="text-sm font-semibold">Работа и результат</h2>
             <CardExecutionOverview card={card} refreshing={refreshing} onRefresh={onRefresh ? () => { void refreshExecution(); } : undefined} />
             <OwnerCloseButton key={card.id} card={card} username={username} disabled={saving} onSaved={saved => {
               onSelectCard?.(saved); void onRefresh?.(); onOpenChange(false);
@@ -447,7 +541,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             <div ref={verificationRef}>{verificationOpen && <ResultVerification card={card} onCancel={() => setVerificationOpen(false)} onSaved={saved => {
               onSelectCard?.(saved); void onRefresh?.(); onOpenChange(false);
             }} />}</div>
-            {requireReviewBeforeDone && onRefresh && <details className="rounded-md border p-3" open>
+            {requireReviewBeforeDone && onRefresh && <details className="rounded-md border p-3">
               <summary className="cursor-pointer text-sm font-semibold">Работа агента</summary>
               <p className="my-2 text-xs text-muted-foreground">Запуск, продолжение и вопросы связаны с этой задачей. Результат проверяется отдельно.</p>
               <IntegratorTaskDashboard cards={[card]} onOpen={selected => onSelectCard?.(selected)} onRefresh={onRefresh}
@@ -495,95 +589,23 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             </div>}
               </div>
             </details>}
-          </section>
-          <div className="order-1 min-w-0 space-y-4 lg:order-1">
-            <CardHierarchyPanel card={card} relatedCards={relatedCards} breadcrumbCards={breadcrumbCards} onSelectCard={onSelectCard} />
-            <div className="min-w-0 space-y-2">
-              <label className="text-sm font-medium" htmlFor="kanban-edit-title">Название задачи</label>
-              <Input id="kanban-edit-title" value={title} onChange={e => setTitle(e.target.value)} className="w-full min-w-0 text-base" />
-            </div>
-            <CardBriefPanel autoSummarize card={{
-              ...card,
-              title: title === card.title ? card.title : title,
-              description: description === card.description ? card.description : description,
-              assignees: assignees === card.assignees.join(', ') ? card.assignees : splitPeople(assignees),
-              dueAt: dueAt === toDateTimeLocalValue(card.dueAt) ? card.dueAt : dueAt ? new Date(dueAt).toISOString() : undefined,
-              nextAction: nextAction === (card.nextAction ?? '') ? card.nextAction ?? null : nextAction.trim() || null,
-              column: column === card.column ? card.column : column,
-            }} />
-            <details className="min-w-0 rounded-md border p-3">
-              <summary className="cursor-pointer text-sm font-medium">Описание и ожидаемый результат</summary>
-              <div className="mt-3 space-y-3">{editingDescription ? <MarkdownEditor value={description} onChange={setDescription} /> : <MarkdownText text={description} />}
-                <Button type="button" size="sm" variant="outline" onClick={() => setEditingDescription(value => !value)}>{editingDescription ? 'Готово' : 'Редактировать описание'}</Button>
-              </div>
-            </details>
-            <details className="min-w-0 rounded-md border p-3">
-              <summary className="cursor-pointer text-sm font-medium">Планирование и дополнительные настройки</summary>
-              <div className="mt-3 space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <label className="text-xs text-muted-foreground">Тип<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.type} onChange={e => setPlanning({ ...planning, type: e.target.value as PlanningType | '' })}><option value="">Не выбран</option><option value="action">Действие</option><option value="outcome">Результат</option></select></label>
-              <label className="text-xs text-muted-foreground">Роль<RolePicker roles={roles} value={planning.role} onChange={role => setPlanning({ ...planning, role })} /></label>
-            </div>
-            <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><Checkbox checked={planning.important} onCheckedChange={value => setPlanning({ ...planning, important: value === true })} /> Важно</label><label className="flex items-center gap-2"><Checkbox checked={planning.urgent} onCheckedChange={value => setPlanning({ ...planning, urgent: value === true })} /> Срочно</label></div>
-            <div className="grid grid-cols-2 gap-3"><label className="text-xs text-muted-foreground">Планировать на дату<Input className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
-            <Input placeholder="Ждём от (ID через запятую)" value={planning.waitingFor} onChange={e => setPlanning({ ...planning, waitingFor: e.target.value })} />
-            <Input placeholder="Требует согласования от (ID через запятую)" value={planning.requiresApprovalFrom} onChange={e => setPlanning({ ...planning, requiresApprovalFrom: e.target.value })} />
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Input placeholder="Предложенный исполнитель" value={planning.suggestedAssignee} onChange={e => setPlanning({ ...planning, suggestedAssignee: e.target.value })} />
-              <label className="text-xs text-muted-foreground">Родительская задача
-                <select aria-label="Родительская задача" value={planning.parent} onChange={e => setPlanning({ ...planning, parent: e.target.value })} className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground">
-                  <option value="">Без родителя</option>
-                  {currentParentIsHidden && <option value={planning.parent} disabled>Текущая связь недоступна в этом списке</option>}
-                  {parentChoices.map(parentCard => <option key={parentCard.id} value={parentCard.id}>{parentCard.title}</option>)}
-                </select>
-              </label>
-            </div>
-              </div>
-            </details>
-            {hasLegacyNoticeQuestion && <NoticeQuestionPanel key={card.id} card={card} open={open} username={username ?? null} onRefresh={onRefresh} />}
-            {catalogLink && <details className="min-w-0 rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Источник и ссылки</summary><div className="mt-3"><CatalogLinkPanel link={catalogLink} /></div></details>}
-          <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Теги</label>
-            <div className="flex flex-wrap gap-1 mb-2">
-              {tags.map(tag => (
-                <Badge key={tag} variant="secondary" className="gap-1">
-                  {tag}
-                  <X className="h-3 w-3 cursor-pointer" onClick={() => setTags(tags.filter(t => t !== tag))} />
-                </Badge>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <Input
-                placeholder="Новый тег"
-                value={tagInput}
-                onChange={e => setTagInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addTag())}
-                className="h-8"
-              />
-              <Button variant="outline" size="sm" onClick={addTag}><Plus className="h-3 w-3" /></Button>
-            </div>
-          </div>
-
-          <div className="text-[10px] text-muted-foreground/60">
-            ID: {card.id} · Файл: {card.fileName} · Версия: {card.version}
-          </div>
-          </div>
+          </section>}
           </div>
         </div>
         </div>
 
         <DialogFooter className="shrink-0 gap-2 border-t bg-background px-4 py-2 sm:px-6">
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-          <div className="flex w-full items-center justify-between gap-2">
+          <div className="flex w-full flex-wrap items-center justify-between gap-2">
             {onDelete ? (
               <Button variant="destructive" size="sm" disabled={saving} onClick={handleDelete}>
                 <Trash2 className="mr-1 h-3.5 w-3.5" /> Удалить
               </Button>
             ) : <span />}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               {canCompleteDirectly(card, username) && onUpdate && <Button type="button" variant="outline" disabled={saving}
                 className="border-emerald-600/40 text-emerald-700 dark:text-emerald-300" onClick={() => void handleComplete()}>Завершить задачу</Button>}
-              <Button variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>Закрыть</Button>
               <Button onClick={handleSave} disabled={!title.trim() || !project.trim() || saving}>Сохранить</Button>
             </div>
           </div>
