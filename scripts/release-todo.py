@@ -88,6 +88,7 @@ def release(gate, expected_image, expected_revision, candidate_image, candidate_
         reject_emergency()
         if input_hashes(paths) != baseline:
             raise RuntimeError("compose_inputs_changed")
+        gate.check()
         run(compose + ["up", "-d", "--no-deps", "--no-build", "--pull", "never", "kanban"])
         # An uncertain/failed command is not retried and does not cause blind rollback.
         gate.check()
@@ -95,7 +96,7 @@ def release(gate, expected_image, expected_revision, candidate_image, candidate_
             raise RuntimeError("deployed_image_mismatch")
         if image_revision(candidate_image, run) != candidate_revision:
             raise RuntimeError("deployed_revision_mismatch")
-        run(["curl", "--fail", "--silent", "--show-error", "--max-time", "15",
+        run(["curl", "--noproxy", "*", "--fail", "--silent", "--show-error", "--max-time", "15",
              "--output", "/dev/null", "http://127.0.0.1:43327/"])
     return {"image": candidate_image, "revision": candidate_revision,
             "health": "http_ok", "user_path_acceptance": "pending"}

@@ -94,4 +94,24 @@ class ReleaseTest(unittest.TestCase):
                 self.assertNotIn("DOCKER_CONTEXT", run.call_args.kwargs["env"])
                 self.assertNotIn("COMPOSE_PROJECT_NAME", run.call_args.kwargs["env"])
 
+
+    def test_expiry_during_hashing_blocks_up(self):
+        original = m.input_hashes
+        calls = 0
+        def hashing(paths):
+            nonlocal calls
+            calls += 1
+            result = original(paths)
+            if calls == 2:
+                self.gate.expire = self.gate.checks + 1
+            return result
+        with patch.object(m, "input_hashes", side_effect=hashing):
+            with self.assertRaisesRegex(RuntimeError, "expired"): self.release()
+        self.no_up()
+    def test_health_bypasses_proxy(self):
+        self.release()
+        health = next(a for a in self.commands if a[0] == "curl")
+        self.assertEqual(health[1:3], ["--noproxy", "*"])
+        self.assertEqual(health[-1], "http://127.0.0.1:43327/")
+
 if __name__ == "__main__": unittest.main()

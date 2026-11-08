@@ -122,3 +122,28 @@ not eliminate a non-cooperating writer's check/use race; all deployment writers
 must share the same authority and lock. The operator must still verify the
 installed release-gate code before use; an arbitrary supplied Python directory
 is not a trust proof.
+
+### Gate provenance and concurrency evidence (2026-11-08)
+
+Read-only inspection found owner-fleet PID4151979 running release source
+3b2cf4d64df8043993847947e160dd75d99ed471. Its packaged runtime does not contain
+release_gate.py. The existing operator source files are clean and byte-identical
+to those files at that exact runtime Git revision:
+
+- deploy/fleet/release_gate.py SHA256 aa683d7e355ef9e135a087e8eb329881d9debfad6d6a61c56f171e11e6a79a1b
+- deploy/fleet/main_guard.py SHA256 3ab2817fa53e386db2cf2c4f48fa3d8c97d3e697d4d8a15c8e0bbe775908e354
+
+The source root is /home/roomhacker/agents-projects/agent-herder. This establishes
+source provenance, not an installed Python runtime claim. Recheck these bytes
+and current runtime authority before use; never import arbitrary replacement code.
+Eleven existing isolated Herder gate tests passed: parallel exclusion, shared
+unit lock across project keys, successor fencing, expiry/foreign proofs, revision
+comparison and local Git ancestry. Thirteen Todo wrapper tests passed, including
+expiry during input hashing and proxy-free loopback health.
+
+Before live clearance still verify: all active release writers honor this exact
+project/target lock; no direct Docker writer is in flight; current Compose and env
+inputs match the approved snapshot; proof authority and runtime have not moved.
+Hash checks and advisory locks do not prevent a non-cooperating writer from
+changing files between validation and Compose. No live concurrency experiment
+or production rollout was performed for these tests.
