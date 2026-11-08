@@ -8,28 +8,55 @@ import re
 import stat
 import subprocess
 import sys
-import tempfile
+import hashlib
 from pathlib import Path
 
 PROJECT = "/home/roomhacker/excode/.git"
 DEPLOY = "/home/roomhacker/services/kanban-board"
 CONTAINER = "kanban-board-kanban-1"
+DOCKER = ["docker", "--host", "unix:///var/run/docker.sock"]
+EMERGENCY = "AGENT_HERDER_EMERGENCY_UNMERGED_ROLLOUT"
 TARGET = {"fleetDir": DEPLOY, "unit": CONTAINER}
 FILES = [DEPLOY + "/docker-compose.yml", DEPLOY + "/docker-compose.deploy.yml",
          "/home/roomhacker/agents-projects/exmanager/deploy/todo/docker-compose.runtime.yml"]
 
 def command(argv):
-    return subprocess.check_output(argv, text=True).strip()
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("DOCKER_", "COMPOSE_")) and k != EMERGENCY}
+    return subprocess.check_output(argv, text=True, env=env).strip()
 
 def image_revision(image, run=command):
-    return run(["docker", "image", "inspect", image, "--format",
+    return run(DOCKER + ["image", "inspect", image, "--format",
                 '{{index .Config.Labels "org.opencontainers.image.revision"}}'])
 
 def live(run=command):
-    return run(["docker", "inspect", CONTAINER, "--format", "{{.Image}}"])
+    return run(DOCKER + ["inspect", CONTAINER, "--format", "{{.Image}}"])
+
+def reject_emergency():
+    if os.environ.get(EMERGENCY, "").strip():
+        raise RuntimeError("emergency_override_forbidden")
+
+def input_hashes(paths):
+    return {p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
+            if Path(p).exists() else None for p in paths}
+
+def durable_override(image, root):
+    data = json.dumps({"services": {"kanban": {"image": image}}}, sort_keys=True)
+    path = Path(root) / (hashlib.sha256(data.encode()).hexdigest() + ".json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.is_symlink() or path.read_text() != data:
+            raise RuntimeError("release_manifest_conflict")
+    else:
+        with path.open("x") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+    return str(path)
 
 def release(gate, expected_image, expected_revision, candidate_image, candidate_revision,
-            run=command, override=None):
+            run=command, override=None, input_snapshot=None):
+    reject_emergency()
     for sha in [expected_revision, candidate_revision]:
         if not re.fullmatch(r"[a-f0-9]{40}", sha):
             raise ValueError("invalid_revision")
@@ -42,9 +69,12 @@ def release(gate, expected_image, expected_revision, candidate_image, candidate_
         raise RuntimeError("release_target_mismatch")
     if not override:
         raise ValueError("image_override_required")
-    compose = ["docker", "compose", "--project-directory", DEPLOY]
+    compose = DOCKER + ["compose", "--project-name", "kanban-board", "--project-directory", DEPLOY]
     for path in FILES + [override]:
         compose += ["-f", path]
+    paths = FILES + [override, DEPLOY + "/.env",
+                        "/home/roomhacker/todo-kanban/work-auth/runtime.env"]
+    baseline = input_snapshot if input_snapshot is not None else input_hashes(paths)
     with gate:
         gate.candidate_descends_from(expected_revision, candidate_revision)
         if image_revision(candidate_image, run) != candidate_revision:
@@ -55,7 +85,10 @@ def release(gate, expected_image, expected_revision, candidate_image, candidate_
         if live(run) != expected_image or image_revision(expected_image, run) != expected_revision:
             raise RuntimeError("production_revision_changed")
         gate.check()
-        run(compose + ["up", "-d", "--no-build", "--pull", "never", "kanban"])
+        reject_emergency()
+        if input_hashes(paths) != baseline:
+            raise RuntimeError("compose_inputs_changed")
+        run(compose + ["up", "-d", "--no-deps", "--no-build", "--pull", "never", "kanban"])
         # An uncertain/failed command is not retried and does not cause blind rollback.
         gate.check()
         if live(run) != candidate_image:
@@ -86,11 +119,10 @@ def main():
     sys.path.insert(0, str(directory))
     gate_type = importlib.import_module("release_gate").ReleaseGate
     gate = gate_type(a.proof, state_path=a.ledger, target=TARGET)
-    with tempfile.TemporaryDirectory(prefix="todo-release-") as temp:
-        override = str(Path(temp) / "image.json")
-        Path(override).write_text(json.dumps({"services": {"kanban": {"image": a.candidate_image}}}))
-        print(json.dumps(release(gate, a.expected_image, a.expected_revision,
-                                 a.candidate_image, a.candidate_revision, override=override)))
+    reject_emergency()
+    override = durable_override(a.candidate_image, DEPLOY + "/release-images")
+    print(json.dumps(release(gate, a.expected_image, a.expected_revision,
+                             a.candidate_image, a.candidate_revision, override=override)))
 
 if __name__ == "__main__":
     try:

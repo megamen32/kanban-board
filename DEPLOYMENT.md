@@ -68,7 +68,7 @@ code/data ownership.
 
 ## Prepared fenced Compose entrypoint (not yet live-accepted)
 
-`scripts/release-todo.py` composes the existing three launch files with a temporary
+`scripts/release-todo.py` composes the existing three launch files with a persistent content-addressed
 image-only override. It never builds or pulls and requires immutable local image
 IDs, source revision labels, and a candidate admitted by Herder's existing
 `ReleaseGate.candidate_descends_from` (published main and ancestry).
@@ -87,6 +87,11 @@ Arguments: `--proof`, `--ledger`, `--release-gate-dir`, `--expected-image`,
 Build the candidate separately from reviewed source before entering this short
 release window; preserve the previous image for explicitly authorized rollback.
 
+The Docker endpoint is fixed to unix:///var/run/docker.sock and Compose project
+name to kanban-board. Docker/Compose environment overrides are removed from
+subprocesses. Emergency unmerged rollout environment is rejected. Dependencies
+are not started (--no-deps).
+
 The existing Herder gate holds project and target OS locks for the entire change.
 Immediately before Compose it checks token/fence/expiry, compares the current
 container image and source label to the operator's expected revision, and checks
@@ -102,3 +107,18 @@ state first. This preparation does not override pending publication permissions
 or authorize live deployment by itself.
 
 Unit checks: `python3 -m unittest discover -s scripts -p test_release_todo.py`.
+
+The image override is retained under the deployment project's release-images
+directory after success or uncertain failure, so the container's config_files
+label never references a deleted temporary file. Subsequent maintenance must
+include the exact retained image override recorded by the current container,
+rather than reverting to the historical three-file image tag. Previous manifests
+are retained for explicit rollback. No generic desired-state pointer is inferred
+after an uncertain command.
+
+Compose files, optional .env and runtime.env are hashed (never printed) before
+admission and checked again immediately before up. This detects drift but does
+not eliminate a non-cooperating writer's check/use race; all deployment writers
+must share the same authority and lock. The operator must still verify the
+installed release-gate code before use; an arbitrary supplied Python directory
+is not a trust proof.

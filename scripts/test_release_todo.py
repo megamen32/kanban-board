@@ -1,5 +1,8 @@
 import importlib.util
 import unittest
+import os
+import tempfile
+from unittest.mock import patch
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("todo_release", Path(__file__).with_name("release-todo.py"))
@@ -25,9 +28,9 @@ class ReleaseTest(unittest.TestCase):
         self.bad_candidate = False; self.failed_up = False
     def run_command(self, argv):
         self.commands.append(argv)
-        if argv[:3] == ["docker", "image", "inspect"]:
-            return R1 if argv[3] == OLD or self.bad_candidate else R2
-        if argv[:2] == ["docker", "inspect"]: return self.current
+        if argv[:5] == m.DOCKER + ["image", "inspect"]:
+            return R1 if argv[5] == OLD or self.bad_candidate else R2
+        if argv[:4] == m.DOCKER + ["inspect"]: return self.current
         if "up" in argv:
             if self.failed_up: raise RuntimeError("unknown")
             self.current = NEW
@@ -39,6 +42,9 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(self.release()["user_path_acceptance"], "pending")
         up = next(a for a in self.commands if "up" in a)
         self.assertIn("--no-build", up)
+        self.assertIn("--no-deps", up)
+        self.assertEqual(up[:3], m.DOCKER)
+        self.assertIn("--project-name", up)
         for f in m.FILES: self.assertIn(f, up)
         self.assertEqual(up[-4:], ["--no-build", "--pull", "never", "kanban"])
     def test_changed_live_rejected(self):
@@ -65,4 +71,27 @@ class ReleaseTest(unittest.TestCase):
         self.gate.target = {"unit": "other"}
         with self.assertRaisesRegex(RuntimeError, "release_target_mismatch"): self.release()
         self.no_up()
+
+    def test_emergency_env_rejected(self):
+        with patch.dict(os.environ, {m.EMERGENCY: "emergency"}):
+            with self.assertRaisesRegex(RuntimeError, "emergency_override_forbidden"): self.release()
+        self.no_up()
+    def test_changed_inputs_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "compose_inputs_changed"):
+            m.release(self.gate, OLD, R1, NEW, R2, self.run_command,
+                      "/fixture/image.json", {"different": "snapshot"})
+        self.no_up()
+    def test_durable_manifest_survives_and_reuses(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = m.durable_override(NEW, d)
+            self.assertTrue(Path(path).exists())
+            self.assertEqual(m.durable_override(NEW, d), path)
+            self.assertNotEqual(m.durable_override(OLD, d), path)
+    def test_command_removes_docker_compose_environment(self):
+        with patch.dict(os.environ, {"DOCKER_CONTEXT": "foreign", "COMPOSE_PROJECT_NAME": "foreign"}):
+            with patch.object(m.subprocess, "check_output", return_value="ok") as run:
+                m.command(["true"])
+                self.assertNotIn("DOCKER_CONTEXT", run.call_args.kwargs["env"])
+                self.assertNotIn("COMPOSE_PROJECT_NAME", run.call_args.kwargs["env"])
+
 if __name__ == "__main__": unittest.main()
