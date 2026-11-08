@@ -55,7 +55,8 @@ export type TransitionDecision =
       reason: 'assignee_change_requires_owner_authorization' | 'reviewer_change_requires_owner_authorization'
         | 'deadline_change_requires_human_ui' | 'weekly_plan_requires_batch_acceptance'
         | 'review_requires_explicit_decision' | 'executor_result_requires_non_review_state'
-        | 'blocked_reason_required' | 'executor_change_requires_owner_authorization';
+        | 'blocked_reason_required' | 'executor_change_requires_owner_authorization'
+        | 'archive_requires_exact_owner_decision' | 'restore_requires_previous_column';
     };
 
 /**
@@ -77,6 +78,38 @@ export function validateTransition(
   requested: KanbanCardUpdates,
   context: TransitionContext,
 ): TransitionDecision {
+  // Archive is not completion or review acceptance. Only the verified owner
+  // can make this exact transition; preserve every result/reviewer field.
+  const archiveChange = requested.column !== undefined && requested.column !== before.column
+    && (requested.column === 'archived' || before.column === 'archived');
+  if (archiveChange) {
+    const owner = before.owner === NIKITA_ACTOR
+      && ((context.origin === 'human-ui' && context.actor === NIKITA_ACTOR)
+        || (context.origin === 'mcp' && hasOwnerAuthorization(context)));
+    if (!owner || Object.keys(requested).length !== 1) {
+      return { kind: 'rejected', reason: 'archive_requires_exact_owner_decision' };
+    }
+    if (requested.column === 'archived') {
+      return { kind: 'accepted', patch: { column: 'archived',
+        approvalEvidence: appendEvidence(before.approvalEvidence, undefined, {
+          type: 'owner_archived', actor: NIKITA_ACTOR, origin: context.origin,
+          previousColumn: before.column,
+        }),
+      } };
+    }
+    const archived = [...(before.approvalEvidence ?? [])].reverse()
+      .find(item => item.type === 'owner_archived');
+    const previous = archived?.previousColumn ?? (before.needsReview ? 'review' : 'todo');
+    if (requested.column !== previous) {
+      return { kind: 'rejected', reason: 'restore_requires_previous_column' };
+    }
+    return { kind: 'accepted', patch: { column: requested.column,
+      approvalEvidence: appendEvidence(before.approvalEvidence, undefined, {
+        type: 'owner_restored', actor: NIKITA_ACTOR, origin: context.origin,
+        restoredColumn: requested.column,
+      }),
+    } };
+  }
   const waitingForHumanReview = before.column === 'review' || before.needsReview;
   const ownerCompletion = context.ownerCompletionAuthorization;
   const exactOwnerCompletion = context.origin === 'mcp'
