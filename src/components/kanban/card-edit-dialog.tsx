@@ -33,6 +33,7 @@ import { getEligibleParentCards } from './card-hierarchy';
 import { canCompleteDirectly, canTakeOwnReview } from './card-completion';
 import { ResultVerification } from './result-verification';
 import { OwnerCloseButton } from './owner-close-button';
+import { createCardDialogActionScope } from './card-dialog-action-scope';
 import { canOwnerClose } from '@/lib/kanban/owner-close';
 import { IntegratorTaskDashboard } from './integrator-task-dashboard';
 import { isTaskActor, taskPersonLabel } from '@/lib/kanban/task-membership';
@@ -129,8 +130,11 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
   const [calendarEventId, setCalendarEventId] = useState<string | null>(null);
   const [calendarMessage, setCalendarMessage] = useState<string | null>(null);
   const pollInFlight = useRef(false);
+  const [actionScope] = useState(createCardDialogActionScope);
 
   useEffect(() => {
+    if (open) actionScope.enter(); else actionScope.leave();
+    setSaving(false);
     setTitle(card.title);
     setDescription(card.description);
     setEditingDescription(false);
@@ -150,7 +154,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     setDueAt(toDateTimeLocalValue(card.dueAt));
     setPlanning(initialPlanningMetadata(card));
     // A remote update must not erase unsaved input or silently advance its CAS.
-  }, [card.id, open]);
+    return () => actionScope.leave();
+  }, [card.id, open, actionScope]);
 
   useEffect(() => {
     if (verificationOpen) verificationRef.current?.scrollIntoView({block: 'center', behavior: 'smooth'});
@@ -239,6 +244,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     const nextAssignees = assignees.split(',').map(value => value.trim()).filter(Boolean);
     const assigneesChanged = JSON.stringify(nextAssignees) !== JSON.stringify(baseline.assignees);
     if (assigneesChanged && !reassignmentConfirmed) return;
+    const isCurrent = actionScope.capture();
     setSaving(true);
     setError(null);
     try {
@@ -256,10 +262,11 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
       ...buildPlanningMetadataUpdates(baseline, planning, nextAssignees),
     };
     const saved = await onUpdate(card.id, updates, baseline.version);
+    if (!isCurrent()) return;
     if (!saved) { setError('Карточка изменилась. Разрешите конфликт версий; ваш текст остался в форме.'); return; }
     onOpenChange(false);
-    } catch (failure) { setError(mutationErrorMessage(failure)); }
-    finally { setSaving(false); }
+    } catch (failure) { if (isCurrent()) setError(mutationErrorMessage(failure)); }
+    finally { if (isCurrent()) setSaving(false); }
   };
 
   const hasUnsavedDraft = title !== baseline.title || description !== baseline.description
@@ -285,17 +292,20 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
     if (!onUpdate || saving || !canCompleteDirectly(card, username)) return;
     if (!cleanDraftForDecision()) return;
     if (requireReviewBeforeDone) { setVerificationOpen(true); return; }
+    const isCurrent = actionScope.capture();
     setSaving(true);
     setError(null);
     try {
       // Completing a real task is a human action, not a synthetic automation update.
       // Without verified browser identity, the ordinary API would redirect "done" to review.
       const response = await fetch('/api/auth/session', { cache: 'no-store', credentials: 'same-origin' });
+      if (!isCurrent()) return;
       if (!response.ok) {
         setError('Чтобы завершить задачу, войдите в свой аккаунт доски.');
         return;
       }
       const session = await response.json() as { authenticated?: boolean; username?: string; scope?: string };
+      if (!isCurrent()) return;
       const allowedActor = isTaskActor(card, session.username);
       if (!session.authenticated || session.scope !== 'work' || !allowedActor) {
         setError('Завершить задачу может только её подтверждённый владелец или исполнитель.');
@@ -304,49 +314,55 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
       // Only update the status: do not submit the whole form, reset unsaved fields,
       // change assignees or accidentally request another approval.
       const saved = await onUpdate(card.id, { column: 'done' }, card.version);
+      if (!isCurrent()) return;
       if (!saved) { setError('Карточка изменилась. Обновите её перед завершением.'); return; }
       if (saved.column !== 'done') { setError('Завершение не подтверждено сервером.'); return; }
       onOpenChange(false);
-    } catch (failure) { setError(mutationErrorMessage(failure)); }
-    finally { setSaving(false); }
+    } catch (failure) { if (isCurrent()) setError(mutationErrorMessage(failure)); }
+    finally { if (isCurrent()) setSaving(false); }
   };
 
   const handleTakeReview = async () => {
     if (!onUpdate || saving || !canTakeOwnReview(card, username)) return;
     if (!cleanDraftForDecision()) return;
+    const isCurrent = actionScope.capture();
     setSaving(true);
     setError(null);
     try {
       // Existing owner-only reviewer assignment: never overwrite a result or decide on behalf of another reviewer.
       const saved = await onUpdate(card.id, { requiresApprovalFrom: ['nikita'] }, card.version);
+      if (!isCurrent()) return;
       if (!saved) { setError('Карточка изменилась. Обновите её перед назначением проверки.'); return; }
       setBaseline(saved);
       setPlanning(initialPlanningMetadata(saved));
       onSelectCard?.(saved);
-    } catch (failure) { setError(mutationErrorMessage(failure)); }
-    finally { setSaving(false); }
+    } catch (failure) { if (isCurrent()) setError(mutationErrorMessage(failure)); }
+    finally { if (isCurrent()) setSaving(false); }
   };
 
   const handleDelete = async () => {
     if (!onDelete || saving) return;
+    const isCurrent = actionScope.capture();
     setSaving(true); setError(null);
-    try { await onDelete(card.id); onOpenChange(false); }
-    catch (failure) { setError(mutationErrorMessage(failure)); }
-    finally { setSaving(false); }
+    try { await onDelete(card.id); if (isCurrent()) onOpenChange(false); }
+    catch (failure) { if (isCurrent()) setError(mutationErrorMessage(failure)); }
+    finally { if (isCurrent()) setSaving(false); }
   };
 
   const handleReview = async (action: HumanReviewAction) => {
     if (!onReviewDecision || saving) return;
     if (!cleanDraftForDecision()) return;
     if (requireReviewBeforeDone && action === 'accept') { setVerificationOpen(true); return; }
+    const isCurrent = actionScope.capture();
     setSaving(true);
     setError(null);
     try {
       const saved = await onReviewDecision(card.id, action, reviewNote, card.version);
+      if (!isCurrent()) return;
       if (!saved) { setError('Карточка изменилась. Обновите её и повторите решение.'); return; }
       onOpenChange(false);
-    } catch (failure) { setError(mutationErrorMessage(failure)); }
-    finally { setSaving(false); }
+    } catch (failure) { if (isCurrent()) setError(mutationErrorMessage(failure)); }
+    finally { if (isCurrent()) setSaving(false); }
   };
 
   const addTag = () => {
@@ -538,7 +554,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             <OwnerCloseButton key={card.id} card={card} username={username} disabled={saving} onSaved={saved => {
               onSelectCard?.(saved); void onRefresh?.(); onOpenChange(false);
             }} />
-            <div ref={verificationRef}>{verificationOpen && <ResultVerification card={card} onCancel={() => setVerificationOpen(false)} onSaved={saved => {
+            <div ref={verificationRef}>{verificationOpen && <ResultVerification key={card.id} card={card} onCancel={() => setVerificationOpen(false)} onSaved={saved => {
               onSelectCard?.(saved); void onRefresh?.(); onOpenChange(false);
             }} />}</div>
             {requireReviewBeforeDone && onRefresh && <details className="rounded-md border p-3">
