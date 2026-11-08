@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { createCardDialogActionScope } from './card-dialog-action-scope';
 import type { KanbanCard } from '@/lib/kanban/types';
 import { parseManualVerification } from '@/lib/kanban/manual-verification';
 import { boardMutationRequest, mutationErrorMessage, readMutationResponse } from '@/lib/kanban/mutation-response';
@@ -18,22 +19,29 @@ export function ResultVerification({card, onSaved, onCancel}: {
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [actionScope] = useState(createCardDialogActionScope);
+  useEffect(() => {
+    actionScope.enter();
+    return () => actionScope.leave();
+  }, [card.id, actionScope]);
   const input = {expectedVersion: version, confirmed, result, evidence};
   const valid = !!parseManualVerification(input) && card.version === version;
   async function save() {
     if (busy || !valid) return;
+    const isCurrent = actionScope.capture();
     setBusy(true); setError('');
     try {
       const response = await boardMutationRequest(`/api/kanban/cards/${encodeURIComponent(card.id)}/verify`, {
         method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
       }, 'review');
       const data = await readMutationResponse(response, true, 'review');
+      if (!isCurrent()) return;
       if (data.conflict || !data.card || data.card.column !== 'done') {
         setConfirmed(false); setError('Карточка изменилась. Обновите её и проверьте новый результат перед приёмкой.'); return;
       }
       onSaved(data.card);
-    } catch (failure) { setConfirmed(false); setError(mutationErrorMessage(failure)); }
-    finally { setBusy(false); }
+    } catch (failure) { if (isCurrent()) { setConfirmed(false); setError(mutationErrorMessage(failure)); } }
+    finally { if (isCurrent()) setBusy(false); }
   }
   return <Dialog open onOpenChange={open => {if (!open && !busy) onCancel();}}>
     <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl" onEscapeKeyDown={event => {if (busy) event.preventDefault();}} onPointerDownOutside={event => event.preventDefault()}>

@@ -169,7 +169,7 @@ function creationBaseline(): KanbanCard {
 
 function textResult(value: unknown) {
   return {
-    content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
+    content: [{ type: 'text' as const, text: JSON.stringify(value) }],
   };
 }
 
@@ -275,18 +275,21 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
 
   server.registerTool('kanban.list', {
     title: 'List Kanban cards',
-    description: 'List cards from the authorized board with optional filters.',
+    description: 'Use paged=true for one bounded page from the authorized board. Legacy calls retain their existing response. Continue with nextCursor and identical filters until complete. Large cards may omit details; read them with kanban.read before editing. A page is not a snapshot across concurrent writes.',
     inputSchema: {
       project: z.string().optional(),
       column: z.enum(COLUMNS).optional(),
       tag: z.string().optional(),
       dueWithinHours: z.number().optional(),
       limit: z.number().int().min(1).max(1000).optional(),
+      paged: z.boolean().optional(),
+      cursor: z.string().min(1).max(256).optional(),
+      summary: z.boolean().optional(),
       exmanagerScope: z.object({ payload: z.string().min(1).max(24_000), signature: z.string().min(1).max(128) }).strict().optional(),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async ({ project, column, tag, dueWithinHours, limit, exmanagerScope }) => {
-    const args = Object.fromEntries(Object.entries({ project, column, tag, dueWithinHours, limit }).filter(([, value]) => value !== undefined));
+  }, async ({ project, column, tag, dueWithinHours, limit, paged, cursor, summary, exmanagerScope }) => {
+    const args = Object.fromEntries(Object.entries({ project, column, tag, dueWithinHours, limit, paged, cursor, summary }).filter(([, value]) => value !== undefined));
     const callerScope = verifyReadScope(options, exmanagerScope, 'kanban.list', args);
     if (callerScope && project && !callerScope.owner && !callerScope.projects.includes(project)) {
       throw new Error('Todo project is outside the caller scope');
@@ -295,8 +298,32 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
     const authorizedCards = callerScope && !callerScope.owner
       ? allCards.filter(card => callerScope.projects.includes(card.project))
       : allCards;
-    const cards = filterCards(authorizedCards, { project, column, tag, dueWithinHours, limit });
-    return textResult({ cards, count: cards.length, scope });
+    if (!paged && !cursor && summary === undefined) {
+      const cards = filterCards(authorizedCards, { project, column, tag, dueWithinHours, limit });
+      return textResult({ cards, count: cards.length, scope });
+    }
+    const filtered = filterCards(authorizedCards, { project, column, tag, dueWithinHours })
+      .sort((a, b) => a.id.localeCompare(b.id, 'en'));
+    const remaining = cursor ? filtered.filter(card => card.id.localeCompare(cursor, 'en') > 0) : filtered;
+    const cards: Array<KanbanCard | Record<string, unknown>> = [];
+    let bytes = 0;
+    const compact = (card: KanbanCard) => ({
+      id: card.id, title: card.title.slice(0, 512), project: card.project.slice(0, 512),
+      column: card.column, version: card.version, updated: card.updated,
+      needsReview: card.needsReview, detailOmitted: true,
+    });
+    // Bound the callback before Airlock serializes it, including legacy callers
+    // which request 1000 cards. Never truncate the persisted card itself.
+    for (const card of remaining.slice(0, Math.min(limit ?? 50, 1000))) {
+      let item: KanbanCard | Record<string, unknown> = summary ? compact(card) : card;
+      let size = Buffer.byteLength(JSON.stringify(item), 'utf8');
+      if (size > 12_000) { item = compact(card); size = Buffer.byteLength(JSON.stringify(item), 'utf8'); }
+      if (cards.length && bytes + size > 16_000) break;
+      cards.push(item); bytes += size;
+    }
+    const complete = cards.length === remaining.length;
+    return textResult({ cards, count: cards.length, total: filtered.length, complete,
+      nextCursor: complete ? null : cards.at(-1)!.id, scope });
   });
 
   server.registerTool('kanban.read', {
@@ -511,11 +538,25 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
           && (!callerScope.projects.includes(before.project) || (project && !callerScope.projects.includes(project)))) {
         throw new Error(`Card ${cardId} not found`);
       }
+      if ((column === 'archived' || before.column === 'archived') && column !== before.column
+        && (!Number.isSafeInteger(expectedVersion) || expectedVersion! < 1)) {
+        throw new Error('expectedVersion is required for archive and restore');
+      }
       if (ownerCompletionAuthorization && (before.owner !== NIKITA_ACTOR
         || (before.requiresApprovalFrom ?? []).some(actor => actor !== NIKITA_ACTOR))) {
         throw new Error('owner completion is outside the exact owner review scope');
       }
-      const decision = validateTransition(before, requested, { origin: 'mcp', actor: 'mcp', ownerAuthorization, ownerCompletionAuthorization, internalTeamAuthorization });
+      // The server-verified exact write envelope is an owner's instruction,
+      // not a model-supplied confirmation bit. Scope this authority to archive
+      // only; never grant completion, assignment or other edits through it.
+      const signedOwnerArchive = callerScope?.owner === true
+        && options.requireExManagerWriteScope === true && options.allowInternalTeamCommands === true
+        && Object.keys(requested).length === 1 && requested.column !== before.column
+        && (requested.column === 'archived' || before.column === 'archived')
+        ? { actor: NIKITA_ACTOR, evidence: { type: 'signed_owner_archive', userId: callerScope.userId } }
+        : undefined;
+      const decision = validateTransition(before, requested, { origin: 'mcp', actor: 'mcp',
+        ownerAuthorization: signedOwnerArchive ?? ownerAuthorization, ownerCompletionAuthorization, internalTeamAuthorization });
       if (decision.kind === 'rejected') throw new Error(decision.reason);
       const result = updateCard(cardId, decision.patch, expectedVersion, tasksDir);
       if ('conflict' in result) throw new Error(`Version conflict for card ${cardId}`);

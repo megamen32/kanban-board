@@ -72,6 +72,86 @@ describe('kanban.change MCP transition policy', () => {
     fs.rmSync(tasksDir, { recursive: true, force: true });
   });
 
+  it('paginates deterministically and reports complete without dropping oversized cards', async () => {
+    for (let i = 0; i < 7; i++) createCard('Page ' + i, i === 3 ? 'x'.repeat(30_000) : 'body', 'todo', 'medium', [], 'alpha', [], tasksDir);
+    const expected = getAllCards(tasksDir).map(card => card.id).sort((a, b) => a.localeCompare(b, 'en'));
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let omitted = false;
+    for (let page = 0; page < 10; page++) {
+      const response = await client.callTool({ name: 'kanban.list', arguments: { paged: true, limit: 2, ...(cursor ? { cursor } : {}) } });
+      const data = JSON.parse(textFromResult(response));
+      expect(Buffer.byteLength(textFromResult(response))).toBeLessThan(18_000);
+      expect(data.total).toBe(7);
+      seen.push(...data.cards.map((card: { id: string }) => card.id));
+      omitted ||= data.cards.some((card: { detailOmitted?: boolean }) => card.detailOmitted);
+      if (data.complete) { expect(data.nextCursor).toBeNull(); break; }
+      expect(data.nextCursor).not.toBe(cursor);
+      cursor = data.nextCursor;
+    }
+    expect(seen).toEqual(expected);
+    expect(omitted).toBe(true);
+    expect(getAllCards(tasksDir).some(card => card.description.length === 30_000)).toBe(true);
+  });
+
+  it('requires verified owner and CAS for reversible archive without completing review', async () => {
+    await client.close(); await server.close();
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    server = createKanbanMcpServer('work', { allowConfirmedOwnerCommands: true });
+    client = new Client({ name: 'archive-owner-test', version: '1' });
+    await server.connect(st); await client.connect(ct);
+    const card = createCard('Archive fixture', 'preserved', 'review', 'medium', [], 'alpha', [], tasksDir);
+    updateCard(card.id, { owner: 'nikita', needsReview: true, requiresApprovalFrom: ['oleg'] }, card.version, tasksDir);
+    const before = findCardById(card.id, tasksDir)!;
+    const command = { mode: 'edit', cardId: card.id, column: 'archived', expectedVersion: before.version, ownerCommandConfirmed: true };
+    for (const bad of [{ ...command, expectedVersion: undefined }, { ...command, expectedVersion: before.version - 1 },
+      { ...command, ownerCommandConfirmed: false }, { ...command, title: 'mixed' }]) {
+      expect((await client.callTool({ name: 'kanban.change', arguments: bad })).isError).toBe(true);
+      expect(findCardById(card.id, tasksDir)).toEqual(before);
+    }
+    const archivedResult = await client.callTool({ name: 'kanban.change', arguments: command });
+    expect(archivedResult.isError, textFromResult(archivedResult)).not.toBe(true);
+    const archived = findCardById(card.id, tasksDir)!;
+    expect(archived).toMatchObject({ column: 'archived', needsReview: true, requiresApprovalFrom: ['oleg'], description: 'preserved' });
+    expect(archived.completionEvidence).toEqual(before.completionEvidence);
+    const restore = { ...command, expectedVersion: archived.version, column: 'review' };
+    expect((await client.callTool({ name: 'kanban.change', arguments: { ...restore, column: 'done' } })).isError).toBe(true);
+    expect((await client.callTool({ name: 'kanban.change', arguments: restore })).isError).not.toBe(true);
+    const restored = findCardById(card.id, tasksDir)!;
+    expect(restored).toMatchObject({ column: before.column, needsReview: before.needsReview,
+      requiresApprovalFrom: before.requiresApprovalFrom, completionEvidence: before.completionEvidence });
+    expect((restored.approvalEvidence ?? []).map(item => item.type)).toEqual(['owner_archived', 'owner_restored']);
+  });
+
+  it('uses exact signed owner write scope for archive without trusting model flags', async () => {
+    await client.close(); await server.close();
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    server = createKanbanMcpServer('work', {
+      allowInternalTeamCommands: true, requireExManagerWriteScope: true,
+      verifyExManagerWriteScope: createTodoMcpWriteScopeVerifier(publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64url'))!,
+    });
+    client = new Client({ name: 'signed-archive-test', version: '1' });
+    await server.connect(st); await client.connect(ct);
+    const card = createCard('Signed archive', '', 'review', 'medium', [], 'alpha', [], tasksDir);
+    updateCard(card.id, { owner: 'nikita', needsReview: true }, card.version, tasksDir);
+    const before = findCardById(card.id, tasksDir)!;
+    const args = { mode: 'edit', cardId: card.id, column: 'archived', expectedVersion: before.version };
+    const claims: TodoMcpWriteScopeClaims = { v: 1, purpose: 'todo-board-mcp-write', userId: 'owner-id',
+      tool: 'kanban.change', argsSha256: scopedArgsHash(args), projects: [], owner: true,
+      issuedAtMs: Date.now(), expiresAtMs: Date.now() + 60_000 };
+    const envelope = signTodoWriteScope(privateKey, claims);
+    expect((await client.callTool({ name: 'kanban.change', arguments: {
+      ...args, exmanagerScope: signTodoWriteScope(privateKey, { ...claims, owner: false, projects: ['alpha'] }),
+    } })).isError).toBe(true);
+    expect((await client.callTool({ name: 'kanban.change', arguments: {
+      ...args, column: 'done', exmanagerScope: envelope,
+    } })).isError).toBe(true);
+    const result = await client.callTool({ name: 'kanban.change', arguments: { ...args, exmanagerScope: envelope } });
+    expect(result.isError, textFromResult(result)).not.toBe(true);
+    expect(findCardById(card.id, tasksDir)).toMatchObject({ column: 'archived', needsReview: true });
+  });
+
   it('redirects MCP DONE and persists review evidence instead of trusting caller evidence', async () => {
     const card = createCard('MCP completion', '', 'in-progress', 'medium', [], 'alpha', [], tasksDir);
 

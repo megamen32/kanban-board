@@ -1,0 +1,32 @@
+{
+  "id": "KONTUR-LATE-SAVE-20261108",
+  "severity": "P2",
+  "status": "fixed-validated",
+  "title": "Late save A closes a newer card B dialog",
+  "base": "5ce4c7855b0b4549b8925159701f63d10cfa7c05",
+  "reproduction": [
+    "Use isolated synthetic qa-a and qa-b records with a delayed onUpdate callback.",
+    "Open A, click Save, dismiss A, open B before save A resolves.",
+    "A persists successfully, then its stale onOpenChange(false) dismisses B."
+  ],
+  "expected": "Save A must complete with the original CAS; stale UI callbacks must not close or mutate the newer dialog.",
+  "fix": "Scope async UI callbacks to one open card generation; invalidate on close, card change, and unmount.",
+  "verification": "Hydrated React/Radix via actual CDP clicks on loopback fixtures; no production data or authenticated server owner transition used.",
+  "related_path": "ResultVerification late onSaved had the same baseline defect and now uses the same lifetime guard with card-keyed remount.",
+  "checks": [
+    "764 tests passed in 91 suites",
+    "ESLint passed for all four changed TypeScript files",
+    "Next production webpack build including TypeScript passed",
+    "git diff --check passed"
+  ],
+  "browser_results": [
+    "CDP Save A with 30-second delay, dismiss A, open B: A saved v2 with expectedVersion1; B stayed open v1; no stale close callback.",
+    "CDP owner close A with 30-second delay, dismiss A, open B: fixture policy completed A done/v2; B stayed open with no stale saved, refresh or close callback.",
+    "Owner close 403 and409 responses: A stayed open todo/v1 and showed the appropriate error.",
+    "CDP result verification A submit followed by explicit fixture parent navigation to B before delayed response: A completed done/v2; B stayed open with no stale saved, refresh or close callback."
+  ],
+  "limitations": [
+    "Browser acceptance used genuine React/Radix and production pure transition policies with synthetic qa-a/qa-b/qa-owner fixtures on loopback. It did not test authenticated Next API owner transitions, persistent storage or production deployment.",
+    "Hydrated mobile viewport stability not established; static390px layout was verified in the parent UI change."
+  ]
+}

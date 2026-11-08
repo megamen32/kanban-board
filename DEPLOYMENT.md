@@ -65,3 +65,85 @@ It is not the active shared work path while `KANBAN_SCOPE_ROOT=/app/data/scopes`
 Do not remove legacy mounts without auditing their callers. See `AUTH.md` for
 authentication and the current scope behavior, and `CODE_DATA_SPLIT.md` for
 code/data ownership.
+
+## Prepared fenced Compose entrypoint (not yet live-accepted)
+
+`scripts/release-todo.py` composes the existing three launch files with a persistent content-addressed
+image-only override. It never builds or pulls and requires immutable local image
+IDs, source revision labels, and a candidate admitted by Herder's existing
+`ReleaseGate.candidate_descends_from` (published main and ancestry).
+
+Before invoking it, independently verify the running owner-fleet authority's
+hostname, effective HOME/ledger override, canonical existing ledger and installed
+release gate directory. Acquire the existing project lease using the documented
+Herder operator CLI, for project `/home/roomhacker/excode/.git` and deployment target
+`{"fleetDir":"/home/roomhacker/services/kanban-board","unit":"kanban-board-kanban-1"}`.
+Keep the returned proof private (0600), renew during preparation, and release it
+in the operator's finally path. Do not create a ledger or use the separate root
+MCP child's authority. The script does not acquire, renew or release leases.
+
+Arguments: `--proof`, `--ledger`, `--release-gate-dir`, `--expected-image`,
+`--expected-revision`, `--candidate-image`, `--candidate-revision`. All are required.
+Build the candidate separately from reviewed source before entering this short
+release window; preserve the previous image for explicitly authorized rollback.
+
+The Docker endpoint is fixed to unix:///var/run/docker.sock and Compose project
+name to kanban-board. Docker/Compose environment overrides are removed from
+subprocesses. Emergency unmerged rollout environment is rejected. Dependencies
+are not started (--no-deps).
+
+The existing Herder gate holds project and target OS locks for the entire change.
+Immediately before Compose it checks token/fence/expiry, compares the current
+container image and source label to the operator's expected revision, and checks
+the fence again. A cooperative release must use this same authority and target.
+Direct Docker writers cannot be made transactional by an advisory release lock;
+resolve other active writers before execution.
+
+After Compose, verify exact installed image/revision and loopback HTTP health.
+A successful receipt explicitly leaves user-path acceptance pending. Perform
+separate authenticated UI checks before calling the feature complete. Any failure
+or uncertain command stops without retry or automatic rollback; inspect live
+state first. This preparation does not override pending publication permissions
+or authorize live deployment by itself.
+
+Unit checks: `python3 -m unittest discover -s scripts -p test_release_todo.py`.
+
+The image override is retained under the deployment project's release-images
+directory after success or uncertain failure, so the container's config_files
+label never references a deleted temporary file. Subsequent maintenance must
+include the exact retained image override recorded by the current container,
+rather than reverting to the historical three-file image tag. Previous manifests
+are retained for explicit rollback. No generic desired-state pointer is inferred
+after an uncertain command.
+
+Compose files, optional .env and runtime.env are hashed (never printed) before
+admission and checked again immediately before up. This detects drift but does
+not eliminate a non-cooperating writer's check/use race; all deployment writers
+must share the same authority and lock. The operator must still verify the
+installed release-gate code before use; an arbitrary supplied Python directory
+is not a trust proof.
+
+### Gate provenance and concurrency evidence (2026-11-08)
+
+Read-only inspection found owner-fleet PID4151979 running release source
+3b2cf4d64df8043993847947e160dd75d99ed471. Its packaged runtime does not contain
+release_gate.py. The existing operator source files are clean and byte-identical
+to those files at that exact runtime Git revision:
+
+- deploy/fleet/release_gate.py SHA256 aa683d7e355ef9e135a087e8eb329881d9debfad6d6a61c56f171e11e6a79a1b
+- deploy/fleet/main_guard.py SHA256 3ab2817fa53e386db2cf2c4f48fa3d8c97d3e697d4d8a15c8e0bbe775908e354
+
+The source root is /home/roomhacker/agents-projects/agent-herder. This establishes
+source provenance, not an installed Python runtime claim. Recheck these bytes
+and current runtime authority before use; never import arbitrary replacement code.
+Eleven existing isolated Herder gate tests passed: parallel exclusion, shared
+unit lock across project keys, successor fencing, expiry/foreign proofs, revision
+comparison and local Git ancestry. Thirteen Todo wrapper tests passed, including
+expiry during input hashing and proxy-free loopback health.
+
+Before live clearance still verify: all active release writers honor this exact
+project/target lock; no direct Docker writer is in flight; current Compose and env
+inputs match the approved snapshot; proof authority and runtime have not moved.
+Hash checks and advisory locks do not prevent a non-cooperating writer from
+changing files between validation and Compose. No live concurrency experiment
+or production rollout was performed for these tests.
