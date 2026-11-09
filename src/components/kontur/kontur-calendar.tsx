@@ -12,7 +12,7 @@ import {
 
 export { formatStamp, moscowDay } from './kontur-calendar-model';
 
-const kindLabel = (kind: CalendarKind) => kind === 'deadline' ? 'Срок' : 'План';
+const kindLabel = (kind: CalendarKind) => kind === 'deadline' ? 'Готово до' : 'Когда заняться';
 
 function DateIssue({ fields }: { fields: CalendarKind[] | undefined }) {
   return fields?.length ? <small className="k-calendar-invalid">
@@ -83,13 +83,13 @@ export function KonturCalendar({ cards, onOpen }: { cards: KanbanCard[]; onOpen:
 
   const attention = <div className="k-calendar-attention">
     {model.overdue.length > 0 && <section id="calendar-overdue" className="k-panel" tabIndex={-1} aria-labelledby="calendar-overdue-title">
-      <div className="k-panel-head"><div><h2 id="calendar-overdue-title">Просрочено</h2><p>Незавершённые задачи с истёкшим сроком</p></div><span className="k-count">{model.overdue.length}</span></div>
+      <div className="k-panel-head"><div><h2 id="calendar-overdue-title">Просрочено</h2><p>Незавершённые задачи с прошедшей датой готовности</p></div><span className="k-count">{model.overdue.length}</span></div>
       {model.overdue.slice(0, overdueLimit).map(entry => eventRow(entry, true))}
       {model.overdue.length > overdueLimit && <button type="button" className="k-load-more" onClick={() => setOverdueLimit(value => value + 24)}>Показать ещё просроченные · осталось {model.overdue.length - overdueLimit}</button>}
     </section>}
     <section id="calendar-undated" className="k-panel k-undated" tabIndex={-1} aria-labelledby="calendar-undated-title">
-      <div className="k-panel-head"><div><h2 id="calendar-undated-title">Без даты</h2><p>Срок и время выполнения неизвестны</p></div><span className="k-count">{model.undated.length}</span></div>
-      <p className="k-section-note">Открой задачу, чтобы задать срок или план выполнения. Дата создания и номер недели не заменяют выбранный день.</p>
+      <div className="k-panel-head"><div><h2 id="calendar-undated-title">Без даты</h2><p>Не задано ни «Готово до», ни «Когда заняться»</p></div><span className="k-count">{model.undated.length}</span></div>
+      <p className="k-section-note">Открой задачу, чтобы заполнить «Готово до» или «Когда заняться».  Дата создания и номер недели не заменяют выбранный день.</p>
       {model.undated.slice(0, undatedLimit).map(card => {
         const week = calendarWeekLabel(card.week);
         return <button type="button" key={card.id} className="k-undated-row" onClick={() => onOpen(card)} aria-label={`Задать дату: ${card.title}`}>
@@ -100,7 +100,7 @@ export function KonturCalendar({ cards, onOpen }: { cards: KanbanCard[]; onOpen:
           </span><ArrowUpRight size={15} aria-hidden="true" />
         </button>;
       })}
-      {!model.undated.length && <p className="k-section-note">{cards.length ? 'У всех задач по этим фильтрам есть срок или план выполнения.' : 'По текущим фильтрам задач нет.'}</p>}
+      {!model.undated.length && <p className="k-section-note">{cards.length ? 'У всех задач по этим фильтрам заполнено «Готово до» или «Когда заняться».' : 'По текущим фильтрам задач нет.'}</p>}
       {model.undated.length > undatedLimit && <button type="button" className="k-load-more" onClick={() => setUndatedLimit(value => value + 24)}>Показать ещё без даты · осталось {model.undated.length - undatedLimit}</button>}
     </section>
   </div>;
@@ -118,7 +118,7 @@ export function KonturCalendar({ cards, onOpen }: { cards: KanbanCard[]; onOpen:
         <button type="button" aria-pressed={mode === 'agenda'} onClick={() => setMode('agenda')}><List size={15} />Расписание</button>
       </div>
     </div>
-    <div className="k-notice"><Clock3 size={16} /><p>Сроки и планы из карточек · Москва, UTC+3. Связь с Keeper настраивается в карточке; события из Keeper сюда автоматически не загружаются.</p></div>
+    <div className="k-notice"><Clock3 size={16} /><p>Поля «Готово до» и «Когда заняться» из карточек · Москва, UTC+3. Связь с Keeper настраивается в карточке; события из Keeper сюда автоматически не загружаются.</p></div>
     <div className="k-calendar-context" aria-label="Состояние календаря">
       <span>С датами: <strong>{model.datedCardCount}</strong> · всего задач: {cards.length}</span>
       <button type="button" className="k-button k-button-small" disabled={!model.undated.length} onClick={() => focusQueue('calendar-undated')}>Без даты · {model.undated.length}</button>
@@ -154,10 +154,10 @@ export function KonturCalendar({ cards, onOpen }: { cards: KanbanCard[]; onOpen:
       </div>
       <aside className="k-panel k-day-agenda" aria-label={`Задачи на ${calendarDayLabel(selectedDay)}`}>
         <div className="k-panel-head"><div><span className="k-eyebrow">ВЫБРАННЫЙ ДЕНЬ</span><h2>{calendarDayLabel(selectedDay)}</h2><p>Задач: {selectedTaskCount} · дат: {selectedEntries.length}</p></div></div>
-        {selectedEntries.length ? selectedEntries.map(entry => eventRow(entry)) : <div className="k-empty k-empty-small"><CalendarDays size={28} /><h3>На этот день дат нет</h3><p>Срок и план выполнения можно задать в карточке. Недатированные задачи остаются в открытой очереди.</p></div>}
+        {selectedEntries.length ? selectedEntries.map(entry => eventRow(entry)) : <div className="k-empty k-empty-small"><CalendarDays size={28} /><h3>На этот день дат нет</h3><p>«Готово до» и «Когда заняться» задаются в карточке. Недатированные задачи остаются в открытой очереди.</p></div>}
       </aside>
     </div> : <div className="k-panel k-agenda-list">
-      <div className="k-panel-head"><div><h2>Предстоящие даты</h2><p>Сроки и планы по текущим фильтрам, по Москве</p></div><span className="k-count">{model.upcoming.length}</span></div>
+      <div className="k-panel-head"><div><h2>Предстоящие даты</h2><p>Поля «Готово до» и «Когда заняться» по текущим фильтрам, по Москве</p></div><span className="k-count">{model.upcoming.length}</span></div>
       {model.upcoming.length ? model.upcoming.slice(0, upcomingLimit).map(entry => eventRow(entry, true)) : <p className="k-section-note">Предстоящие даты неизвестны. Прошедшие даты и задачи без даты сохранены ниже.</p>}
       {model.upcoming.length > upcomingLimit && <button type="button" className="k-load-more" onClick={() => setUpcomingLimit(value => value + 40)}>Показать ещё предстоящие · осталось {model.upcoming.length - upcomingLimit}</button>}
       <div className="k-panel-head"><div><h2>Прошедшие даты</h2><p>От недавних к ранним. Прошедший план не означает завершение задачи.</p></div><span className="k-count">{model.past.length}</span></div>

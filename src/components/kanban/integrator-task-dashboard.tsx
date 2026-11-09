@@ -923,7 +923,7 @@ export function IntegratorTaskDashboard({ cards, onOpen, onRefresh, canAssignRev
 
                   <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                     {nextStep && <p><span className="text-muted-foreground">Следующий шаг:</span> {nextStep}</p>}
-                    {card.dueAt && <p><span className="text-muted-foreground">Срок задачи:</span> {formatDate(card.dueAt)}</p>}
+                    {card.dueAt && <p><span className="text-muted-foreground">Готово до:</span> {formatDate(card.dueAt)}</p>}
                     {sourceUrl && <a className="inline-flex items-center gap-1 underline" href={sourceUrl} target="_blank" rel="noreferrer">Источник <ArrowUpRight aria-hidden className="h-3.5 w-3.5" /></a>}
                     {(card.resultHistory?.length ?? 0) > 0 && <button type="button" className="underline" onClick={() => onOpen(card)}>Результат и история проверки</button>}
                   </div>

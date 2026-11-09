@@ -65,7 +65,7 @@ export function PlanningCardList({ cards, roles = [], onOpen, empty }: CardListP
           <div className="flex shrink-0 flex-col items-end gap-1">
             <Badge variant="outline" className="text-[10px]">{planningStatusLabel(card.column)}</Badge>
             {(card.urgent || card.priority === 'critical') && <Badge variant="destructive" className="text-[10px]">Срочно</Badge>}
-            {card.dueAt && <span className="text-[10px] text-muted-foreground">Срок: {dueDateLabel(card.dueAt)}</span>}
+            {card.dueAt && <span className="text-[10px] text-muted-foreground">Готово до: {dueDateLabel(card.dueAt)}</span>}
           </div>
         </article>
       ))}

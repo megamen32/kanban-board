@@ -15,6 +15,7 @@ import { CardEditDialog } from './card-edit-dialog';
 import type { KanbanCard } from '@/lib/kanban/types';
 
 const source = readFileSync(new URL('./card-edit-dialog.tsx', import.meta.url), 'utf8');
+const addSource = readFileSync(new URL('./add-card-dialog.tsx', import.meta.url), 'utf8');
 const empty = { id: 'synthetic-empty', title: 'Проверить расчёт', description: '', assignees: [], dueAt: undefined, nextAction: null, column: 'todo' as const };
 
 describe('simple card reading layout', () => {
@@ -40,14 +41,14 @@ describe('simple card reading layout', () => {
   test('does not advertise absent assignees or deadlines as repeated warnings', () => {
     const html = renderToStaticMarkup(<CardBriefPanel card={empty} />);
     expect(html).not.toContain('Исполнитель:');
-    expect(html).not.toContain('Срок:');
+    expect(html).not.toContain('Готово до:');
     expect(html).not.toContain('Не назначен');
     expect(html).not.toContain('Не указан');
   });
   test('still displays confirmed assignments, deadlines and next actions', () => {
     const html = renderToStaticMarkup(<CardBriefPanel card={{...empty, assignees:['test-person'], dueAt:'2026-12-01T12:00:00Z',nextAction:'Сверить итог'}} />);
     expect(html).toContain('test-person');
-    expect(html).toContain('Срок:');
+    expect(html).toContain('Готово до:');
     expect(html).toContain('Сверить итог');
   });
 });
@@ -68,8 +69,24 @@ describe('rendered card contents', () => {
     const html = renderToStaticMarkup(<CardEditDialog card={{...card, assignees:['test-person'], dueAt:'2026-12-01T12:00:00Z'}} open onOpenChange={() => undefined} />);
     const header = html.slice(0, html.indexOf('</header>'));
     expect(header).toContain('Исполнитель: test-person');
-    expect(header).toContain('Срок:');
+    expect(header).toContain('Готово до:');
   });
+  test('uses one clear language for deadline and planned start', () => {
+    const html = renderToStaticMarkup(<CardEditDialog card={{...card,
+      dueAt:'2026-12-01T12:00:00Z', scheduledAt:'2026-11-30T09:00:00Z'}} open onOpenChange={() => undefined} />);
+    const header = html.slice(0, html.indexOf('</header>'));
+    expect(header).toContain('Готово до:');
+    expect(header).toContain('Когда заняться:');
+    expect(html).toContain('Когда заняться (необязательно)');
+    expect(html).toContain('План начала работы, не срок готовности.');
+    expect(source).toContain('>Дополнительно</summary>');
+    expect(source).not.toContain('Планировать на дату');
+    expect(source).not.toContain('Планирование и дополнительные настройки');
+    expect(addSource).toContain('>Готово до</label>');
+    expect(addSource).toContain('Когда заняться (необязательно)');
+    expect(addSource).not.toContain('Планировать на дату');
+  });
+
   test('preserves legacy single-assignee display without rewriting assignments', () => {
     const html = renderToStaticMarkup(<CardEditDialog card={{...card, assignees:[], assignee:'legacy-person'}} open onOpenChange={() => undefined} />);
     expect(html.slice(0, html.indexOf('</header>'))).toContain('Исполнитель: legacy-person');
