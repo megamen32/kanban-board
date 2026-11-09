@@ -15,7 +15,7 @@ export function ActionCard({card, reason, action = 'Открыть карточ�
     <h3>{facts.nextStep !== UNKNOWN ? facts.nextStep : card.title}</h3>
     {facts.nextStep !== UNKNOWN && <p>{card.title}</p>}
     <p>{facts.project} · Исполнитель: {assignees || (card.executor === 'dot' ? 'dot' : UNKNOWN)}</p>
-    {card.dueAt && <p>Срок: {formatStamp(card.dueAt)}</p>}
+    {card.dueAt && <p>Готово до: {formatStamp(card.dueAt)}</p>}
     <p><strong>Почему здесь:</strong> {reason}</p>
     <small>Карточка обновлена: {formatStamp(card.updated)}</small>
     <div style={{marginTop: 10}}><button type="button" className="k-button k-button-small" onClick={() => onOpen(card)}>{action}</button></div>

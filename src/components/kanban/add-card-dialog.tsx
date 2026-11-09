@@ -273,7 +273,7 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
             {advancedOpen && (
               <div id="create-advanced-fields" className="space-y-4 rounded-md border p-3">
                 <div>
-                  <label htmlFor="create-due" className="mb-1 block text-xs text-muted-foreground">Срок</label>
+                  <label htmlFor="create-due" className="mb-1 block text-xs text-muted-foreground">Готово до</label>
                   <Input id="create-due" type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} />
                 </div>
 
@@ -316,13 +316,13 @@ export function AddCardDialog({ open, onOpenChange, defaultColumn, defaultProjec
                 </div>
 
                 <div className="space-y-3 rounded-md border p-3">
-                  <label className="text-sm font-medium">Планирование</label>
+                  <label className="text-sm font-medium">Организация работы</label>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <label className="text-xs text-muted-foreground">Тип<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.type} onChange={e => setPlanning({ ...planning, type: e.target.value as PlanningMetadataForm['type'] })}><option value="action">Действие</option><option value="outcome">Результат</option></select></label>
                     <label className="text-xs text-muted-foreground">Роль<RolePicker roles={roles} value={planning.role} onChange={role => setPlanning({ ...planning, role })} /></label>
                   </div>
                   <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><input type="checkbox" checked={planning.important} onChange={e => setPlanning({ ...planning, important: e.target.checked })} /> Важно</label><label className="flex items-center gap-2"><input type="checkbox" checked={planning.urgent} onChange={e => setPlanning({ ...planning, urgent: e.target.checked })} /> Срочно</label></div>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="text-xs text-muted-foreground">Планировать на дату<Input className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="text-xs text-muted-foreground">Когда заняться (необязательно)<Input aria-label="Когда заняться" aria-describedby="create-scheduled-at-hint" className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /><span id="create-scheduled-at-hint" className="mt-1 block text-[11px] leading-snug">План начала работы, не срок готовности.</span></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
                   <Input placeholder="Ждём от (ID через запятую)" value={planning.waitingFor} onChange={e => setPlanning({ ...planning, waitingFor: e.target.value })} />
                   <Input placeholder="Требует согласования от (ID через запятую)" value={planning.requiresApprovalFrom} onChange={e => setPlanning({ ...planning, requiresApprovalFrom: e.target.value })} />
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

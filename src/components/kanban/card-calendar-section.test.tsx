@@ -64,7 +64,7 @@ describe('CardCalendarSection (honest states, no invented connection)', () => {
       <CardCalendarSection {...base} dueAtUnsaved status={{ enabled: true, connected: false }} />,
     );
     expect(html).toContain('не сохранена');
-    expect(html).toContain('сохранённый срок');
+    expect(html).toContain('сохранённая дата');
     const savedHtml = renderToStaticMarkup(
       <CardCalendarSection {...base} status={{ enabled: true, connected: false }} />,
     );

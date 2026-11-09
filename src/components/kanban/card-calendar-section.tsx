@@ -84,7 +84,7 @@ export function CardCalendarSection({ dueAt, project, status, durationMinutes, o
       </div>
       {dueAtUnsaved && (
         <p className="text-xs text-amber-600" role="note">
-          Срок изменён, но карточка не сохранена — в календарь уйдёт сохранённый срок. Сначала сохраните карточку.
+          Дата «Готово до» изменена, но карточка не сохранена — в календарь уйдёт сохранённая дата. Сначала сохраните карточку.
         </p>
       )}
       {notConnected && (
