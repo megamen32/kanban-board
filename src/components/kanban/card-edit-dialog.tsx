@@ -402,8 +402,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             <span>{project}</span>
             <Badge variant="outline">{DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column}</Badge>
             {displayedAssignees.length > 0 && <span>Исполнитель: {displayedAssignees.map(person => taskPersonLabel(person)).join(', ')}</span>}
-            {dueAt && Number.isFinite(Date.parse(dueAt)) && <span>Готово до: {new Date(dueAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
-            {planning.scheduledAt && Number.isFinite(Date.parse(planning.scheduledAt)) && <span>Когда заняться: {new Date(planning.scheduledAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
+            {dueAt && Number.isFinite(Date.parse(dueAt)) && <span>Дедлайн: {new Date(dueAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
+            {planning.scheduledAt && Number.isFinite(Date.parse(planning.scheduledAt)) && <span>Когда начать: {new Date(planning.scheduledAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
             {card.needsReview && <Badge>Требуется приёмка</Badge>}
           </div>
         </DialogHeader>
@@ -459,8 +459,8 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               </label>
             )}
           </div>
-          <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Готово до (необязательно)
-            <Input aria-label="Готово до" aria-describedby="card-date-timezone" type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} className="w-full min-w-0" />
+          <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Дедлайн (необязательно)
+            <Input aria-label="Дедлайн" aria-describedby="card-date-timezone" type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} className="w-full min-w-0" />
           </label>
           <p id="card-date-timezone" className="col-span-1 sm:col-span-2 text-xs text-muted-foreground">Время вводится в часовом поясе браузера: {Intl.DateTimeFormat().resolvedOptions().timeZone || 'локальный'}. Календарь Контура показывает московское время.</p>
           <CardCalendarSection
@@ -495,7 +495,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               <label className="text-xs text-muted-foreground">Роль<RolePicker roles={roles} value={planning.role} onChange={role => setPlanning({ ...planning, role })} /></label>
             </div>
             <div className="flex flex-wrap gap-4 text-sm"><label className="flex items-center gap-2"><Checkbox checked={planning.important} onCheckedChange={value => setPlanning({ ...planning, important: value === true })} /> Важно</label><label className="flex items-center gap-2"><Checkbox checked={planning.urgent} onCheckedChange={value => setPlanning({ ...planning, urgent: value === true })} /> Срочно</label></div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="text-xs text-muted-foreground">Когда заняться (необязательно)<Input aria-label="Когда заняться" aria-describedby="card-scheduled-at-hint" className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /><span id="card-scheduled-at-hint" className="mt-1 block text-[11px] leading-snug">План начала работы, не срок готовности.</span></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="text-xs text-muted-foreground">Когда начать (необязательно)<Input aria-label="Когда начать" aria-describedby="card-scheduled-at-hint" className="mt-1" type="datetime-local" value={planning.scheduledAt} onChange={e => setPlanning({ ...planning, scheduledAt: e.target.value })} /><span id="card-scheduled-at-hint" className="mt-1 block text-[11px] leading-snug">План начала работы, не дедлайн.</span></label><label className="text-xs text-muted-foreground">Ранг Today<select className="mt-1 h-9 w-full rounded-md border bg-transparent px-2 text-sm" value={planning.todayRank} onChange={e => setPlanning({ ...planning, todayRank: e.target.value })}><option value="">Нет</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></div>
             <Input placeholder="Ждём от (ID через запятую)" value={planning.waitingFor} onChange={e => setPlanning({ ...planning, waitingFor: e.target.value })} />
             <Input placeholder="Требует согласования от (ID через запятую)" value={planning.requiresApprovalFrom} onChange={e => setPlanning({ ...planning, requiresApprovalFrom: e.target.value })} />
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

@@ -39,8 +39,8 @@ describe('calendar actionable empty states', () => {
 
   it('labels a real plan and deadline separately while counting the task only once', () => {
     const html = render([card('both', { scheduledAt: '2026-11-07T13:00:00Z', dueAt: '2026-11-07T15:00:00Z' })]);
-    expect(html).toContain('data-kind="plan">Когда заняться');
-    expect(html).toContain('data-kind="deadline">Готово до');
+    expect(html).toContain('data-kind="plan">Когда начать');
+    expect(html).toContain('data-kind="deadline">Дедлайн');
     expect(html).toContain('С датами: <strong>1</strong> · всего задач: 1');
     expect(html).toContain('Задач: 1. Дат: 2');
     expect(html).toContain('Задач: 1 · дат: 2');
@@ -51,7 +51,7 @@ describe('calendar actionable empty states', () => {
   it('initially shows a future plan in the current month when today has no dates', () => {
     const html = render([card('future-plan', { scheduledAt: '2026-11-12T09:00:00+03:00' })]);
     expect(html).toContain('class="k-calendar-event"');
-    expect(html).toContain('aria-label="Открыть задачу: Синтетическая задача future-plan. Когда заняться:');
+    expect(html).toContain('aria-label="Открыть задачу: Синтетическая задача future-plan. Когда начать:');
     expect(html).toContain('aria-label="Задачи на четверг, 12 ноября"');
     expect(html).not.toContain('На этот день дат нет');
   });
@@ -70,8 +70,8 @@ describe('calendar actionable empty states', () => {
     const html = render([card('invalid', { dueAt: '2026-02-30' }), card('mixed', { dueAt: 'not-a-date', scheduledAt: '2026-11-07T16:00:00Z' })]);
     expect(html).toContain('Задач с нераспознанной датой: 2');
     expect(html).toContain('Задать дату: Синтетическая задача invalid');
-    expect(html).toContain('Готово до: неизвестно');
-    expect(html).toContain('Открыть задачу: Синтетическая задача mixed. Когда заняться:');
+    expect(html).toContain('Дедлайн: неизвестно');
+    expect(html).toContain('Открыть задачу: Синтетическая задача mixed. Когда начать:');
     expect(html).not.toContain('not-a-date');
     expect(html).toContain('С датами: <strong>1</strong> · всего задач: 2');
   });

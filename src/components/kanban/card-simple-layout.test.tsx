@@ -41,14 +41,14 @@ describe('simple card reading layout', () => {
   test('does not advertise absent assignees or deadlines as repeated warnings', () => {
     const html = renderToStaticMarkup(<CardBriefPanel card={empty} />);
     expect(html).not.toContain('Исполнитель:');
-    expect(html).not.toContain('Готово до:');
+    expect(html).not.toContain('Дедлайн:');
     expect(html).not.toContain('Не назначен');
     expect(html).not.toContain('Не указан');
   });
   test('still displays confirmed assignments, deadlines and next actions', () => {
     const html = renderToStaticMarkup(<CardBriefPanel card={{...empty, assignees:['test-person'], dueAt:'2026-12-01T12:00:00Z',nextAction:'Сверить итог'}} />);
     expect(html).toContain('test-person');
-    expect(html).toContain('Готово до:');
+    expect(html).toContain('Дедлайн:');
     expect(html).toContain('Сверить итог');
   });
 });
@@ -69,21 +69,21 @@ describe('rendered card contents', () => {
     const html = renderToStaticMarkup(<CardEditDialog card={{...card, assignees:['test-person'], dueAt:'2026-12-01T12:00:00Z'}} open onOpenChange={() => undefined} />);
     const header = html.slice(0, html.indexOf('</header>'));
     expect(header).toContain('Исполнитель: test-person');
-    expect(header).toContain('Готово до:');
+    expect(header).toContain('Дедлайн:');
   });
   test('uses one clear language for deadline and planned start', () => {
     const html = renderToStaticMarkup(<CardEditDialog card={{...card,
       dueAt:'2026-12-01T12:00:00Z', scheduledAt:'2026-11-30T09:00:00Z'}} open onOpenChange={() => undefined} />);
     const header = html.slice(0, html.indexOf('</header>'));
-    expect(header).toContain('Готово до:');
-    expect(header).toContain('Когда заняться:');
-    expect(html).toContain('Когда заняться (необязательно)');
-    expect(html).toContain('План начала работы, не срок готовности.');
+    expect(header).toContain('Дедлайн:');
+    expect(header).toContain('Когда начать:');
+    expect(html).toContain('Когда начать (необязательно)');
+    expect(html).toContain('План начала работы, не дедлайн.');
     expect(source).toContain('>Дополнительно</summary>');
     expect(source).not.toContain('Планировать на дату');
     expect(source).not.toContain('Планирование и дополнительные настройки');
-    expect(addSource).toContain('>Готово до</label>');
-    expect(addSource).toContain('Когда заняться (необязательно)');
+    expect(addSource).toContain('>Дедлайн</label>');
+    expect(addSource).toContain('Когда начать (необязательно)');
     expect(addSource).not.toContain('Планировать на дату');
   });
 
