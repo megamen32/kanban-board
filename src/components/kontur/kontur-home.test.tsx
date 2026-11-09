@@ -17,7 +17,7 @@ describe('simple home and project plan', () => {
     expect(html).toContain('Данные доски загружены: неизвестно');
     expect(html.match(/<details/g)).toHaveLength(2);
     expect(html).not.toContain('<details open');
-    expect(html).not.toContain('Готово до:');
+    expect(html).not.toContain('Дедлайн:');
   });
   it('uses the same card in roadmap and never claims an unknown project goal', () => {
     const html = renderToStaticMarkup(<KonturProjectPlan cards={[card]} project="Fixture" teamLabel="неизвестно" onOpen={()=>{}} onMove={async()=>null} />);
