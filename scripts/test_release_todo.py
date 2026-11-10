@@ -2,6 +2,8 @@ import importlib.util
 import unittest
 import os
 import tempfile
+import subprocess
+from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
 
@@ -34,6 +36,7 @@ class ReleaseTest(unittest.TestCase):
         if "up" in argv:
             if self.failed_up: raise RuntimeError("unknown")
             self.current = NEW
+        if argv[0] == "curl": return "200"
         return ""
     def release(self):
         return m.release(self.gate, OLD, R1, NEW, R2, self.run_command, "/fixture/image.json")
@@ -108,6 +111,71 @@ class ReleaseTest(unittest.TestCase):
         with patch.object(m, "input_hashes", side_effect=hashing):
             with self.assertRaisesRegex(RuntimeError, "expired"): self.release()
         self.no_up()
+    # Fast unit: reset recovery and permanent failure deadline; expected <1s,
+    # maximum 5s using a fake clock. Never invokes Docker or network.
+    def readiness_clock(self):
+        state = [0.0]
+        def sleep(seconds): state[0] += seconds
+        return state, SimpleNamespace(monotonic=lambda: state[0], sleep=sleep)
+
+    def test_startup_reset_then_200_only_rolls_out_once(self):
+        state, clock = self.readiness_clock()
+        original = self.run_command
+        probes = []
+        def run(argv):
+            if argv[0] == "curl":
+                probes.append(argv)
+                if len(probes) == 1:
+                    self.commands.append(argv)
+                    raise subprocess.CalledProcessError(56, argv)
+            return original(argv)
+        self.run_command = run
+        with patch.object(m, "time", clock, create=True):
+            self.assertEqual(self.release()["health"], "http_ok")
+        self.assertEqual(len(probes), 2)
+        self.assertEqual(sum("up" in a for a in self.commands), 1)
+        self.assertEqual(self.current, NEW)
+
+    def test_permanent_failure_deadline_never_redeploys_or_rolls_back(self):
+        state, clock = self.readiness_clock()
+        original = self.run_command
+        probes = []
+        def run(argv):
+            if argv[0] == "curl":
+                self.commands.append(argv); probes.append(argv)
+                state[0] += float(argv[argv.index("--max-time") + 1])
+                raise subprocess.CalledProcessError(28, argv)
+            return original(argv)
+        self.run_command = run
+        with patch.object(m, "time", clock, create=True):
+            with self.assertRaisesRegex(RuntimeError, "readiness_deadline"):
+                self.release()
+        self.assertEqual(state[0], 30)
+        self.assertGreater(len(probes), 1)
+        self.assertEqual(sum("up" in a for a in self.commands), 1)
+        self.assertEqual(self.current, NEW)
+        self.assertFalse(any("down" in a or "restart" in a for a in self.commands))
+
+    def test_redirect_is_not_ready_until_200(self):
+        state, clock = self.readiness_clock()
+        statuses = iter(["302", "200"])
+        with patch.object(m, "time", clock):
+            m.wait_readiness(self.gate, lambda argv: next(statuses))
+        self.assertEqual(state[0], 1)
+
+    def test_expired_lease_stops_health_retries(self):
+        state, clock = self.readiness_clock()
+        probes = []
+        def run(argv):
+            probes.append(argv)
+            self.gate.expire = self.gate.checks + 1
+            raise subprocess.CalledProcessError(56, argv)
+        with patch.object(m, "time", clock):
+            with self.assertRaisesRegex(RuntimeError, "expired"):
+                m.wait_readiness(self.gate, run)
+        self.assertEqual(len(probes), 1)
+        self.assertEqual(state[0], 0)
+
     def test_health_bypasses_proxy(self):
         self.release()
         health = next(a for a in self.commands if a[0] == "curl")

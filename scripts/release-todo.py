@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 import hashlib
+import time
 from pathlib import Path
 
 PROJECT = "/home/roomhacker/excode/.git"
@@ -54,6 +55,33 @@ def durable_override(image, root):
             os.fsync(f.fileno())
     return str(path)
 
+class ReadinessDeadline(RuntimeError):
+    """Rollout was applied; readiness is unconfirmed, requiring reconciliation."""
+
+
+def wait_readiness(gate, run):
+    # Only repeat the read-only health probe, never Compose up or rollback.
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        gate.check()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            status = run(["curl", "--noproxy", "*", "--fail", "--silent", "--show-error",
+                          "--max-time", str(min(5, remaining)), "--output", "/dev/null",
+                          "--write-out", "%{http_code}", "http://127.0.0.1:43327/"])
+        except subprocess.CalledProcessError:
+            status = None
+        gate.check()
+        if status == "200" and time.monotonic() < deadline:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(1, remaining))
+    raise ReadinessDeadline("readiness_deadline; rollout_applied; reconcile_live_before_retry")
+
+
 def release(gate, expected_image, expected_revision, candidate_image, candidate_revision,
             run=command, override=None, input_snapshot=None):
     reject_emergency()
@@ -96,8 +124,7 @@ def release(gate, expected_image, expected_revision, candidate_image, candidate_
             raise RuntimeError("deployed_image_mismatch")
         if image_revision(candidate_image, run) != candidate_revision:
             raise RuntimeError("deployed_revision_mismatch")
-        run(["curl", "--noproxy", "*", "--fail", "--silent", "--show-error", "--max-time", "15",
-             "--output", "/dev/null", "http://127.0.0.1:43327/"])
+        wait_readiness(gate, run)
     return {"image": candidate_image, "revision": candidate_revision,
             "health": "http_ok", "user_path_acceptance": "pending"}
 
@@ -128,6 +155,10 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except ReadinessDeadline:
+        print("todo_readiness_deadline; rollout_applied; inspect_current_runtime_before_retry; "
+              "no_automatic_rollback", file=sys.stderr)
+        sys.exit(1)
     except Exception:
         # No capability or untrusted command output in the console.
         print("todo_release_failed; inspect current runtime before retry", file=sys.stderr)
