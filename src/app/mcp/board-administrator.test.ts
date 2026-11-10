@@ -205,6 +205,21 @@ describe('authenticated GPTAdmin board administrator', () => {
     ]));
   });
 
+  it('preserves completion audit when a metadata edit repeats the unchanged done status', async () => {
+    const { card } = await change({
+      mode: 'new', title: 'Synthetic completed metadata task', project: 'Fixture', column: 'done',
+      completionEvidence: [{ type: 'synthetic-result', result: 'Existing deliverable' }],
+    });
+    const updated = await change({
+      mode: 'edit', cardId: card.id, expectedVersion: card.version,
+      title: 'Synthetic corrected title', column: 'done',
+    });
+    expect(updated.card).toMatchObject({
+      title: 'Synthetic corrected title', column: 'done', completedBy: card.completedBy,
+      completedAt: card.completedAt, completionEvidence: card.completionEvidence,
+    });
+  });
+
   it('retains a newly submitted deliverable when an administrator updates an already completed card', async () => {
     const { card } = await change({
       mode: 'new', title: 'Synthetic completion update', project: 'Fixture', column: 'done',

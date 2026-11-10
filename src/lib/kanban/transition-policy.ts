@@ -443,7 +443,8 @@ function validateDelegatedBoardAdminTransition(
     }
   }
 
-  if (updates.column === 'done') {
+  if (updates.column === 'done'
+      && (before.column !== 'done' || waitingForReview || submittedResults?.length || executorResult !== undefined)) {
     return { kind: 'accepted', patch: {
       ...patch, completedBy: actor, completedAt: decidedAt,
       needsReview: false, requiresApprovalFrom: [], nextAction: null,
