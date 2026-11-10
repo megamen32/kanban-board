@@ -27,6 +27,19 @@ function signedRequest({
 }
 
 describe('Airlock Todo native identity assertion', () => {
+  it('permits exactly GET native login and rejects another method or login subpath', async () => {
+    const login = signedRequest({ path: '/api/auth/airlock/login?next=%2F', project: '' });
+    await expect(verifyAirlockTodoNativeIdentity(login.request, pair.publicKey)).resolves.toMatchObject({
+      method: 'GET', path: '/api/auth/airlock/login?next=%2F', project: '',
+    });
+    for (const options of [
+      { method: 'POST', path: '/api/auth/airlock/login', project: '' },
+      { path: '/api/auth/airlock/login/other', project: '' },
+    ]) {
+      await expect(verifyAirlockTodoNativeIdentity(signedRequest(options).request, pair.publicKey)).rejects.toThrow('native_identity_invalid');
+    }
+  });
+
   it('distinguishes absent identity from a valid signed, exact-request identity', async () => {
     expect(await verifyAirlockTodoNativeIdentity(new Request(`https://todo.example${cardPath}`), pair.publicKey)).toBeNull();
     const { request } = signedRequest();
