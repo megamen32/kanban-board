@@ -1,5 +1,7 @@
 'use client';
 
+import { formatDueAt } from '@/lib/kanban/due-at';
+
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { CalendarClock, GripVertical, Flag, Bot, Clock3 } from 'lucide-react';
@@ -61,7 +63,7 @@ export function KanbanCard({ card, columnId }: Props) {
     if (h < 24) return `${h}ч`;
     return `${Math.floor(h / 24)}д`;
   };
-  const dueLabel = card.dueAt ? new Date(card.dueAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : null;
+  const dueLabel = formatDueAt(card.dueAt, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   const columnAccent: Record<string, { rail: string; status: string; session: string }> = {
     inbox: { rail: 'border-l-slate-400', status: 'border-slate-300 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200', session: 'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/70' },
     todo: { rail: 'border-l-sky-500', status: 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-800 dark:bg-sky-950/60 dark:text-sky-200', session: 'border-sky-200/80 bg-sky-50/70 dark:border-sky-900 dark:bg-sky-950/35' },

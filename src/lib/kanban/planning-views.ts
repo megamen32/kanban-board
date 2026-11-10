@@ -1,3 +1,4 @@
+import { dueAtTimestamp } from './due-at';
 import { ROLE_IDS } from './types';
 import type { KanbanCard, KanbanColumn, RoleId, RoleDefinition } from './types';
 
@@ -53,12 +54,12 @@ export function moscowIsoWeek(value: string | Date): string | null {
 }
 
 /** Compares optional timestamps, placing absent values after explicit values. */
-function compareOptionalTimestamp(left?: string, right?: string): number {
+function compareOptionalTimestamp(left?: string, right?: string, parse = Date.parse): number {
   if (left === right) return 0;
   if (!left) return 1;
   if (!right) return -1;
-  const leftTime = Date.parse(left);
-  const rightTime = Date.parse(right);
+  const leftTime = parse(left);
+  const rightTime = parse(right);
   if (Number.isNaN(leftTime) && Number.isNaN(rightTime)) return left.localeCompare(right);
   if (Number.isNaN(leftTime)) return 1;
   if (Number.isNaN(rightTime)) return -1;
@@ -87,7 +88,7 @@ function compareTodayCards(left: KanbanCard, right: KanbanCard): number {
   if (rank !== 0) return rank;
   const quadrantDifference = quadrant(left) - quadrant(right);
   if (quadrantDifference !== 0) return quadrantDifference;
-  const due = compareOptionalTimestamp(left.dueAt, right.dueAt);
+  const due = compareOptionalTimestamp(left.dueAt, right.dueAt, dueAtTimestamp);
   if (due !== 0) return due;
   return compareStableCards(left, right);
 }
@@ -127,7 +128,7 @@ export function getWeekView(cards: KanbanCard[], now: string | Date = new Date()
       if (rock !== 0) return rock;
       const rank = (left.todayRank ?? Number.POSITIVE_INFINITY) - (right.todayRank ?? Number.POSITIVE_INFINITY);
       if (rank !== 0) return rank;
-      const due = compareOptionalTimestamp(left.dueAt, right.dueAt);
+      const due = compareOptionalTimestamp(left.dueAt, right.dueAt, dueAtTimestamp);
       return due !== 0 ? due : compareStableCards(left, right);
     });
 }

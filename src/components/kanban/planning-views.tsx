@@ -1,5 +1,7 @@
 'use client';
 
+import { formatDueAt } from '@/lib/kanban/due-at';
+
 import { useEffect, useMemo, useState } from 'react';
 import { Check, Circle, Target } from 'lucide-react';
 import { Badge } from '../ui/badge';
@@ -34,8 +36,7 @@ function planningStatusLabel(column: KanbanColumn): string {
 }
 
 function dueDateLabel(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('ru-RU');
+  return formatDueAt(value, { day: '2-digit', month: '2-digit', year: 'numeric' }) ?? value;
 }
 
 interface CardListProps {

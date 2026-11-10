@@ -1,3 +1,4 @@
+import { dueAtTimestamp } from '../kanban/due-at';
 import { getAllCards } from '../kanban/file-store';
 import { tasksDirForScope } from '../auth/data-scope';
 import type { BoardScope } from '@/lib/auth/scopes';
@@ -37,7 +38,7 @@ export async function runDueReminderTick(
         await reconcileQuestionDelivery(card, tasksDir);
       }
       if (!card.dueAt) continue;
-      const dueAt = new Date(card.dueAt).getTime();
+      const dueAt = dueAtTimestamp(card.dueAt);
       if (!Number.isFinite(dueAt) || dueAt > now.getTime() || dueAt < earliest) continue;
       const result = await dispatchDueReminder(scope, card, options.storePath || subscriptionsFilePath());
       dispatched += result.sent;

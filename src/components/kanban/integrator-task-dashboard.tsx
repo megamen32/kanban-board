@@ -1,5 +1,7 @@
 'use client';
 
+import { formatDueAt } from '@/lib/kanban/due-at';
+
 import {ExecutionStatusReads,automaticExecutionSyncAllowed} from '@/lib/kanban/execution-status-reads';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUpRight, CircleHelp, Clock3, Pencil, Play, UserRoundCheck } from 'lucide-react';
@@ -942,6 +944,5 @@ function Summary({ label, value }: { label: string; value: number }) {
 }
 
 function formatDate(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('ru-RU');
+  return formatDueAt(value, { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) ?? value;
 }

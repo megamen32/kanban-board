@@ -1,5 +1,7 @@
 'use client';
 
+import { dueAtTimestamp, formatDueAt } from '@/lib/kanban/due-at';
+
 import { useState, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
@@ -402,7 +404,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             <span>{project}</span>
             <Badge variant="outline">{DEFAULT_COLUMNS.find(item => item.id === card.column)?.title ?? card.column}</Badge>
             {displayedAssignees.length > 0 && <span>Исполнитель: {displayedAssignees.map(person => taskPersonLabel(person)).join(', ')}</span>}
-            {dueAt && Number.isFinite(Date.parse(dueAt)) && <span>Дедлайн: {new Date(dueAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
+            {dueAt && Number.isFinite(dueAtTimestamp(dueAt)) && <span>Дедлайн: {formatDueAt(dueAt, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
             {planning.scheduledAt && Number.isFinite(Date.parse(planning.scheduledAt)) && <span>Когда начать: {new Date(planning.scheduledAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
             {card.needsReview && <Badge>Требуется приёмка</Badge>}
           </div>
@@ -419,7 +421,7 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
               <summary className="cursor-pointer text-sm font-semibold">Описание и ожидаемый результат</summary>
               {Array.from(description).length >= CARD_BRIEF_MIN_DESCRIPTION_RUNES && <div className="mt-3 space-y-2">
                 <Button type="button" size="sm" variant="outline" onClick={() => setShowSummary(value => !value)}>{showSummary ? 'Скрыть сводку' : 'Краткая сводка'}</Button>
-                {showSummary && <CardBriefPanel summaryOnly autoSummarize card={{ ...card, title, description, assignees: splitPeople(assignees), dueAt: dueAt && Number.isFinite(Date.parse(dueAt)) ? new Date(dueAt).toISOString() : undefined, nextAction: nextAction.trim() || null, column }} />}
+                {showSummary && <CardBriefPanel summaryOnly autoSummarize card={{ ...card, title, description, assignees: splitPeople(assignees), dueAt: dueAt && Number.isFinite(dueAtTimestamp(dueAt)) ? fromDateTimeLocalValue(dueAt) : undefined, nextAction: nextAction.trim() || null, column }} />}
               </div>}
               <div className="mt-3 space-y-3">{editingDescription ? <MarkdownEditor value={description} onChange={setDescription} /> : <div className="max-h-[45vh] overflow-y-auto pr-2">{description.trim() ? <MarkdownText text={description} /> : <p className="text-sm text-muted-foreground">Добавьте, что нужно сделать и какой результат получить.</p>}</div>}
                 <Button type="button" size="sm" variant="outline" onClick={() => setEditingDescription(value => !value)}>{editingDescription ? 'Готово' : 'Редактировать описание'}</Button>
@@ -460,9 +462,12 @@ export function CardEditDialog({ card, open, onOpenChange, onDelete, onUpdate, o
             )}
           </div>
           <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Дедлайн (необязательно)
-            <Input aria-label="Дедлайн" aria-describedby="card-date-timezone" type="datetime-local" value={dueAt} onChange={e => setDueAt(e.target.value)} className="w-full min-w-0" />
+            <Input aria-label="Дедлайн" aria-describedby="card-date-timezone" type="date" value={dueAt.slice(0, 10)} onChange={e => setDueAt(e.target.value ? e.target.value + dueAt.slice(10) : '')} className="w-full min-w-0" />
           </label>
-          <p id="card-date-timezone" className="col-span-1 sm:col-span-2 text-xs text-muted-foreground">Время вводится в часовом поясе браузера: {Intl.DateTimeFormat().resolvedOptions().timeZone || 'локальный'}. Календарь Контура показывает московское время.</p>
+          <label className="min-w-0 space-y-1 text-xs text-muted-foreground">Время дедлайна (необязательно)
+            <Input aria-label="Время дедлайна" aria-describedby="card-date-timezone" type="time" disabled={!dueAt} value={dueAt.slice(11, 16)} onChange={e => setDueAt(dueAt.slice(0, 10) + (e.target.value ? 'T' + e.target.value : ''))} className="w-full min-w-0" />
+          </label>
+          <p id="card-date-timezone" className="col-span-1 sm:col-span-2 text-xs text-muted-foreground">Без времени срок действует до конца дня по Москве. Время вводится в часовом поясе браузера: {Intl.DateTimeFormat().resolvedOptions().timeZone || 'локальный'}. Календарь Контура показывает московское время.</p>
           <CardCalendarSection
             className="col-span-1 sm:col-span-2 min-w-0 space-y-1"
             dueAt={card.dueAt}

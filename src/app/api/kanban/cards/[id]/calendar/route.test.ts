@@ -512,3 +512,10 @@ describe('get returns the caller-own state', () => {
     expect(calendarSyncKey('a::b', 'c')).not.toBe(calendarSyncKey('a', 'b::c'));
   });
 });
+
+it('does not invent a midnight Keeper event for a deadline without time', async () => {
+  findCardById.mockReturnValue(baseCard({ dueAt: '2030-01-02' }));
+  expect((await payload(post({}), 400)).error).toBe('card_due_at_has_no_time');
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(keeperBindingStore.get('nikita', 'card-1')).toBeNull();
+});

@@ -64,3 +64,14 @@ describe('deadline attention', () => {
     expect(homeItems(values,'nikita',Date.parse('2026-11-08T00:00:00Z')).map(item=>item.card.id)).toEqual(['overdue','urgent','high']);
   });
 });
+
+it('keeps a calendar deadline current until the Moscow day ends', () => {
+  const values = [
+    card({ id: 'calendar', priority: 'low', dueAt: '2030-01-02' }),
+    card({ id: 'high', priority: 'high' }),
+  ];
+  expect(homeItems(values, 'nikita', Date.parse('2030-01-02T20:59:59.998Z')).map(item => item.card.id))
+    .toEqual(['high', 'calendar']);
+  expect(homeItems(values, 'nikita', Date.parse('2030-01-02T21:00:00Z')).map(item => item.card.id))
+    .toEqual(['calendar', 'high']);
+});

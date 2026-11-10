@@ -1,5 +1,7 @@
 'use client';
 
+import { isDateOnlyDueAt } from '@/lib/kanban/due-at';
+
 import { Button } from '@/components/ui/button';
 
 export type CalendarBridgeStatus = {
@@ -41,9 +43,10 @@ const DURATION_OPTIONS = [15, 30, 60, 90, 120];
 export function CardCalendarSection({ dueAt, project, status, durationMinutes, onDurationChange, onSync, syncing = false, eventId, message, dueAtUnsaved = false, className }: CardCalendarSectionProps) {
   if (!dueAt) return null;
 
+  const hasNoTime = isDateOnlyDueAt(dueAt);
   const unavailable = status === 'unavailable' || (status !== null && (!status.enabled || status.storeUnavailable === true));
   const notConnected = !unavailable && status !== null && !status.connected;
-  const actionReady = !unavailable && status !== null && status.connected && !syncing;
+  const actionReady = !unavailable && status !== null && status.connected && !syncing && !hasNoTime;
   const projectMapped = !unavailable && status !== null && !!project && (status.projects ?? []).includes(project);
   const label = unavailable
     ? 'Календарь недоступен'
@@ -82,6 +85,7 @@ export function CardCalendarSection({ dueAt, project, status, durationMinutes, o
         {eventId && <span className="text-xs text-muted-foreground">Событие создано в вашем календаре</span>}
         {message && <span className="text-xs text-red-600" role="alert">{message}</span>}
       </div>
+      {hasNoTime && <p className="text-xs text-muted-foreground">Для события Keeper укажите время дедлайна и сохраните карточку. Дедлайн без времени остаётся на доске.</p>}
       {dueAtUnsaved && (
         <p className="text-xs text-amber-600" role="note">
           Дата «Дедлайн» изменена, но карточка не сохранена — в календарь уйдёт сохранённая дата. Сначала сохраните карточку.

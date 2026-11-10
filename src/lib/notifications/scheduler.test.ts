@@ -70,3 +70,27 @@ describe('due reminder scheduler', () => {
     expect(consumeSourceIntentLaunchOnce).toHaveBeenCalledWith('personal', { tasksDir });
   });
 });
+
+test('reminds a date-only task after the Moscow day ends, never at its start', async () => {
+  process.env.VAPID_PUBLIC_KEY = 'public';
+  process.env.VAPID_PRIVATE_KEY = 'private';
+  process.env.VAPID_SUBJECT = 'mailto:owner@example.test';
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-date-only-scheduler-'));
+  const storePath = path.join(root, 'subscriptions.json');
+  const tasksDir = path.join(root, 'tasks');
+  roots.push(root);
+  fs.mkdirSync(tasksDir, { recursive: true });
+  fs.writeFileSync(path.join(tasksDir, 'due.md'), '---\nid: calendar-1\ntitle: Calendar task\ncolumn: todo\nproject: alpha\ndueAt: "2030-01-02"\n---\nBody');
+  upsertSubscription({
+    endpoint: 'https://push.example.test/send/calendar',
+    keys: { p256dh: 'BAbcdefghijklmnopqrstuvwxyz0123456789-_', auth: 'YWJjZGVmZ2hpamtsbW5vcA' },
+    scope: 'work', owner: 'anonymous', deviceId: 'device-1',
+  }, storePath);
+  const options = { scopes: ['work'] as const, tasksDir: () => tasksDir, storePath };
+  const run = (value: string) => runDueReminderTick(new Date(value), { ...options, scopes: ['work'] });
+  expect(await run('2030-01-01T21:00:00Z')).toBe(0);
+  expect(await run('2030-01-02T20:59:59.998Z')).toBe(0);
+  expect(sendNotification).not.toHaveBeenCalled();
+  expect(await run('2030-01-02T21:00:00Z')).toBe(1);
+  expect(await run('2030-01-02T21:00:01Z')).toBe(0);
+});

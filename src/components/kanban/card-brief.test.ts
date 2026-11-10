@@ -99,3 +99,9 @@ describe('card brief projection', () => {
     expect(cardBriefProjectionCache.get(source.id, 'old-source-hash')).toBeUndefined();
   });
 });
+
+test('the card brief preserves a deadline without a time', () => {
+  const facts = getCardBriefFacts({ ...card, dueAt: '2030-01-02' });
+  expect(facts.deadline).toContain('02 января 2030');
+  expect(facts.deadline).not.toMatch(/\d{2}:\d{2}/);
+});

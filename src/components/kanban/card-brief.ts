@@ -1,3 +1,4 @@
+import { formatDueAt } from '@/lib/kanban/due-at';
 import type { KanbanCard } from '@/lib/kanban/types';
 
 /** A model-produced, read-only projection bound to the exact card source hash. */
@@ -36,10 +37,7 @@ export async function hashCardBriefSource(card: CardBriefSource): Promise<string
 export function getCardBriefFacts(card: Pick<KanbanCard, 'title' | 'assignees' | 'assignee' | 'dueAt' | 'nextAction'>): CardBriefFacts {
   const assignees = card.assignees.map(value => value.trim()).filter(Boolean);
   const executor = assignees.length ? assignees.join(', ') : card.assignee?.trim() || 'Не назначен';
-  const dueDate = card.dueAt ? new Date(card.dueAt) : null;
-  const deadline = dueDate && Number.isFinite(dueDate.getTime())
-    ? dueDate.toLocaleString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-    : 'Не указан';
+  const deadline = formatDueAt(card.dueAt, { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }) ?? 'Не указан';
   return {
     action: card.title.trim() || 'Действие не указано',
     executor,

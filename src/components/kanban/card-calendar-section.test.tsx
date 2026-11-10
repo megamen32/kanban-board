@@ -80,3 +80,11 @@ describe('CardCalendarSection (honest states, no invented connection)', () => {
     expect(html.toLowerCase()).not.toContain('bearer');
   });
 });
+
+test('date-only deadlines request a time before creating a timed Keeper event', () => {
+  const html = renderToStaticMarkup(
+    <CardCalendarSection {...base} dueAt="2030-01-02" status={{ enabled: true, connected: true }} />,
+  );
+  expect(html).toMatch(/<button[^>]*\sdisabled=""/);
+  expect(html).toContain('укажите время');
+});

@@ -1,5 +1,7 @@
 'use client';
 
+import { dueAtTimestamp } from '@/lib/kanban/due-at';
+
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { useTheme } from 'next-themes';
 import {
@@ -130,7 +132,7 @@ function attentionOrder(a: KanbanCard, b: KanbanCard) {
   return Number(b.column === 'review' || b.needsReview) - Number(a.column === 'review' || a.needsReview)
     || Number(hasBlocker(b)) - Number(hasBlocker(a))
     || (PRIORITY_ORDER[a.priority] ?? 4) - (PRIORITY_ORDER[b.priority] ?? 4)
-    || (Date.parse(a.dueAt ?? '') || Infinity) - (Date.parse(b.dueAt ?? '') || Infinity)
+    || (dueAtTimestamp(a.dueAt) || Infinity) - (dueAtTimestamp(b.dueAt) || Infinity)
     || a.order - b.order;
 }
 function Empty({ title, children, clear }: { title: string; children: ReactNode; clear?: () => void }) {
@@ -187,7 +189,7 @@ function TaskCard({ card, projectInfo, onOpen, onCopy, onDragStart, onDragEnd, b
   onDragStart?: (event: DragEvent<HTMLElement>, card: KanbanCard) => void; onDragEnd?: () => void; busy?: boolean;
 }) {
   const facts = taskFacts(card);
-  const overdue = !isClosedCard(card) && card.dueAt && Date.parse(card.dueAt) < Date.now();
+  const overdue = !isClosedCard(card) && card.dueAt && dueAtTimestamp(card.dueAt) < Date.now();
   return <article className={`k-task-card${busy ? ' is-saving' : ''}`} draggable={Boolean(onDragStart) && !busy} onDragStart={event => onDragStart?.(event, card)} onDragEnd={onDragEnd}>
     <div className="k-task-top"><span className="k-project-label"><ProjectMark project={facts.project} small />{facts.project}</span><PriorityBadge priority={card.priority} /></div>
     <p className="k-task-team"><Users size={11} /><span>Команды проекта: {projectTeamLabel(projectInfo)}</span></p>
@@ -517,7 +519,7 @@ export function KonturBoard() {
   const toggleRow = (id: string) => setExpandedRows(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const listCards = [...filteredCards].sort((a, b) => listSort === 'updated'
     ? (Date.parse(b.updated) || 0) - (Date.parse(a.updated) || 0)
-    : listSort === 'due' ? (Date.parse(a.dueAt ?? '') || Infinity) - (Date.parse(b.dueAt ?? '') || Infinity) || attentionOrder(a, b) : attentionOrder(a, b));
+    : listSort === 'due' ? (dueAtTimestamp(a.dueAt) || Infinity) - (dueAtTimestamp(b.dueAt) || Infinity) || attentionOrder(a, b) : attentionOrder(a, b));
   const observedSessionState = (session: KonturSession) => {
     const observation = sessionObservations[session.id];
     if (!observation) return session.state;
