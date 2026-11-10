@@ -107,3 +107,11 @@ describe('kanban view model', () => {
     expect(getPlanningTabCards(cards, 'closed').map(item => item.id)).toEqual(['3']);
   });
 });
+
+it('orders a date-only deadline after timed commitments on the same Moscow day', () => {
+  const cards = [
+    card({ id: 'calendar', dueAt: '2030-01-02' }),
+    card({ id: 'timed', dueAt: '2030-01-02T18:00:00+03:00' }),
+  ];
+  expect(getPrimaryBoardLaneCards(cards, 'incoming').map(item => item.id)).toEqual(['timed', 'calendar']);
+});

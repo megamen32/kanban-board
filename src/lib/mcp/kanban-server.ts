@@ -10,7 +10,7 @@ import { catalogResultDigest, type CatalogLinkClaims, type SignedCatalogLinkEnve
 import type { SourceAdmissionRequest } from '../kanban/source-operation';
 import type { SignedSourceAdmissionEnvelope } from './source-resolver';
 import type { SignedTodoMcpReadScope, TodoMcpProjectEnsureClaims, TodoMcpReadScopeClaims, TodoMcpWriteScopeClaims } from './todo-caller-scope';
-import { normalizeDueAt } from '../kanban/due-at';
+import { dueAtTimestamp, normalizeDueAt } from '../kanban/due-at';
 import { isSafeProvenanceUrl, MAX_PROVENANCE_URL_LENGTH } from '../kanban/provenance-links';
 import { NIKITA_ACTOR, validateTransition } from '../kanban/transition-policy';
 import { tasksDirForScope } from '../auth/data-scope';
@@ -37,7 +37,7 @@ const cardInput = {
   tags: z.array(z.string()).max(20).optional(),
   assignees: z.array(z.string()).max(20).optional(),
   executor: z.enum(['dot']).nullable().optional(),
-  dueAt: z.string().nullable().optional(),
+  dueAt: z.string().nullable().optional().describe('Explicit deadline: YYYY-MM-DD preserves a calendar date with no event time and is due at the end of that day in Europe/Moscow; use a timestamp with offset only when a time was supplied. Null clears; omitted preserves.'),
   type: z.enum(PLANNING_TYPES).optional(),
   role: z.string().optional(),
   accountable: z.string().optional(),
@@ -188,7 +188,7 @@ function filterCards(cards: KanbanCard[], filters: {
     const now = Date.now();
     result = result.filter((card) => {
       if (!card.dueAt) return false;
-      const diffHours = (Date.parse(card.dueAt) - now) / 3_600_000;
+      const diffHours = (dueAtTimestamp(card.dueAt) - now) / 3_600_000;
       return filters.dueWithinHours! >= 0
         ? -filters.dueWithinHours! <= diffHours && diffHours <= filters.dueWithinHours!
         : diffHours <= filters.dueWithinHours!;
@@ -200,6 +200,8 @@ function filterCards(cards: KanbanCard[], filters: {
 export interface KanbanMcpOptions {
   allowConfirmedOwnerCommands?: boolean;
   allowInternalTeamCommands?: boolean;
+  /** Exact authenticated GPTAdmin work service; never derived from tool input. */
+  allowGptAdminBoardAdministration?: boolean;
   /** Verifies an ExManager server-signed source request; never trust service bearer input alone. */
   verifySourceAdmission?: (envelope: SignedSourceAdmissionEnvelope) => SourceAdmissionRequest;
   /** Verifies the server-only canonical owner receipt bound to one current Board result. */
@@ -457,6 +459,12 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
       const internalTeamAuthorization = options.allowInternalTeamCommands && (!options.requireExManagerWriteScope || callerScope)
         ? { actor: 'exmanager-service', evidence: { type: 'authenticated_internal_team_command', service: 'exmanager-airlock-service' } }
         : undefined;
+      const delegatedBoardAdminAuthorization = options.allowGptAdminBoardAdministration && scope === 'work'
+        ? { actor: 'gptadmin-todo-service', evidence: { type: 'authenticated_board_administrator', service: 'gptadmin-todo-service' } }
+        : undefined;
+      if (delegatedBoardAdminAuthorization && mode === 'edit' && (!Number.isSafeInteger(expectedVersion) || expectedVersion! < 1)) {
+        throw new Error('expectedVersion is required for delegated board administrator edits');
+      }
       if (internalTeamAuthorization && mode === 'edit' && (!Number.isSafeInteger(expectedVersion) || expectedVersion! < 1)) {
         throw new Error('expectedVersion is required for internal team edits');
       }
@@ -479,7 +487,7 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
 
       // Completion is a distinct direct-owner delegation. Ordinary automation
       // and caller-supplied completion evidence still cannot finish a card.
-      if (ownerCompletionConfirmed === true && (!ownerAuthorization || mode !== 'edit'
+      if (ownerCompletionConfirmed === true && !delegatedBoardAdminAuthorization && (!ownerAuthorization || mode !== 'edit'
         || column !== 'done' || !Number.isSafeInteger(expectedVersion) || expectedVersion! < 1
         || Object.keys(requested).some(key => key !== 'column'))) {
         throw new Error('owner completion requires trusted service authority and an exact status-only edit');
@@ -495,10 +503,11 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
         validatePlanningInput({ ...planningInput, column, title, project });
         const decision = validateTransition(creationBaseline(), requested, {
           origin: 'mcp',
-          actor: 'mcp',
+          actor: delegatedBoardAdminAuthorization?.actor ?? 'mcp',
           isCreation: true,
           ownerAuthorization,
           internalTeamAuthorization,
+          delegatedBoardAdminAuthorization,
         });
         if (decision.kind === 'rejected') throw new Error(decision.reason);
 
@@ -555,8 +564,8 @@ export function createKanbanMcpServer(scope: BoardScope, options: KanbanMcpOptio
         && (requested.column === 'archived' || before.column === 'archived')
         ? { actor: NIKITA_ACTOR, evidence: { type: 'signed_owner_archive', userId: callerScope.userId } }
         : undefined;
-      const decision = validateTransition(before, requested, { origin: 'mcp', actor: 'mcp',
-        ownerAuthorization: signedOwnerArchive ?? ownerAuthorization, ownerCompletionAuthorization, internalTeamAuthorization });
+      const decision = validateTransition(before, requested, { origin: 'mcp', actor: delegatedBoardAdminAuthorization?.actor ?? 'mcp',
+        ownerAuthorization: signedOwnerArchive ?? ownerAuthorization, ownerCompletionAuthorization, internalTeamAuthorization, delegatedBoardAdminAuthorization });
       if (decision.kind === 'rejected') throw new Error(decision.reason);
       const result = updateCard(cardId, decision.patch, expectedVersion, tasksDir);
       if ('conflict' in result) throw new Error(`Version conflict for card ${cardId}`);

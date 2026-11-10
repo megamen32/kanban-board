@@ -1,3 +1,4 @@
+import { dueAtTimestamp } from '@/lib/kanban/due-at';
 import type { KanbanCard } from '@/lib/kanban/types';
 import { sameTaskPerson } from '@/lib/kanban/task-membership';
 
@@ -38,11 +39,11 @@ export function homeItems(cards: readonly KanbanCard[], username: string, now = 
     }
   }
   const rank: Record<string, number> = {critical: 0, high: 1, medium: 2, low: 3};
-  const overdue = (card: KanbanCard) => Number.isFinite(Date.parse(card.dueAt ?? '')) && Date.parse(card.dueAt!) < now;
+  const overdue = (card: KanbanCard) => dueAtTimestamp(card.dueAt) < now;
   return result.sort((a, b) => Number(overdue(b.card)) - Number(overdue(a.card))
     || Number(!!b.card.urgent) - Number(!!a.card.urgent)
     || (a.card.todayRank ?? 4) - (b.card.todayRank ?? 4)
     || (rank[a.card.priority] ?? 4) - (rank[b.card.priority] ?? 4)
-    || (Date.parse(a.card.dueAt ?? '') || Infinity) - (Date.parse(b.card.dueAt ?? '') || Infinity)
+    || (dueAtTimestamp(a.card.dueAt) || Infinity) - (dueAtTimestamp(b.card.dueAt) || Infinity)
     || a.card.order - b.card.order);
 }

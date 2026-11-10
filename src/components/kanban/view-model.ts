@@ -1,3 +1,4 @@
+import { dueAtTimestamp } from '@/lib/kanban/due-at';
 import type { KanbanCard, RoleDefinition } from '@/lib/kanban/types';
 import { getExecutionView, getRoleBalance, getTodayView, getWeekView, type RoleBalanceView } from '../../lib/kanban/planning-views';
 
@@ -36,8 +37,8 @@ export function sortIncomingCards(cards: KanbanCard[]): KanbanCard[] {
     const leftUrgent = left.urgent || left.priority === 'critical' ? 0 : 1;
     const rightUrgent = right.urgent || right.priority === 'critical' ? 0 : 1;
     if (leftUrgent !== rightUrgent) return leftUrgent - rightUrgent;
-    const leftDueParsed = left.dueAt ? Date.parse(left.dueAt) : Number.POSITIVE_INFINITY;
-    const rightDueParsed = right.dueAt ? Date.parse(right.dueAt) : Number.POSITIVE_INFINITY;
+    const leftDueParsed = dueAtTimestamp(left.dueAt);
+    const rightDueParsed = dueAtTimestamp(right.dueAt);
     const leftDue = Number.isNaN(leftDueParsed) ? Number.POSITIVE_INFINITY : leftDueParsed;
     const rightDue = Number.isNaN(rightDueParsed) ? Number.POSITIVE_INFINITY : rightDueParsed;
     if (leftDue !== rightDue) return leftDue < rightDue ? -1 : 1;

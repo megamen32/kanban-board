@@ -213,3 +213,34 @@ Unfinished integration goal: replace the operator import with a supported,
 current-user Exmanager metadata channel after the installed Airlock SDK
 provides an admitted app-to-app invocation. Keep the dated snapshot notice
 until an authenticated end-to-end refresh is implemented and verified.
+
+## GPTAdmin delegated board administrator (2026-11-11)
+
+The board owner explicitly granted full ToDo administration to the existing
+`gptadmin-todo-service` connector. Only the verified access token whose client ID
+and username are both `gptadmin-todo-service` and whose scope is exactly `work`
+receives that server-side delegation. A body flag, display name, browser header,
+owner record, or another client's username cannot grant it.
+
+The service may manage assignments, deadlines, reviewers, executors, weekly
+planning and card status, including explicit review acceptance, rework,
+completion, archive and restoration. Every edit requires a positive
+`expectedVersion` and the normal optimistic conflict check. Schema/date checks,
+blocked-card reasons and the exact archive/restore transition contract still
+apply. Submitting an executor result continues to request review unless the
+administrator explicitly requests completion in the same operation.
+
+Audit records retain the actual service actor. Completion records are labeled
+`delegated_board_admin_completion`, with server-issued actor/time and the supplied
+result evidence nested as result data. They do not claim a human click or a
+machine verification. Caller-supplied approval/audit fields cannot replace server
+history. Legacy owner-confirmation flags are unnecessary for this administrator
+and do not confer rights on anyone else.
+
+ExManager's signed per-call scopes, other OAuth clients' existing policies and
+the read-only application's tool restrictions remain independent and unchanged.
+
+MCP `dueAt` preserves an explicit `YYYY-MM-DD` calendar date without an event
+time. Date-only deadlines become overdue at the end of that day in Europe/Moscow.
+Use an offset timestamp only when the source supplies a time; `null` clears the
+deadline and omission preserves it.

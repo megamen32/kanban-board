@@ -1,3 +1,4 @@
+import { isDateOnlyDueAt } from '@/lib/kanban/due-at';
 import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { findCardById } from '@/lib/kanban/file-store';
@@ -58,6 +59,9 @@ function loadCard(id: string, identity: HumanIdentity): { card: KanbanCard } | {
 
 function syncInputFor(card: KanbanCard, durationMinutes: number): { input: CalendarSyncInput } | { response: NextResponse } {
   if (!card.dueAt) return { response: NextResponse.json({ error: 'card_has_no_due_at' }, { status: 400 }) };
+  if (isDateOnlyDueAt(card.dueAt)) {
+    return { response: NextResponse.json({ error: 'card_due_at_has_no_time' }, { status: 400 }) };
+  }
   const startTimeMs = new Date(card.dueAt).getTime();
   if (!Number.isFinite(startTimeMs)) {
     return { response: NextResponse.json({ error: 'card_due_at_invalid' }, { status: 400 }) };

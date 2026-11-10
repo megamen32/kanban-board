@@ -20,6 +20,8 @@ export interface TransitionContext {
   isCreation?: boolean;
   /** Authenticated work-service task authority; cannot be set by request data. */
   internalTeamAuthorization?: { actor: string; evidence: PlanningEvidence };
+  /** Full board delegation verified server-side for the exact GPTAdmin service. */
+  delegatedBoardAdminAuthorization?: { actor: string; evidence: PlanningEvidence };
   /** Machine evidence issued by a trusted server-side verifier, never by the request payload. */
   trustedCompletionEvidence?: PlanningEvidence[];
   ownerAuthorization?: {
@@ -78,6 +80,12 @@ export function validateTransition(
   requested: KanbanCardUpdates,
   context: TransitionContext,
 ): TransitionDecision {
+  if (context.origin === 'mcp'
+      && context.delegatedBoardAdminAuthorization?.actor === 'gptadmin-todo-service'
+      && Object.keys(context.delegatedBoardAdminAuthorization.evidence).length > 0) {
+    return validateDelegatedBoardAdminTransition(before, requested, context);
+  }
+
   // Archive is not completion or review acceptance. Only the verified owner
   // can make this exact transition; preserve every result/reviewer field.
   const archiveChange = requested.column !== undefined && requested.column !== before.column
@@ -99,7 +107,7 @@ export function validateTransition(
       } };
     }
     const archived = [...(before.approvalEvidence ?? [])].reverse()
-      .find(item => item.type === 'owner_archived');
+      .find(item => item.type === 'owner_archived' || item.type === 'delegated_board_admin_archive');
     const previous = archived?.previousColumn ?? (before.needsReview ? 'review' : 'todo');
     if (requested.column !== previous) {
       return { kind: 'rejected', reason: 'restore_requires_previous_column' };
@@ -346,6 +354,117 @@ export function validateTransition(
       requiresApprovalFrom: appendPerson(before.requiresApprovalFrom, policyRequested.requiresApprovalFrom, NIKITA_ACTOR),
     },
   };
+}
+
+/**
+ * Execute an authenticated delegated administrator's explicit board decision.
+ * The service keeps its own identity; payload audit claims remain untrusted.
+ */
+function validateDelegatedBoardAdminTransition(
+  before: KanbanCard,
+  requested: KanbanCardUpdates,
+  context: TransitionContext,
+): TransitionDecision {
+  const authority = context.delegatedBoardAdminAuthorization!;
+  const actor = authority.actor;
+  const {
+    completedBy: _completedBy, completedAt: _completedAt,
+    completionEvidence: submittedResults, approvalEvidence: _approvalEvidence,
+    resultHistory: _resultHistory, reviewHistory: _reviewHistory,
+    nextAction: _nextAction, executorResult, ...updates
+  } = requested;
+  const waitingForReview = before.column === 'review' || before.needsReview;
+  const decidedAt = new Date().toISOString();
+  const audit = {
+    type: 'delegated_board_admin_change', actor, origin: 'mcp',
+    fields: [...Object.keys(updates), ...(executorResult === undefined ? [] : ['executorResult'])],
+    evidence: authority.evidence,
+  };
+
+  if (updates.column === 'blocked'
+      && !(typeof updates.blockerReason === 'string' && updates.blockerReason.trim())
+      && !(typeof before.blockerReason === 'string' && before.blockerReason.trim())) {
+    return { kind: 'rejected', reason: 'blocked_reason_required' };
+  }
+
+  const archiveChange = updates.column !== undefined && updates.column !== before.column
+    && (updates.column === 'archived' || before.column === 'archived');
+  if (archiveChange) {
+    if (Object.keys(updates).length !== 1 || executorResult !== undefined) {
+      return { kind: 'rejected', reason: 'archive_requires_exact_owner_decision' };
+    }
+    if (updates.column === 'archived') {
+      return { kind: 'accepted', patch: { column: 'archived',
+        approvalEvidence: appendEvidence(before.approvalEvidence, undefined, {
+          ...audit, type: 'delegated_board_admin_archive', previousColumn: before.column,
+        }),
+      } };
+    }
+    const archived = [...(before.approvalEvidence ?? [])].reverse().find(item =>
+      item.type === 'owner_archived' || item.type === 'delegated_board_admin_archive');
+    const previousColumn = archived?.previousColumn ?? (before.needsReview ? 'review' : 'todo');
+    if (updates.column !== previousColumn) {
+      return { kind: 'rejected', reason: 'restore_requires_previous_column' };
+    }
+    return { kind: 'accepted', patch: { column: updates.column,
+      approvalEvidence: appendEvidence(before.approvalEvidence, undefined, {
+        ...audit, type: 'delegated_board_admin_restore', restoredColumn: updates.column,
+      }),
+    } };
+  }
+
+  // Changing a review flag alone must not strand a card in an invalid state.
+  if (waitingForReview && updates.needsReview === false
+      && (updates.column === undefined || updates.column === 'review')) {
+    return { kind: 'rejected', reason: 'review_requires_explicit_decision' };
+  }
+
+  let patch: KanbanCardUpdates = {
+    ...updates,
+    approvalEvidence: appendEvidence(before.approvalEvidence, undefined, audit),
+  };
+  if (executorResult !== undefined) {
+    const result = normalizeExecutorResult(executorResult);
+    if (!result || before.column === 'archived') {
+      return { kind: 'rejected', reason: 'executor_result_requires_non_review_state' };
+    }
+    patch = { ...patch,
+      resultHistory: [...(before.resultHistory ?? []), {
+        ...result, submittedBy: actor, submittedAt: decidedAt,
+      }],
+      nextAction: result.nextAction ?? null,
+    };
+    if (updates.column !== 'done') {
+      return { kind: 'redirected', reason: 'executor_result_requires_review', patch: {
+        ...patch, column: 'review', needsReview: true,
+        requiresApprovalFrom: updates.requiresApprovalFrom?.length ? updates.requiresApprovalFrom
+          : before.requiresApprovalFrom?.length ? before.requiresApprovalFrom : [NIKITA_ACTOR],
+      } };
+    }
+  }
+
+  if (updates.column === 'done') {
+    return { kind: 'accepted', patch: {
+      ...patch, completedBy: actor, completedAt: decidedAt,
+      needsReview: false, requiresApprovalFrom: [], nextAction: null,
+      completionEvidence: appendEvidence(before.completionEvidence, undefined, {
+        type: 'delegated_board_admin_completion', actor, origin: 'mcp',
+        evidence: authority.evidence,
+        ...(submittedResults?.length ? { result: submittedResults } : {}),
+      }),
+      ...(waitingForReview ? {
+        reviewHistory: [...(before.reviewHistory ?? []), { decision: 'accepted', actor, decidedAt }],
+      } : {}),
+    } };
+  }
+  if (updates.column === 'review') {
+    patch = { ...patch, needsReview: true };
+  } else if (waitingForReview && updates.column !== undefined && updates.column !== before.column) {
+    patch = { ...patch, needsReview: false,
+      reviewHistory: [...(before.reviewHistory ?? []), { decision: 'rework', actor, decidedAt }],
+    };
+  }
+  return { kind: 'accepted', patch };
 }
 
 /**
