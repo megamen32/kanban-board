@@ -79,9 +79,8 @@ export function requestPathAndQuery(request: Request): string {
 /** Native identity is limited to exact Board routes; the login callback carries no project grant. */
 export function isSupportedNativeProjectRoute(method: string, pathname: string): boolean {
   const verb = method.toUpperCase();
-  if (verb === 'GET' && (pathname === '/api/auth/airlock/login' || pathname === '/api/auth/airlock/callback')) return true;
+  if (verb === 'GET' && (pathname === '/api/auth/session' || pathname === '/api/auth/airlock/login' || pathname === '/api/auth/airlock/callback')) return true;
   if (verb === 'GET' && pathname === '/api/kanban/cards') return true;
-  if (verb === 'POST' && pathname === '/api/kanban/projects') return true;
   if (verb === 'POST' && pathname === '/api/kanban/source-intent/execution') return true;
   if (verb === 'GET' && /^\/api\/kanban\/cards\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(pathname)) return true;
   return ['GET', 'PATCH', 'POST'].includes(verb)
