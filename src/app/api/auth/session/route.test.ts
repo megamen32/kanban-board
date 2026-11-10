@@ -9,6 +9,7 @@ vi.mock('../../../../lib/auth/request', () => ({ authStore: () => ({ createRelay
 import { GET } from './route';
 import { GET as login } from '../airlock/login/route';
 import { GET as callback } from '../airlock/callback/route';
+import { ownerBrowserReadAllowed } from '../../../../lib/auth/owner-browser-read';
 const origin = 'https://todo-board.airlock.bezrabotnyi.com';
 const pair = generateKeyPairSync('ed25519');
 function request(options: { unsigned?: boolean; invalid?: boolean; userId?: string; project?: string; host?: string; path?: string } = {}) {
@@ -87,6 +88,12 @@ describe('native browser session alignment (fast unit; expected1s, max20s)', () 
     expect((await GET(request())).status).toBe(401);
     human.mockResolvedValueOnce(null);
     expect((await GET(request())).status).toBe(401);
+  });
+  it('discriminates the existing cards mismatch branch from invalid signature with synthetic identities', async () => {
+    vi.stubEnv('KANBAN_AIRLOCK_ACCOUNT_MAP', '{"fixture-native-user":"nikita"}');
+    human.mockResolvedValue({ username: 'qa_foreign', scope: 'work' });
+    await expect(ownerBrowserReadAllowed(request({ path: '/api/kanban/cards' }))).rejects.toThrow('native_owner_read_mismatch');
+    await expect(ownerBrowserReadAllowed(request({ path: '/api/kanban/cards', invalid: true }))).rejects.toThrow('native_identity_invalid');
   });
   it('preserves the existing unsigned board session flow', async () => {
     human.mockResolvedValueOnce({ username: 'qa_foreign', scope: 'work' });

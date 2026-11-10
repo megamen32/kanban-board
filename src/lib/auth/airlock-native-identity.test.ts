@@ -109,3 +109,27 @@ describe('Airlock Todo native identity assertion', () => {
     });
   });
 });
+
+describe('owner project registry native identity route', () => {
+  it('accepts only the exact signed POST registry route with its bound payload', async () => {
+    const path = '/api/kanban/projects';
+    const body = JSON.stringify({ externalKey: 'fixture:project', name: 'Fixture project' });
+    const allowed = signedRequest({ method: 'POST', path, body, project: '' });
+    await expect(verifyAirlockTodoNativeIdentity(allowed.request, pair.publicKey)).resolves.toMatchObject({
+      method: 'POST', path, project: '',
+    });
+    for (const method of ['GET', 'PATCH']) {
+      const unsupported = signedRequest({ method, path, project: '' });
+      await expect(verifyAirlockTodoNativeIdentity(unsupported.request, pair.publicKey)).rejects.toThrow('native_identity_invalid');
+    }
+    for (const otherPath of [path + '/', path + '/other', '/api/kanban/project']) {
+      const unsupported = signedRequest({ method: 'POST', path: otherPath, body, project: '' });
+      await expect(verifyAirlockTodoNativeIdentity(unsupported.request, pair.publicKey)).rejects.toThrow('native_identity_invalid');
+    }
+    const changed = new Request('https://todo.example' + path, {
+      method: 'POST', headers: allowed.request.headers,
+      body: JSON.stringify({ externalKey: 'fixture:project', name: 'Changed payload' }),
+    });
+    await expect(verifyAirlockTodoNativeIdentity(changed, pair.publicKey)).rejects.toThrow('native_identity_invalid');
+  });
+});
