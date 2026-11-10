@@ -1,0 +1,174 @@
+--- a/src/app/api/auth/airlock/login/route.ts
++++ b/src/app/api/auth/airlock/login/route.ts
+@@ -1,4 +1,8 @@
+ import { NextRequest, NextResponse } from 'next/server';
++import {
++  AIRLOCK_TODO_NATIVE_IDENTITY_HEADER,
++  verifyAirlockTodoNativeIdentity,
++} from '../../../../../lib/auth/airlock-native-identity';
+ import {
+   airlockRelayConfig,
+   airlockRelayLoginUrl,
+@@ -19,11 +23,33 @@
+ export async function GET(request: NextRequest) {
+   const config = airlockRelayConfig();
+   if (!config.enabled) return NextResponse.json({ error: 'airlock relay login is not configured' }, { status: 404 });
++  // The SDK has already admitted native users. Verify its request-bound
++  // assertion before keeping the existing board handshake on this app origin.
++  let nativeLogin = false;
++  if (request.headers.has(AIRLOCK_TODO_NATIVE_IDENTITY_HEADER)) {
++    const host = (request.headers.get('x-forwarded-host') || request.headers.get('host') || '').toLowerCase();
++    if (host !== new URL(config.agentOrigin).host.toLowerCase()) {
++      return NextResponse.json({ error: 'airlock login is bound to the agent origin' }, { status: 404 });
++    }
++    const publicKey = process.env.AIRLOCK_TODO_NATIVE_IDENTITY_PUBLIC_KEY?.trim();
++    if (!publicKey) {
++      return NextResponse.json({ error: 'airlock native identity verifier is not configured' }, { status: 503 });
++    }
++    try {
++      const identity = await verifyAirlockTodoNativeIdentity(request, publicKey);
++      if (!identity || identity.project !== '') throw new Error('native_identity_invalid');
++    } catch {
++      return NextResponse.json({ error: 'airlock caller identity could not be verified' }, { status: 403 });
++    }
++    nativeLogin = true;
++  }
+   const requestedPath = request.nextUrl.searchParams.get('next') || '/';
+   // Only same-origin relative paths are honored as the post-login target.
+   const nextPath = requestedPath.startsWith('/') && !requestedPath.startsWith('//') ? requestedPath : '/';
+   const handshake = createRelayHandshake(config, nextPath);
+-  const response = NextResponse.redirect(airlockRelayLoginUrl(config, handshake));
++  const response = NextResponse.redirect(nativeLogin
++    ? new URL('/api/auth/airlock/callback', config.agentOrigin)
++    : airlockRelayLoginUrl(config, handshake));
+   response.cookies.set(AIRLOCK_RELAY_COOKIE, relayHandshakeCookie(handshake), {
+     httpOnly: true,
+     sameSite: 'lax',
+--- a/src/lib/auth/airlock-native-identity.ts
++++ b/src/lib/auth/airlock-native-identity.ts
+@@ -79,7 +79,7 @@
+ /** Native identity is limited to exact Board routes; the login callback carries no project grant. */
+ export function isSupportedNativeProjectRoute(method: string, pathname: string): boolean {
+   const verb = method.toUpperCase();
+-  if (verb === 'GET' && pathname === '/api/auth/airlock/callback') return true;
++  if (verb === 'GET' && (pathname === '/api/auth/airlock/login' || pathname === '/api/auth/airlock/callback')) return true;
+   if (verb === 'GET' && pathname === '/api/kanban/cards') return true;
+   if (verb === 'POST' && pathname === '/api/kanban/projects') return true;
+   if (verb === 'POST' && pathname === '/api/kanban/source-intent/execution') return true;
+--- a/src/lib/auth/airlock-native-identity.test.ts
++++ b/src/lib/auth/airlock-native-identity.test.ts
+@@ -27,6 +27,19 @@
+ }
+ 
+ describe('Airlock Todo native identity assertion', () => {
++  it('permits exactly GET native login and rejects another method or login subpath', async () => {
++    const login = signedRequest({ path: '/api/auth/airlock/login?next=%2F', project: '' });
++    await expect(verifyAirlockTodoNativeIdentity(login.request, pair.publicKey)).resolves.toMatchObject({
++      method: 'GET', path: '/api/auth/airlock/login?next=%2F', project: '',
++    });
++    for (const options of [
++      { method: 'POST', path: '/api/auth/airlock/login', project: '' },
++      { path: '/api/auth/airlock/login/other', project: '' },
++    ]) {
++      await expect(verifyAirlockTodoNativeIdentity(signedRequest(options).request, pair.publicKey)).rejects.toThrow('native_identity_invalid');
++    }
++  });
++
+   it('distinguishes absent identity from a valid signed, exact-request identity', async () => {
+     expect(await verifyAirlockTodoNativeIdentity(new Request(`https://todo.example${cardPath}`), pair.publicKey)).toBeNull();
+     const { request } = signedRequest();
+--- /dev/null
++++ b/src/app/api/auth/airlock/login/route.test.ts
+@@ -0,0 +1,92 @@
++import { NextRequest } from 'next/server';
++import { createHash, generateKeyPairSync, sign } from 'node:crypto';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { AIRLOCK_TODO_NATIVE_IDENTITY_HEADER, requestPathAndQuery } from '../../../../../lib/auth/airlock-native-identity';
++import { AIRLOCK_RELAY_COOKIE } from '../../../../../lib/auth/airlock-relay';
++
++const { createRelaySession } = vi.hoisted(() => ({ createRelaySession: vi.fn(() => 'fixture-board-session') }));
++vi.mock('../../../../../lib/auth/request', () => ({ authStore: () => ({ createRelaySession }), SESSION_COOKIE: 'kanban_session' }));
++import { GET } from './route';
++import { GET as callback } from '../callback/route';
++
++const origin = 'https://todo-board.airlock.bezrabotnyi.com';
++const loginPath = '/api/auth/airlock/login?next=%2F';
++const pair = generateKeyPairSync('ed25519');
++const domain = Buffer.from('airlock-todo-native-identity-v1\n');
++function nativeRequest(path = loginPath, options: { signedPath?: string; method?: string; body?: string; project?: string; expired?: boolean; cookie?: string; host?: string } = {}) {
++  const request = new NextRequest(origin + path, { headers: { host: options.host ?? new URL(origin).host, ...(options.cookie ? { cookie: options.cookie } : {}) } });
++  const now = Date.now() - (options.expired ? 180_000 : 0);
++  const payload = { v: 1, userId: 'fixture-user', method: options.method ?? 'GET', path: options.signedPath ?? requestPathAndQuery(request),
++    bodySha256: createHash('sha256').update(options.body ?? '').digest('base64url'), project: options.project ?? '', issuedAtMs: now, expiresAtMs: now + 60_000 };
++  const bytes = Buffer.from(JSON.stringify(payload));
++  request.headers.set(AIRLOCK_TODO_NATIVE_IDENTITY_HEADER, bytes.toString('base64url') + '.' + sign(null, Buffer.concat([domain, bytes]), pair.privateKey).toString('base64url'));
++  return request;
++}
++
++describe('Todo native login admission (fast unit; expected 2s, maximum 20s)', () => {
++  beforeEach(() => {
++    vi.stubEnv('KANBAN_AIRLOCK_RELAY_URL', 'https://airlock.bezrabotnyi.com/auth/relay');
++    vi.stubEnv('KANBAN_AIRLOCK_AGENT_ORIGIN', origin);
++    vi.stubEnv('KANBAN_AIRLOCK_ACCOUNT_MAP', '{"fixture-user":"fixture_member"}');
++    vi.stubEnv('AIRLOCK_TODO_NATIVE_IDENTITY_PUBLIC_KEY', pair.publicKey.export({ format: 'pem', type: 'spki' }).toString());
++    createRelaySession.mockClear();
++  });
++  afterEach(() => vi.unstubAllEnvs());
++
++  it('keeps an admitted native login inside the app and re-verifies identity at the one-time callback', async () => {
++    const response = await GET(nativeRequest());
++    expect(response.status).toBe(307);
++    expect(response.headers.get('location')).toBe(origin + '/api/auth/airlock/callback');
++    const handshake = response.cookies.get(AIRLOCK_RELAY_COOKIE);
++    expect(handshake?.httpOnly).toBe(true);
++    expect(handshake?.secure).toBe(true);
++    expect(response.cookies.get('kanban_session')).toBeUndefined();
++    expect(createRelaySession).not.toHaveBeenCalled();
++    const request = nativeRequest('/api/auth/airlock/callback', { cookie: AIRLOCK_RELAY_COOKIE + '=' + handshake!.value });
++    const admitted = await callback(request);
++    expect(admitted.status).toBe(307);
++    expect(admitted.headers.get('location')).toBe(origin + '/');
++    expect(admitted.cookies.get('kanban_session')?.value).toBe('fixture-board-session');
++    expect(createRelaySession).toHaveBeenCalledWith('fixture_member');
++    expect((await callback(request)).status).toBe(403);
++  });
++
++  it('preserves unsigned legacy relay even when a bare caller header is supplied', async () => {
++    const request = new NextRequest(origin + loginPath, { headers: { 'x-airlock-caller': 'untrusted-caller' } });
++    const response = await GET(request);
++    const destination = new URL(response.headers.get('location')!);
++    expect(destination.origin + destination.pathname).toBe('https://airlock.bezrabotnyi.com/auth/relay');
++    expect(destination.searchParams.get('return')).toBe(origin + '/api/auth/airlock/callback');
++    expect(destination.searchParams.get('nonce')).toMatch(/^[A-Za-z0-9_-]{43}$/);
++    expect(response.cookies.get(AIRLOCK_RELAY_COOKIE)?.httpOnly).toBe(true);
++  });
++
++  it('rejects a present invalid signature without falling back to a caller header or relay', async () => {
++    const request = nativeRequest();
++    request.headers.set(AIRLOCK_TODO_NATIVE_IDENTITY_HEADER, 'invalid');
++    request.headers.set('x-airlock-caller', 'untrusted-caller');
++    const response = await GET(request);
++    expect(response.status).toBe(403);
++    expect(response.headers.get('location')).toBeNull();
++    expect(response.cookies.get(AIRLOCK_RELAY_COOKIE)).toBeUndefined();
++  });
++
++  it.each([
++    { expired: true }, { signedPath: '/api/auth/airlock/callback' }, { method: 'POST' },
++    { body: 'different-body' }, { project: 'unexpected-project' },
++  ])('rejects expired or request-mismatched native login %j', async options => {
++    const response = await GET(nativeRequest(loginPath, options));
++    expect(response.status).toBe(403);
++    expect(response.headers.get('location')).toBeNull();
++    expect(response.cookies.get(AIRLOCK_RELAY_COOKIE)).toBeUndefined();
++  });
++
++  it('fails closed when the native verifier is unconfigured', async () => {
++    vi.stubEnv('AIRLOCK_TODO_NATIVE_IDENTITY_PUBLIC_KEY', '');
++    expect((await GET(nativeRequest())).status).toBe(503);
++  });
++
++  it('rejects native login on an unconfigured host', async () => {
++    expect((await GET(nativeRequest(loginPath, { host: 'foreign.example' }))).status).toBe(404);
++  });
++});

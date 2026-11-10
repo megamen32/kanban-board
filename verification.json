@@ -1,0 +1,79 @@
+{
+  "schema": "todo-native-login-verification.v1",
+  "base_commit": "61c35753e18794d7139874bb1701b7ff98041b25",
+  "candidate_commit": "7414c229a74580a29a898e4a65d6e6cac2eb9c8e",
+  "candidate_tree": "d648e81e1205e1d0bc20d410820d47092c92574a",
+  "independent_review": "Jason SHIP",
+  "red": {
+    "tests": 10,
+    "failed": 9,
+    "passed": 1,
+    "seconds": 1.33
+  },
+  "green": {
+    "tests": 25,
+    "passed": 25,
+    "seconds": 3.71
+  },
+  "production_build": {
+    "result": "PASS",
+    "compiler": "Next.js webpack",
+    "seconds": 146.562
+  },
+  "image_build": {
+    "result": "PASS",
+    "driver": "shared Kubernetes Buildx",
+    "image_digest": "sha256:a380442c05db575cccf6dc594654c88be0d1cbd321575adfa685f3010b5341a6"
+  },
+  "consumer_check": {
+    "result": "PASS",
+    "surface": "existing isolated QA HTTP service",
+    "identity": "QA-only Ed25519 fixture, existing one-time handshake and account map",
+    "events": [
+      {
+        "case": "fresh_board_session",
+        "status": 401
+      },
+      {
+        "case": "invalid_present_signature",
+        "status": 403
+      },
+      {
+        "case": "nonempty_project",
+        "status": 403
+      },
+      {
+        "case": "signed_login",
+        "status": 307,
+        "handshake_present": true,
+        "board_session_present": false
+      },
+      {
+        "case": "signed_callback",
+        "status": 307,
+        "board_session_present": true
+      },
+      {
+        "case": "mapped_board_session",
+        "status": 200,
+        "authenticated": true
+      },
+      {
+        "case": "replayed_handshake",
+        "status": 403
+      },
+      {
+        "case": "unsigned_legacy",
+        "status": 307,
+        "target_path": "/auth/relay"
+      },
+      {
+        "case": "compiled_board_root",
+        "status": 200,
+        "html_bytes": 12461
+      }
+    ],
+    "previous_service_state_restored": true
+  },
+  "browser_acceptance": "pending controlled deployment and independent cold iframe canary"
+}
